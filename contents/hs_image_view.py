@@ -1,0 +1,254 @@
+import logging
+
+import numpy as np
+import pyqtgraph as pg
+from PyQt5 import QtCore, QtWidgets, QtGui
+from pyqtgraph import VTickGroup
+
+from contents.custom_pyqt_objects import ImageViewLineRoi
+
+logger = logging.getLogger('HS Image Viewer')
+
+
+class RamanImageView(ImageViewLineRoi):
+    #FIXME: Make this a ROI plot which shows the mean intensity over different Raman shifts
+    """
+    modified ImageView object with additional features
+
+    changed functionalities:
+    - removed scalable frame composite_image (roiPlot)
+    - added wavenumbers to roiPlot
+
+
+    added features:
+    - A button auto scales the image levels
+    - S button auto ranges the image pan
+    """
+    def __init__(self, *args, roi_plot_widget=None, autoplay=True,
+                 max_ticks = 10, **kwargs):
+        super().__init__(*args, **kwargs)
+        # self.roi = pg.LineSegmentROI([(0, 0), (50, 50)])
+        self.max_ticks = max_ticks
+        self.fps = 10
+        self.autoplay = autoplay
+        if self.autoplay:
+            self.play(self.fps)
+        # create vertical ticks in the frame graph
+        self.frameTicks = VTickGroup(yrange=[0.8, 1], pen=0.4)
+        # make frame plot unscalable
+        # ui.roiPlot is the PlotItem() for the frames
+        self.ui.roiBtn.setText("Current Frame Linescan")
+        self.ui.roiPlot.addItem(self.frameTicks, ignoreBounds=False)
+        self.ui.roiBtn.setChecked(True)
+        # enlarge the ROI plot
+        self.ui.roiPlot.setMinimumSize(QtCore.QSize(0, 60))
+
+        self.playLoop = True  # Initialize play loop flag
+
+        self.ui.roiPlot.getAxis('bottom').setLabel(r'Raman Shift [1/cm]')
+        # self.ui.roiPlot.setMenuEnabled(False)
+
+        # Hide AutoScale Button of Frame Scale
+        self.ui.roiPlot.hideButtons()
+        self.frame_label = pg.TextItem(text='', color=(255, 255, 255))
+        self.addItem(self.frame_label)
+        self.frame_label.setPos(10, 1)
+        self.linescan = []
+        self.wavenumber = None
+        self.roiPlotWidget = roi_plot_widget
+
+    def updateImage(self, show_frame_label=False, **kwargs):
+        super().updateImage(**kwargs)
+        frame = self.currentIndex
+        if show_frame_label:
+            self.frame_label.setText(f'Frame: {frame}')
+        if self.view is not None and self.wavenumber is not None:
+            self.view.setTitle(f'Frame: {frame} @ {self.wavenumber[self.currentIndex]:.1f} 1/cm')
+
+    def roiChanged(self, *args, plot_widget=None):
+        # args is the line roi which is passed at the event call
+        data_cur_im, coords = self.roi.getArrayRegion(self.image[self.currentIndex, ...], self.imageItem, axes=(1, 0), returnMappedCoords=True)
+        y_vals = data_cur_im
+
+        pl = plot_widget
+        if pl is None:
+            plot_widget = self.roiPlotWidget
+            pl = self.roiPlotWidget
+        pl = pl.plot()
+        pl.clear()
+        # Assumes a single ROI
+        if len(self.linescan) == 0:
+            self.linescan.append(pl)
+            self.roiCurves.append(pl)
+        plot_widget.setLabels(left='Intensity [a.u.]', bottom='Pixel')
+        x_vals = np.arange(len(y_vals))  # Generate x values based on the length of y_vals
+        # Overwrite existing plot by calling the listed object
+        self.linescan[-1].setData(x_vals, y_vals)
+
+    def roiClicked(self):
+        showRoiPlot = False
+        if self.ui.roiBtn.isChecked():
+            showRoiPlot = True
+            self.roi.show()
+            self.ui.roiPlot.setMouseEnabled(True, True)
+            # self.ui.splitter.setSizes([int(self.height() * 0.6), int(self.height() * 0.4)])
+            # self.ui.splitter.handle(1).setEnabled(True)
+            self.roiChanged()
+            for c in self.roiCurves:
+                c.show()
+            # self.ui.roiPlot.showAxis('left')
+        else:
+            self.roi.hide()
+            self.ui.roiPlot.setMouseEnabled(False, False)
+            for c in self.roiCurves:
+                c.hide()
+            self.ui.roiPlot.hideAxis('left')
+        # Overwrite adjustment of Timeline
+        """
+         if self.hasTimeAxis():
+            showRoiPlot = True
+            mn = self.tVals.min()
+            mx = self.tVals.max()
+            self.ui.roiPlot.setXRange(mn, mx, padding=0.01)
+            self.timeLine.show()
+            self.timeLine.setBounds([mn, mx])
+            if not self.ui.roiBtn.isChecked():
+                self.ui.splitter.setSizes([self.height() - 35, 35])
+                self.ui.splitter.handle(1).setEnabled(False)
+        else:
+            self.timeLine.hide()
+        self.ui.roiPlot.setVisible(showRoiPlot)
+        """
+        pass
+
+    def stopAutoPlay(self):
+        self.autoplay = False
+        logger.info('Auto Play Paused')
+        self.playTimer.stop()
+
+    def togglePause(self):
+        super().togglePause()
+        if not self.playTimer.isActive():
+            self.stopAutoPlay()
+        else:
+            self.autoplay = True
+            logger.info('togglePause(): Keep playing')
+
+    def play(self, fps):
+        logger.debug('play(): Keep playing')
+        if self.image is None:
+            return
+        if self.currentIndex+1 >= self.nframes() and self.playLoop:
+            # check if the user dragged the slider to the end
+            self.setCurrentIndex(0)
+        else:
+            super().play(fps)
+
+    def timeLineChanged(self):
+        super().timeLineChanged()
+        logger.debug('timeLineChanged(): Time Line call')
+        self.roiChanged()
+        if self.currentIndex >= self.nframes() and self.playLoop:
+            self.setCurrentIndex(0)
+
+    def hideTimeLine(self):
+        self.ui.roiPlot.hideAxis('bottom')
+        self.ui.roiPlot.hideAxis('left')
+        self.ui.roiPlot.hideButtons()
+        self.ui.roiPlot.hide()
+        self.ui.roiPlot.setMouseEnabled(False, False)
+
+    def setImage(self, *args, keep_viewbox=False, **kwargs):
+        # keep the current frame index
+        current_frame = self.currentIndex
+        logger.debug('setImage method called')
+        if keep_viewbox:
+            view = self.getView()
+            view_range = view.viewRange()
+        super().setImage(*args, axes={'x': 2, 'y': 1, 't': 0}, **kwargs)
+        if keep_viewbox:
+            # Restore the previous view settings
+            view.setXRange(view_range[0][0] , view_range[0][1] )
+            view.setYRange(view_range[1][0] , view_range[1][1] )
+        # set the current frame index to the previous value if possible
+        if current_frame < self.nframes():
+            self.setCurrentIndex(current_frame)
+        # Start Auto Play
+        if self.autoplay:
+            self.play(self.fps)
+        self.update_timeline_ticks()
+
+    def update_timeline_ticks(self):
+        if self.wavenumber is None:
+            return
+        bottom_axis = self.ui.roiPlot.getAxis('bottom')
+        step = max(1, len(self.wavenumber) // (self.max_ticks - 2))
+
+        tick_values = [(i, f'{v:.0f}') for i, v in enumerate(self.wavenumber) if i % step == 0]
+        if not tick_values:
+            return
+        bottom_axis.setTicks([tick_values])
+        # Force an update of the GUI
+        # self.ui.roiPlot.getViewBox().autoRange()
+
+    def keyPressEvent(self, ev):
+        if ev.key() == QtCore.Qt.Key.Key_Space:
+            self.togglePause()
+            ev.accept()
+        elif ev.key() == QtCore.Qt.Key.Key_A:
+            self.autoLevels()
+        elif ev.key() == QtCore.Qt.Key.Key_S:
+            self.autoRange()
+        else:
+            # Call the predefined key press events
+            super().keyPressEvent(ev)
+
+
+class ColorButton(QtWidgets.QPushButton):
+    def __init__(self, color):
+        super().__init__()
+        self.color = color
+        self.setStyleSheet(f"background-color: {color.name()}")
+        self.clicked.connect(self.pick_color)
+
+    def pick_color(self):
+        new_color = QtWidgets.QColorDialog.getColor(self.color)
+        if new_color.isValid():
+            self.color = new_color
+            self.setStyleSheet(f"background-color: {new_color.name()}")
+            self.color_changed.emit(new_color)
+
+    def setColor(self, color: QtGui.QColor):
+        self.color = color
+        self.setStyleSheet(f"background-color: {color.name()}")
+
+    color_changed = QtCore.pyqtSignal(QtGui.QColor)
+
+
+class ROITableDelegate(QtWidgets.QItemDelegate):
+    def createEditor(self, parent, option, index):
+        if index.column() == 3:
+            combo_box = QtWidgets.QComboBox(parent)
+            combo_box.addItem("LineROI")
+            combo_box.addItem("RectROI")
+            return combo_box
+        return super().createEditor(parent, option, index)
+
+    def setEditorData(self, editor, index):
+        if index.column() == 3:
+            text = index.data()
+            combo_box = editor
+            combo_box.setCurrentText(text)
+        else:
+            super().setEditorData(editor, index)
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
+
+    def setModelData(self, editor, model, index):
+        if index.column() == 3:
+            combo_box = editor
+            roi_type = combo_box.currentText()
+            model.setData(index, roi_type)
+        else:
+            super().setModelData(editor, model, index)

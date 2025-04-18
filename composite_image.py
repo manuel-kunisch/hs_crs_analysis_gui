@@ -47,7 +47,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectral_cmps = spectral_cmps
         self.spectral_cmps_seed = None
         self.wavenumbers = None
-        self.fiji_saver = FIJISaver(self.img, f'{os.path.join(os.getcwd(), 'result.tif')}',
+        self.fiji_saver = FIJISaver(self.img, f'{os.path.join(os.getcwd(), "result.tif")}',
                                     colors=self.colormap_colors, dtype=np.uint16)
         self.custom_model = False
         self.update_thread = QThread()
@@ -991,9 +991,11 @@ if __name__ == '__main__':
     app = QApplication([])
     composite_image = CompositeImageViewWidget()
     # load some example data
-    result = tifffile.imread(r"./example_data/h_e_result.tif")
+    try:
+        result = tifffile.imread(r"./example_data/h_e_result.tif")
+    except FileNotFoundError as e:
+        result = np.ones((3, 100, 100), dtype=np.uint16)
     result = np.moveaxis(result, 0, -1)
-
     composite_image.make_color_state(0, (0, 20000), (255, 255, 255), colormin_pos=.4, colormax_pos=.5)
     composite_image.update_image(result)
 

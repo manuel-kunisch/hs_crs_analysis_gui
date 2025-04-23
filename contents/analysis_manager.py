@@ -252,9 +252,9 @@ class AnalysisManager(QtCore.QObject):
         self.analyze_button.setEnabled(False)
         self.analyze_button.setText('Analysis in Progress')
         self.thread_analysis.start()
-        logger.info(f"{"-" * 50}")
+        logger.info(f"{'-' * 50}")
         logger.info(f'{datetime.now()}: Analysis started')
-        logger.info(f"{"-" * 50}")
+        logger.info(f"{'-' * 50}")
 
     def seed_debug(self, show_seeds=True):
         self.reload_H_seeds_from_rois()     # reset all existing seeds and reload ROIs

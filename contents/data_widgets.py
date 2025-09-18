@@ -77,13 +77,16 @@ class DataWidget(QtWidgets.QWidget):
         self.dock_area = DockArea()
         self.dock_area_layout.addWidget(self.dock_area)
 
-        self.linescan_dock = Dock("Linescan", size=(100, 500))
+        self.linescan_dock = Dock("Linescan", size=(50, 500))
         self.image_view_dock = Dock("Image", size=(500, 500))
+        self.image_view_dock.setStretch(500)
         # Adding the docks to the DockArea()
 
 
         self.dock_area.addDock(self.image_view_dock, 'top')
         self.dock_area.addDock(self.linescan_dock, 'left', self.image_view_dock)
+        # give image view dock more space
+
         # linescan_dock.hideTitleBar()
         line_plot_widget = pg.PlotWidget(title="Linsecan")
         self.linescan_dock.addWidget(line_plot_widget)
@@ -479,14 +482,20 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.min_wavelength_entry.setMaximumWidth(max_width)
         self.min_wavelength_entry.setText("800")  # Default value
         var_beam_layout.addWidget(self.min_wavelength_entry, 0, 1, alignment=QtCore.Qt.AlignLeft)
-        var_beam_layout.addWidget(QtWidgets.QLabel("nm"), 0, 2, alignment=QtCore.Qt.AlignLeft)
+        nm_label = QtWidgets.QLabel("nm")
+        nm_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        var_beam_layout.addWidget(nm_label, 0, 2)
+        self.min_wavelength_entry.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
 
         # Max Wavelength Entry
         self.max_wavelength_entry = QtWidgets.QLineEdit()
         self.max_wavelength_entry.setMaximumWidth(max_width)
         self.max_wavelength_entry.setText("830")  # Default value
         var_beam_layout.addWidget(self.max_wavelength_entry, 0, 3, alignment=QtCore.Qt.AlignLeft)
-        var_beam_layout.addWidget(QtWidgets.QLabel("nm"), 0, 4, alignment=QtCore.Qt.AlignLeft)
+        nm_label = QtWidgets.QLabel("nm")
+        nm_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        var_beam_layout.addWidget(nm_label, 0, 4)
+        self.max_wavelength_entry.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
 
         # Checkbox for step size
         stepsize_checkbox = QtWidgets.QCheckBox("Stepsize")
@@ -507,15 +516,21 @@ class WavenumberWidget(QtWidgets.QWidget):
 
         # Stokes Beam Group
         self.stokes_beam_group = QtWidgets.QGroupBox("Stokes Beam")
+        self.stokes_beam_group.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
         fixed_beam_layout = QtWidgets.QGridLayout(self.stokes_beam_group)
 
         fixed_beam_layout.setContentsMargins(0, 0, 0, 0)
-        fixed_beam_layout.addWidget(QtWidgets.QLabel("λ<sub>fixed</sub>="), 0, 0)
+        fixed_label = QtWidgets.QLabel("λ<sub>fixed</sub> = ")
+        fixed_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        fixed_beam_layout.addWidget(fixed_label, 0, 0)
         self.fixed_entry = QtWidgets.QLineEdit()
         self.fixed_entry.setMaximumWidth(max_width)
         self.fixed_entry.setText("1064")  # Default value
         fixed_beam_layout.addWidget(self.fixed_entry, 0, 1, alignment=QtCore.Qt.AlignLeft)
-        fixed_beam_layout.addWidget(QtWidgets.QLabel("nm"), 0, 2, alignment=QtCore.Qt.AlignLeft)
+        nm_label = QtWidgets.QLabel("nm")
+        nm_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        fixed_beam_layout.addWidget(nm_label, 0, 2, alignment=QtCore.Qt.AlignLeft)
+        self.fixed_entry.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
 
         main_layout.addWidget(self.stokes_beam_group)
 

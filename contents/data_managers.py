@@ -38,9 +38,10 @@ class ImageLoader(QtWidgets.QWidget):
 
         # Create drag & drop label
         self.drag_label = QtWidgets.QLabel("📂 Drag & Drop TIFF Files Here")
-        self.drag_label.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignHCenter)
-        self.drag_label.setFixedHeight(60)
-        self.drag_label.setMaximumWidth(700)
+        #self.drag_label.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignHCenter)
+        self.drag_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        # self.drag_label.setFixedHeight(60)
+        # self.drag_label.setMaximumWidth(700)
         # add linebreaks to the label if the text is too long
         self.drag_label.setWordWrap(True)
         # Set style for the drag label
@@ -66,19 +67,19 @@ class ImageLoader(QtWidgets.QWidget):
         # add ability to click the label which opens a file dialog
         self.drag_label.mousePressEvent = self.load_image_from_file_dialog
 
-        data_h_layout.addWidget(QtWidgets.QLabel("Data Path"), alignment=QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
-        data_h_layout.addWidget(self.drag_label, alignment=QtCore.Qt.AlignLeft | QtCore.Qt.AlignRight | QtCore.Qt.AlignTop)
+        # data_h_layout.addWidget(QtWidgets.QLabel("Data Path"), alignment=QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        data_h_layout.addWidget(self.drag_label, alignment=QtCore.Qt.AlignLeft | QtCore.Qt.AlignRight)
 
         path_widget = QtWidgets.QWidget()
         path_widget.setLayout(data_h_layout)
-        self.main_grid_layout.addWidget(path_widget, 0, 0, 1, 6)
+        self.main_grid_layout.addWidget(path_widget, 0, 2)
 
         # add preset save buttons as dummies
         self.save_preset_button = QtWidgets.QPushButton('Save Preset')
         self.load_preset_button = QtWidgets.QPushButton('Load Preset')
         # add the preset buttons to the loader widget ui
-        self.main_grid_layout.addWidget(self.save_preset_button, 1, 0)
-        self.main_grid_layout.addWidget(self.load_preset_button, 1, 1)
+        self.main_grid_layout.addWidget(self.save_preset_button, 0, 0)
+        self.main_grid_layout.addWidget(self.load_preset_button, 0, 1)
 
 
         # tab_widget.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)

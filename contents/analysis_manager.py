@@ -8,6 +8,7 @@ import tifffile
 from PyQt5 import QtGui, QtCore  # Import the necessary modules
 from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import QLabel
+from skimage.filters.rank import minimum
 
 from composite_image import CompositeImageViewWidget
 from contents.custom_pyqt_objects import ImageViewYX
@@ -100,43 +101,50 @@ class AnalysisManager(QtCore.QObject):
         # Add Radio Buttons for choosing between PCA and NNMF
         self.pca_radio = QtWidgets.QRadioButton("PCA")
         self.nnmf_radio = QtWidgets.QRadioButton("NNMF")
+        self.pca_radio.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         # Connect radio button signals to update analysis method
         self.pca_radio.clicked.connect(lambda: self.update_analysis_method("PCA"))
         self.nnmf_radio.clicked.connect(lambda: self.update_analysis_method("NNMF"))
+        self.nnmf_radio.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         self.nnmf_radio.setChecked(True)  # Default to PCA
 
         # Add SpinBox for number of components
         spin_box_label = QtWidgets.QLabel("# Components:")
-        self.num_components_spinbox = QtWidgets.QSpinBox()
-        self.num_components_spinbox.setMinimum(1)  # Set minimum value
-        self.num_components_spinbox.setMaximum(100)  # Set maximum value
+        self.num_components_spinbox = QtWidgets.QSpinBox(minimum=1, maximum=100, value=3, singleStep=1)
+        self.num_components_spinbox.setToolTip("Set the number of components for PCA/NNMF analysis")
+        self.num_components_spinbox.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         self.num_components_spinbox.valueChanged.connect(
             lambda n: self.mv_analyzer.update_components(n)
         )
-        self.num_components_spinbox.setValue(3)  # Set default value
+        spin_box_label.setToolTip("Set the number of components for PCA/NNMF analysis")
+        spin_box_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         components_hbox = QtWidgets.QHBoxLayout()
         components_hbox.addWidget(spin_box_label)
-        components_hbox.addWidget(self.num_components_spinbox)
+        components_hbox.addWidget(self.num_components_spinbox, alignment=QtCore.Qt.AlignLeft)
 
         custom_init_hbox = QtWidgets.QHBoxLayout()
         custom_init_check = QtWidgets.QCheckBox()
         custom_init_check.setChecked(True)
         custom_init_label = QtWidgets.QLabel("Custom Initialization")
+        custom_init_label.setToolTip("Use custom initialization for NNMF based on spectral and spatial seed information")
+        custom_init_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        custom_init_check.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         custom_init_hbox.addWidget(custom_init_label)
-        custom_init_hbox.addWidget(custom_init_check)
+        custom_init_hbox.addWidget(custom_init_check, alignment=QtCore.Qt.AlignLeft)
         # pass the current state of the checkbox to the analyzer object
         custom_init_check.stateChanged.connect(self.mv_analyzer.set_custom_nnmf_init)
         self.mv_analyzer.set_custom_nnmf_init(custom_init_check.isChecked())
 
 
-        analysis_grid.addWidget(self.pca_radio, 0, 0)
-        analysis_grid.addWidget(self.nnmf_radio, 2, 0)
+        analysis_grid.addWidget(self.pca_radio, 0, 0, 2, 1)
+        analysis_grid.addWidget(self.nnmf_radio, 2, 0, 2, 1)
         components_widget = QtWidgets.QWidget()
         components_widget.setLayout(components_hbox)
+        components_widget.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         custom_init_widget = QtWidgets.QWidget()
         custom_init_widget.setLayout(custom_init_hbox)
-        analysis_grid.addWidget(components_widget, 0, 1)
-        analysis_grid.addWidget(custom_init_widget, 2, 1)
+        analysis_grid.addWidget(components_widget, 0, 2, 2, 1)
+        analysis_grid.addWidget(custom_init_widget, 2, 2, 2, 1)
         # Add the group box to the vertical layout
         master_ui_layout.addWidget(analysis_group_box, 0, 0)
 
@@ -159,39 +167,53 @@ class AnalysisManager(QtCore.QObject):
         del_hint_label.setStyleSheet("font-size: 4pt")
         del_hint_label.setWordWrap(True)
         del_hint_label.setMaximumWidth(70)
-        table_and_button_layout.addWidget(del_hint_label, 5, 5, alignment=QtCore.Qt.AlignRight)
+        table_and_button_layout.addWidget(del_hint_label, 5, 4, alignment=QtCore.Qt.AlignRight)
+
+        spectral_button_widget = QtWidgets.QWidget()
+        spectral_button_layout = QtWidgets.QVBoxLayout()
+        spectral_button_widget.setLayout(spectral_button_layout)
+        spectral_button_widget.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
 
         # Add the table to the horizontal layout
         table_and_button_layout.addWidget(self.resonance_table, 0, 0, 5, 5, alignment=QtCore.Qt.AlignTop)
         # Add button to add resonance settings
         add_button = QtWidgets.QPushButton("Add Resonance Settings")
         add_button.clicked.connect(self.add_resonance_settings)
-        table_and_button_layout.addWidget(add_button, 1, 5, alignment=QtCore.Qt.AlignVCenter)
+        spectral_button_layout.addWidget(add_button)
+        # table_and_button_layout.addWidget(spectral_button_widget, 0, 5, alignment=QtCore.Qt.AlignTop )
+
 
         # Add Analyze button
         self.analyze_button = QtWidgets.QPushButton("Analyze")
         self.analyze_button.clicked.connect(self.analyze_data)
-        table_and_button_layout.addWidget(self.analyze_button, 2, 5, alignment=QtCore.Qt.AlignVCenter)
+        # table_and_button_layout.addWidget(self.analyze_button, 2, 5, alignment=QtCore.Qt.AlignVCenter)
+        analysis_grid.addWidget(self.analyze_button, 1, 1, 2, 1)
+
         # highlight the analyze button
         self.analyze_button.setStyleSheet("background-color: darkkhaki")
+        self.analyze_button.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         # W seed handling
         w_seed_label = QLabel('W Seed Settings:')
         table_and_button_layout.addWidget(w_seed_label, 5, 0, alignment=QtCore.Qt.AlignRight)
         # Add button to check W seeds
         check_W_seeds_button = QtWidgets.QPushButton("Check W Seeds (from H only)")
         check_W_seeds_button.clicked.connect(self.show_W_seeds)
-        table_and_button_layout.addWidget(check_W_seeds_button, 5, 4, alignment=QtCore.Qt.AlignVCenter)
+        spectral_button_layout.addWidget(check_W_seeds_button)
 
         # add button to test the spectral info handling
         test_spectral_info_button = QtWidgets.QPushButton('Test spectral info')
-        table_and_button_layout.addWidget(test_spectral_info_button, 4, 5, alignment=QtCore.Qt.AlignVCenter)
+        # table_and_button_layout.addWidget(test_spectral_info_button, 4, 5, alignment=QtCore.Qt.AlignVCenter)
         test_spectral_info_button.clicked.connect(lambda: self.make_W_seeds_from_spectral_info(debug_mode=True))
         test_spectral_info_button.setStyleSheet("background-color: gray")
+        spectral_button_layout.addWidget(test_spectral_info_button)
 
         test_seed_setup_button = QtWidgets.QPushButton('Test seed setup')
-        table_and_button_layout.addWidget(test_seed_setup_button, 3, 5, alignment=QtCore.Qt.AlignVCenter)
+        # table_and_button_layout.addWidget(test_seed_setup_button, 3, 5, alignment=QtCore.Qt.AlignVCenter)
         test_seed_setup_button.clicked.connect(lambda state: self.seed_debug(show_seeds=True))
         test_seed_setup_button.setStyleSheet("background-color: gray")
+        spectral_button_layout.addWidget(test_spectral_info_button)
+
+        analysis_grid.addWidget(spectral_button_widget, 0, 3, 4, 1)
 
         # Create a QButtonGroup for exclusivity
         W_seed_group = QtWidgets.QButtonGroup(self)  # Set 'self' as parent to keep group linked to UI

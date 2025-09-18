@@ -60,7 +60,7 @@ class SpectrumLoader:
             data = np.genfromtxt(path, delimiter=',', skip_header=1)
         # check if there are multiple seeds in the csv file
         if data.shape[1] > 2:
-            logger.info("Multiple seeds found in csv file. Using first seed.")
+            logger.warning("Multiple seeds found in csv file. Using first seed.")
             """
             # extract the component numbers from the header columns starting with "Component"
             components = []
@@ -77,9 +77,11 @@ class SpectrumLoader:
         self.name = path.split('/')[-1].split('.')[0]
         return data[:, 0], data[:, 1]
 
-    def prepare_spectrum(self):
+    def prepare_spectrum(self, scale_to_dtype=False) -> np.ndarray:
         self.interpolate_and_cut_spectrum()
-        self.scale_to_dtype()
+        if scale_to_dtype:
+            logger.info("Scaling spectrum to dtype: %s", self.dtype)
+            self.scale_to_dtype()
         return self.target_spectrum
 
     def scale_to_dtype(self):

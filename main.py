@@ -94,6 +94,8 @@ class MainApplication(QtWidgets.QMainWindow):
         loader_dock = self.data_handler.get_dock_widget()
         main_dock_area.addDock(loader_dock, 'right',
                                self.data_widget.image_view_dock)
+        self.data_widget.image_view_dock.setStretch(100)
+        loader_dock.setStretch(1)
         dock_state_save_widget, save_dock_state = self.get_dock_state_widget()
         # main_dock_area.addDock(dock_state_save_widget, 'right', self.data_widget.roi_manager.roi_table_dock)
 
@@ -134,7 +136,6 @@ class MainApplication(QtWidgets.QMainWindow):
         # Put orientation of dock handle
         self.parent_dock_area.addDock(d1, 'top')
         d1.addWidget(self.result_viewer_widget)  # Add the CompositeImageViewWidget widget to the dock
-
         save_dock_state()
 
 
@@ -343,7 +344,10 @@ if __name__ == '__main__':
     # Issue: Unlike on MacOS, darkmode is not automatically set with Windows 
     set_darkmode(app)
     main_app = MainApplication()
-    main_app.set_data('./example_data/2016_05_13_Nematode_K11_60mW_816,7nm_60mW_1064nm_PMT804_HyperwaveVar.mat_COR_Channel1.tif')
+    try:
+        main_app.set_data('./example_data/2016_05_13_Nematode_K11_60mW_816,7nm_60mW_1064nm_PMT804_HyperwaveVar.mat_COR_Channel1.tif')
+    except FileNotFoundError as e:
+        logger.error(f"Could not load example data: {e}")
     # run in full screen
     # main_app.showMaximized()
 

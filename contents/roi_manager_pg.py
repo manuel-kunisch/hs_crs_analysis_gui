@@ -866,7 +866,6 @@ class FillROI(QtCore.QObject):
         self.clear_fill()
 
 
-
 class ROIPlotter(pg.PlotWidget):
     def __init__(self, roi_manager: ROIManager):
         super().__init__()

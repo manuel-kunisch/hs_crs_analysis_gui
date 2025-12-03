@@ -119,6 +119,8 @@ class CompositeImageViewWidget(QMainWindow):
         save_seed_mode_label = QLabel("Mode:")
         save_seeds_button.clicked.connect(lambda: self.save_preset(mode=save_seed_mode_combobox.currentText().lower()))
 
+        save_H_as_csv_button = QPushButton("Save H as CSV")
+        save_H_as_csv_button.clicked.connect(self.save_components)
 
         # Create a QPushButton for resetting the levels
         reset_levels_button = QPushButton("Reset Black Levels")
@@ -130,6 +132,7 @@ class CompositeImageViewWidget(QMainWindow):
         composite_buttons_layout.addWidget(save_seeds_button, 0, 1, alignment=Qt.AlignRight)
         composite_buttons_layout.addWidget(save_seed_mode_label, 0, 2, alignment=Qt.AlignRight)
         composite_buttons_layout.addWidget(save_seed_mode_combobox, 0, 3, alignment=Qt.AlignLeft)
+        composite_buttons_layout.addWidget(save_H_as_csv_button, 0, 4, alignment=Qt.AlignCenter)
         composite_buttons_layout.addWidget(reset_levels_button, 0, 5, alignment=Qt.AlignRight)
         composite_buttons_widget = QWidget()
         composite_buttons_widget.setLayout(composite_buttons_layout)
@@ -610,6 +613,28 @@ class CompositeImageViewWidget(QMainWindow):
             return
 
         self.save_to_presets(file_path, seeds_H, self.wavenumbers, self.colormap_colors, self.histogram_states)
+
+    def save_components(self):
+        # Open a file dialog to select where to save the CSV file
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save H Components as CSV",
+            "",
+            "CSV Files (*.csv);;All Files (*)",
+            options=options
+        )
+
+        if not file_path:  # User canceled the dialog
+            return
+
+        wavenumbers = self.wavenumbers[...]
+
+        # save to text with header "wavenumbers, cmp1, cmp2, ..."
+        header = "Wavenumber (1/cm)," + ",".join([f"Component {i}" for i in range(self.spectral_cmps.shape[0])])
+        data_to_save = np.vstack((wavenumbers, self.spectral_cmps)).T
+        np.savetxt(file_path, data_to_save, delimiter=",", header=header, comments='')
+        logger.info(f"Saved H components to {file_path}")
 
     @staticmethod
     def save_to_presets(fpath: str, seeds: np.array, wavenumbers: np.array,

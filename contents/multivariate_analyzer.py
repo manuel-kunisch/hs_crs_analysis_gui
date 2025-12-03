@@ -65,8 +65,10 @@ class MultivariateAnalyzer(object):
         self.avg_W_seed = True
         self.wavenumbers = wavenumbers
         if self.raw_data_3d is not None:
-            logger.info(f'self.raw_data.shape = {self.raw_data_3d.shape}')
+            logger.info(f'{self.raw_data_3d.shape=}')
             self.standardize_and_reshape_data()
+        else:
+            logger.warning('No data provided to the MV analyzer')
 
     def update_wavenumbers(self, wavenumbers):
         # TODO: in future also update the results then? If analysis is fast enough

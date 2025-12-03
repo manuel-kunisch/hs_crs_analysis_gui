@@ -65,7 +65,7 @@ class AnalysisManager(QtCore.QObject):
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
         # Main widget instantiated in the init_ui method
         self.analysis_widget = None
-        self.mv_analyzer = MultivariateAnalyzer(data, self.wavenumbers, None)
+        self.mv_analyzer = MultivariateAnalyzer(data, 3, self.wavenumbers)
 
         # set up thread for analysis
         self.thread_analysis = QtCore.QThread()
@@ -110,7 +110,7 @@ class AnalysisManager(QtCore.QObject):
 
         # Add SpinBox for number of components
         spin_box_label = QtWidgets.QLabel("# Components:")
-        self.num_components_spinbox = QtWidgets.QSpinBox(minimum=1, maximum=100, value=3, singleStep=1)
+        self.num_components_spinbox = QtWidgets.QSpinBox(minimum=1, maximum=100, value=self.mv_analyzer.get_n_components(), singleStep=1)
         self.num_components_spinbox.setToolTip("Set the number of components for PCA/NNMF analysis")
         self.num_components_spinbox.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         self.num_components_spinbox.valueChanged.connect(

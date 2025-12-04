@@ -635,6 +635,76 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.num_label.setText(f"Frames: {len(self.wavenumbers)}")
         self.wavenumbers_changed.emit(self.wavenumbers)
 
+    def apply_wavelength_meta(self, meta: dict, n_frames: int):
+        """
+        Fill the GUI from a wavelength_meta dict.
+
+        Expected keys:
+            tuned_beam      : 'pump' or 'stokes'
+            fixed_beam_nm   : float
+            tuned_min_nm    : float or None
+            tuned_max_nm    : float or None
+            tuned_step_nm   : float or None
+        """
+        tuned_beam = meta.get("tuned_beam", "pump").lower()
+        tuned_min = meta.get("tuned_min_nm")
+        tuned_max = meta.get("tuned_max_nm")
+        tuned_step = meta.get("tuned_step_nm")
+        fixed_nm = meta.get("fixed_beam_nm")
+
+        # --- 1) Make sure the correct beam is the variable (tuned) beam ---
+        # beam_mode = 0 -> pump variable (default)
+        # beam_mode = 1 -> stokes variable
+        desired_mode = 0 if tuned_beam == "pump" else 1
+        if self.beam_mode != desired_mode:
+            # swap_beams toggles beam_mode and calls update_wavenums()
+            self.swap_beams()
+
+        # --- 2) set frame count for the current dataset ---
+        self.n_frames = n_frames  # avoid set_nframes here (we want to control when we update)
+
+        # --- 3) temporarily block signals while we fill widgets ---
+        widgets = [
+            self.min_wavelength_entry,
+            self.max_wavelength_entry,
+            self.stepsize_entry,
+            self.fixed_entry,
+            self.min_max_checkbox,
+        ]
+        for w in widgets:
+            w.blockSignals(True)
+
+        # --- 4) fill fixed wavelength ---
+        if fixed_nm is not None:
+            self.fixed_entry.setText(f"{fixed_nm:.2f}")
+
+        # --- 5) fill tuned beam infos (min/max or stepsize) ---
+        if tuned_min is not None:
+            self.min_wavelength_entry.setText(f"{tuned_min:.2f}")
+        if tuned_max is not None:
+            self.max_wavelength_entry.setText(f"{tuned_max:.2f}")
+
+        # Decide which mode to use:
+        #  - if we have both min & max -> Min/Max mode
+        #  - otherwise -> Stepsize mode (use tuned_step_nm if given)
+        if tuned_min is not None and tuned_max is not None:
+            # Min/Max mode
+            self.min_max_checkbox.setChecked(True)
+            # ensure entries enabled/disabled correctly
+            self.on_min_max_checked(QtCore.Qt.Checked)
+        else:
+            # Stepsize mode
+            self.min_max_checkbox.setChecked(False)
+            if tuned_step is not None:
+                self.stepsize_entry.setText(f"{tuned_step:.2f}")
+            self.on_stepsize_checked(QtCore.Qt.Checked)
+
+        # re-enable signals
+        for w in widgets:
+            w.blockSignals(False)
+
+        # --- 6) finally recalc wavenumbers (emits wavenumbers_changed) ---
+        self.update_wavenums()
 
 class DataHandler(QtWidgets.QWidget):
     """
@@ -660,19 +730,36 @@ class DataHandler(QtWidgets.QWidget):
 
     def new_image_loaded(self, image: np.ndarray):
         logger.info('New image loaded')
-        # TODO: check binning before sending the image, other classes do not know and should not know about binning
-        # since it is an internal operation and irrelevant for the seeds and the analysis
+
+        # --- normalize (if requested) ---
         if self._normalize:
             print('Normalizing image')
             print(f'{max_dtype_val=}')
             image = np.multiply(image, max_dtype_val / np.amax(image, axis=None))
             image = image.astype(dtype)
             logger.info('Image normalized')
+
+        # --- binning ---
         self._binned_image = image
         if self._binning_factor != 1:
             logger.warning('Binning factor is not 1, image will be binned')
             self._binned_image = self.bin_image_3d(image, self._binning_factor)
-        self.loader_widget.physical_units_manager.update_image_dimensions(image.shape[1:])
+
+        # update physical units with *final* image shape
+        self.loader_widget.physical_units_manager.update_image_dimensions(self._binned_image.shape[1:])
+
+        # --- wavelength / wavenumber handling ---
+        n_frames = self._binned_image.shape[0]
+        wavelength_meta = self.loader_widget.wavelength_meta
+
+        if wavelength_meta is not None:
+            logger.info("Applying wavelength metadata to WavenumberWidget")
+            self.wavenumber_widget.apply_wavelength_meta(wavelength_meta, n_frames)
+        else:
+            # still keep the widget in sync with the frame count
+            self.wavenumber_widget.set_nframes(n_frames)
+
+        # push image to the rest of the pipeline
         self.update_image_callback(self._binned_image)
 
     def get_dock_widget(self):

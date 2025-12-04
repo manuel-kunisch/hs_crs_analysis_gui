@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 
@@ -20,6 +21,7 @@ class ImageLoader(QtWidgets.QWidget):
             parent:
         """
         super().__init__(parent)
+        self.wavelength_meta = None
         self.update_img_callback = update_img_callback
         self._image = None
         self.init_ui()
@@ -153,6 +155,8 @@ class ImageLoader(QtWidgets.QWidget):
 
 
     def load_tiff(self, fpath):
+        # check if a wavelength json file is in the directory
+        self.try_load_wavelength_json(os.path.dirname(fpath))
         self.image = imread(fpath).astype(np.uint16)
         self.drag_label.setText(f"✔ Loaded: {fpath.split('/')[-1]}")
         logger.info(f"Loaded image from {fpath}")
@@ -162,6 +166,47 @@ class ImageLoader(QtWidgets.QWidget):
             self.image[self.image == 0] = 1
             logger.warning('Zeros replaced with 1')
         return self.image
+
+    def try_load_wavelength_json(self, directory: str):
+        self.wavelength_meta = None
+        meta_path = os.path.join(directory, "wavelength.json")
+
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as fh:
+                    meta = json.load(fh)
+
+                # basic validation + normalization
+                tuned_beam = meta.get("tuned_beam", "").lower()
+                if tuned_beam not in {"stokes", "pump"}:
+                    raise ValueError("tuned_beam must be 'stokes' or 'pump'")
+
+                fixed_beam_nm = float(meta["fixed_beam_nm"])  # required
+
+                tuned_min_nm = meta.get("tuned_min_nm")
+                tuned_max_nm = meta.get("tuned_max_nm")
+                tuned_step_nm = meta.get("tuned_step_nm")
+
+                if tuned_min_nm is None and tuned_max_nm is None and tuned_step_nm is None:
+                    raise ValueError(
+                        "Need at least tuned_min_nm + tuned_max_nm OR tuned_step_nm"
+                    )
+
+                self.wavelength_meta = {
+                    "tuned_beam": tuned_beam,
+                    "fixed_beam_nm": fixed_beam_nm,
+                    "tuned_min_nm": float(tuned_min_nm) if tuned_min_nm is not None else None,
+                    "tuned_max_nm": float(tuned_max_nm) if tuned_max_nm is not None else None,
+                    "tuned_step_nm": float(tuned_step_nm) if tuned_step_nm is not None else None,
+                }
+
+                logger.info(f"Loaded wavelength metadata from {meta_path}")
+                print(self.wavelength_meta)
+            except Exception:
+                logger.exception(f"Failed to read wavelength metadata from {meta_path}")
+        else:
+            logger.info(f"No wavelength.json found in {directory}")
+
 
     def load_image(self, image_data):
         self.image = image_data

@@ -622,8 +622,7 @@ class AnalysisManager(QtCore.QObject):
             if self.roi_manager.is_component_defined(i):
                 # check if the roi manager has a seed for the current component and ask if the spectral info should be used
                 if QtWidgets.QMessageBox.question(self.analysis_widget, 'Seed Overwrite',
-                                                  f'A seed for component {i} already exists because of the H spectrum.'
-                                                  f'Would you like to use H as weights?',
+                                                  f"Component {i} has a defined ROI seed. Do you want to use the spectral as additional weighting for the W seed?",
                                                   QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No) == QtWidgets.QMessageBox.Yes:
                     weights = self.roi_manager.get_component_seed(i)[res_indices]
             logger.info(f'Creating W seed from available spectral info {info_dict_list}')

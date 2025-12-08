@@ -423,28 +423,58 @@ class ROIManager(QtCore.QObject):
                 item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
 
     def load_spectra(self):
-        file_name, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Load spectrum", "", "Spectrum Files (*.txt *.asc *.csv)")
+        file_name, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Load spectrum", "",
+                                                             "Spectrum Files (*.txt *.asc *.csv)")
         if not file_name:
             return  # Cancelled
+
+        # Initialize loader and load all spectra
         spec_loader = SpectrumLoader(target_wavenumbers=self.wavenumbers)
         spec_loader.load_spectrum(file_name)
         spec_loader.prepare_spectrum()
-        component_number = self.component_prompt()
-        self.prepare_roi_from_external_spectrum(spec_loader, component_number)
 
-    def prepare_roi_from_external_spectrum(self, spec_loader: SpectrumLoader, component_number: int):
-        roi = DummyROI('', spec_loader.target_spectrum)
-        roi.pen = pg.mkPen(self.default_colors[component_number - 1 % len(self.default_colors)])
+        # check if more than one spectrum is loaded
+        if len(spec_loader.target_spectra) == 0:
+            logger.warning("No spectra loaded from file.")
+            return
+        elif len(spec_loader.target_spectra) > 1:
+            # inform user in dialog
+            QtWidgets.QMessageBox.information(None, "Multiple Spectra Loaded",
+                                                f"{len(spec_loader.target_spectra)} spectra loaded from file.\n"
+                                                f"Please define the component number for each spectrum.")
+
+        # Iterate over the loaded spectra and create an ROI for each one
+        for i in range(len(spec_loader.target_spectra)):
+            component_number = self.component_prompt()
+
+            # Call the preparation function, passing the specific index 'i'
+            self.prepare_roi_from_external_spectrum(spec_loader, component_number, index=i)
+
+    def prepare_roi_from_external_spectrum(self, spec_loader: SpectrumLoader, component_number: int, index: int):
+        spectrum_data = spec_loader.target_spectra[index]
+        spectrum_name = spec_loader.names[index]
+
+        roi = DummyROI(spectrum_name, spectrum_data)
+
+        # Calculate pen color (component_number - 1 converts 1-based index to 0-based for color list)
+        comp_idx = component_number - 1
+        roi.pen = pg.mkPen(self.default_colors[comp_idx % len(self.default_colors)])
+
         self.rois.append(roi)  # Add the ROI to the list
+
         # Generate a unique ID to identify the ROI
         roi_id = str(roi)
         self.roi_id_idx[roi_id] = len(self.rois) - 1
+
         cur_index = self.add_roi_to_table(new_roi_id=roi_id,
-                                          component_number=component_number - 1,
+                                          component_number=comp_idx,
                                           dummy=True,
-                                          roi_name=spec_loader.name if not None else 'Loaded spec_loader')  # Update the table view
+                                          roi_name=spectrum_name)  # Use the loaded name
+
         self.request_plot_avg_intensity(roi_id)
         self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
+        # This line stores the loader object. Since the loader now contains ALL spectra,
+        # this mapping is technically complex, but follows your original intent to store the loader object.
         self.spectrum_loaders[roi_id] = spec_loader
 
     def load_presets(self):

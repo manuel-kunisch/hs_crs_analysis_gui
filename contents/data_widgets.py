@@ -353,7 +353,6 @@ class DataWidget(QtWidgets.QWidget):
     def update_img(self, img: np.ndarray):
         self.image = img
         # pass data to ROI manager, calculate the subtracted data etc.
-        self.roi_manager.update_data(img)
         if self.show_processed_image_check.isChecked():
             self.callback_processed_img(True)
             return
@@ -361,7 +360,7 @@ class DataWidget(QtWidgets.QWidget):
             self.show_average_image(True)
             return
         self.display_raw_image(keep_view=False)
-
+        self.roi_manager.update_data(img)
 
     def display_raw_image(self, keep_view=True):
         logger.info('Displaying raw image')

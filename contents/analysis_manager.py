@@ -93,7 +93,7 @@ class AnalysisManager(QtCore.QObject):
 
         Args:
             center_wavenumber (float): The center of the Gaussian curve.
-            fwhm (float): The Full Width at Half Maximum of the Gaussian curve.
+            hwhm (float): The Half Width at Half Maximum of the Gaussian curve.
 
         Returns:
             np.ndarray: A numpy array representing the Gaussian curve.
@@ -409,7 +409,7 @@ class AnalysisManager(QtCore.QObject):
 
         widget_remove = QtWidgets.QPushButton("Remove")
         widget_remove.clicked.connect(lambda: self.remove_res_settings(row_position))
-        self.resonance_table.setCellWidget(row_position, 8, widget_remove)
+        self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Remove"], widget_remove)
 
         # Add text fields from column 2 to 4
         for column in [1, 2, 3, 4, 7]: # Columns 1, 2, 3, 4 are SpinBoxes
@@ -434,8 +434,10 @@ class AnalysisManager(QtCore.QObject):
         widget_gaussian = QtWidgets.QCheckBox()
         widget_gaussian.setChecked(False)  # Default to False (use pixels)
         self.resonance_table.setCellWidget(row_position, 6, widget_gaussian)
+        widget_gaussian.clicked.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
 
         widget_amp = self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Amplitude'])
+        widget_amp.valueChanged.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
         widget_amp.setValue(65_535)
         widget_amp.setSingleStep(1000)
 
@@ -580,8 +582,15 @@ class AnalysisManager(QtCore.QObject):
 
     def update_spectral_info(self):
         logger.info('Spectral Info Updated')
+
+        # Keep raw table info in the analyzer if you want it elsewhere
         self.mv_analyzer.spectral_info = self.get_all_spectral_info()
-        # plot the new spectral info in the ROI plot
+
+        gaussian_specs = self.get_gaussian_specs_grouped()
+        print(gaussian_specs)
+
+        # delegate everything Gaussian-related to ROIManager
+        self.roi_manager.update_gaussian_models_from_spectral_info(gaussian_specs)
 
     def get_spectral_info_row(self, row: int) -> dict[str, float | int]:
         """
@@ -665,6 +674,40 @@ class AnalysisManager(QtCore.QObject):
         for row in range(self.resonance_table.rowCount()):
             info.append(self.get_spectral_info_row(row))
         return info
+
+    def get_gaussian_specs_grouped(self) -> dict[int, list[tuple[float, float, float]]]:
+        """
+        Collect Gaussian peak definitions per component from the resonance table.
+
+        Returns
+        -------
+        dict:
+            {
+              comp_idx: [(center, hwhm, amplitude), ...],
+              ...
+            }
+
+            Each dict key contains a list of tuples defining Gaussian peaks for that component.
+        """
+        gaussians: dict[int, list[tuple[float, float, float]]] = {}
+
+        for info in self.get_all_spectral_info():
+            # skip empty/invalid rows
+            if not info:
+                continue
+
+            # respect the "Use Gaussian" checkbox
+            if not info.get("Use Gaussian", False):
+                continue
+
+            comp = int(info["Component"])
+            center = float(info["Wavenumber"])
+            hwhm  = float(info["Width"])           # interpret 'Width' column as HWHM
+            amp   = float(info.get("Amplitude", 65535.0))
+
+            gaussians.setdefault(comp, []).append((center, hwhm, amp))
+
+        return gaussians
 
     def get_component_number(self, row: int):
         """
@@ -775,27 +818,33 @@ class AnalysisManager(QtCore.QObject):
                     logger.info(f"Set seed H[{i}] from {decision_str}")
                     self.mv_analyzer.set_H_seed(i, seed_H[i, :])
                     continue
+                else:
+                    logger.info(f"No ROI defined for component H{i}; Trying to process spectral info.")
 
+                """
+                # removed redundant block since Gaussians are set as dummy ROIs in the ROI manager
+                
                 # Priority 2: Gaussian (Check if *any* info entry has it checked)
                 print(f"{i=}")
                 print(f"{self.get_spectral_infos(i)=}")
                 infos = self.get_spectral_infos(i)
-                gaussian_accum = np.zeros_like(self.wavenumbers)
-                use_gaussian_for_comp = False
 
-                logger.info(f"{infos=}")
-                for info in infos:
-                    if info.get('Use Gaussian', False):
-                        use_gaussian_for_comp = True
-                        amp = info.get('Amplitude', 65_535)
-                        gaussian_accum += self._generate_gaussian(info['Wavenumber'], info['Width'], amp)
+                # check if any spectral info requests a Gaussian
+                use_gaussian_for_comp = any(info.get('Use Gaussian', False) for info in infos)
 
                 if use_gaussian_for_comp:
+                    gaussian_accum = np.zeros_like(self.wavenumbers)
+                    for info in infos:
+                        # concatenate the gaussians
+                        if info.get('Use Gaussian', False):
+                            amp = info.get('Amplitude', 65_535)
+                            gaussian_accum += self._generate_gaussian(info['Wavenumber'], info['Width'], amp)
                     decision_str = 'Gaussian user input'
                     seed_H[i, :] = gaussian_accum
                     logger.info(f"Set seed H[{i}] from {decision_str}")
                     self.mv_analyzer.set_H_seed(i, seed_H[i, :])
                     continue
+                """
 
                 # Priority 3: Seed Pixels (only for components where we searched and found them)
                 if i in seed_pixel_dict:
@@ -1221,7 +1270,12 @@ class SeedWidget(QtWidgets.QWidget):
         # clear previous plots
         self.seed_H_plot.clear()
         for i in range(self.seed_H.shape[0]):
-            self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pg.mkPen(self.get_color(i)), name=f'Component {i}')
+            try:
+                pen = pg.mkPen(self.get_color(i))
+            except TypeError:
+                logger.error('Error getting color for seed H plot; using white instead.')
+                pen = pg.mkPen('w')
+            self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pen, name=f'Component {i}')
 
 
     def _replot_seeds(self):

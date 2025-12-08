@@ -1274,7 +1274,7 @@ class SeedWidget(QtWidgets.QWidget):
                 pen = pg.mkPen(self.get_color(i))
             except TypeError:
                 logger.error('Error getting color for seed H plot; using white instead.')
-                pen = pg.mkPen('w')
+                pen = pg.mkPen(self.default_colors[i%len(self.default_colors)])
             self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pen, name=f'Component {i}')
 
 

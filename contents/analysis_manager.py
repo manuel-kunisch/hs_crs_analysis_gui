@@ -87,7 +87,7 @@ class AnalysisManager(QtCore.QObject):
         if init_widgets:
             self.init_ui()
 
-    def _generate_gaussian(self, center_wavenumber: float, fwhm: float, amp: float = 1.0, eliminate_zeros=True) -> np.ndarray:
+    def _generate_gaussian(self, center_wavenumber: float, hwhm: float, amp: float = 1.0, eliminate_zeros=True) -> np.ndarray:
         """
         Generates a Gaussian curve centered at center_wavenumber with the specified FWHM.
 
@@ -103,7 +103,7 @@ class AnalysisManager(QtCore.QObject):
 
         # FWHM = 2 * sqrt(2 * ln(2)) * sigma
         # sigma = FWHM / (2 * sqrt(2 * ln(2)))
-        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        sigma = hwhm / (np.sqrt(2 * np.log(2)))
 
         # Gaussian formula: exp(- (x - mu)^2 / (2 * sigma^2))
         gaussian = np.exp(-((self.wavenumbers - center_wavenumber) ** 2) / (2 * sigma ** 2))
@@ -333,11 +333,32 @@ class AnalysisManager(QtCore.QObject):
 
         seed_W_3d = self.mv_analyzer.seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
                                                     self.mv_analyzer.raw_data_3d.shape[2], -1)
-        """
-        if self.seed_window is not None:
-            self.seed_window.close()
-        """
-        self.seed_window = SeedWindow(seed_W_3d, self.mv_analyzer.seed_H, self.wavenumbers, seed_pixels, self.roi_manager.get_color)
+
+        self.show_seed_window(seed_W_3d, seed_H, seed_pixels)
+
+    def show_seed_window(self, seed_W_3d, seed_H, seed_pixels):
+        if self.seed_window is None:
+            self.seed_window = SeedWidget(
+                seed_W_3d,
+                seed_H,
+                self.wavenumbers,
+                seed_pixels,
+                self.roi_manager.get_color
+            )
+            logger.info("Created new seed window")
+        else:
+            # reuse existing window
+            self.seed_window.set_data(
+                seed_W_3d=seed_W_3d,
+                seed_H=seed_H,
+                wavenumbers=self.wavenumbers,
+                seed_pixels=seed_pixels,
+            )
+            self.seed_window.show()
+            self.seed_window.raise_()
+            self.seed_window.activateWindow()
+        logger.info("Updated existing seed window")
+
 
 
     def reload_H_seeds_from_rois(self) -> None:
@@ -981,11 +1002,11 @@ class AnalysisManager(QtCore.QObject):
 
 
 
-class SeedWindow(QtWidgets.QMainWindow):
+class SeedWidget(QtWidgets.QWidget):
     default_colors = CompositeImageViewWidget.colormap_colors
     def __init__(self, seed_W_3d: np.ndarray, seed_H: np.ndarray, wavenumbers,
                  seed_pixels: dict or None = None, color_getter: Callable = None):
-        super(SeedWindow, self).__init__()
+        super(SeedWidget, self).__init__()
         self.seed_W_3d = seed_W_3d
         self.seed_H = seed_H
         self.wavenumbers = wavenumbers
@@ -996,7 +1017,7 @@ class SeedWindow(QtWidgets.QMainWindow):
         self.get_color = color_getter if color_getter is not None else lambda i: self.default_colors[i]
         self.scatters = []
         self.change_colormap_on_change = True
-        self.seed_plot_signal = None
+        self.seed_plot_signal = False
         self.colormap_signal = None
         self.setWindowTitle('Seed Visualization')
         self.init_ui()
@@ -1011,9 +1032,9 @@ class SeedWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(self.seed_W_view)
         layout.addWidget(self.seed_H_plot)
-        widget = QtWidgets.QWidget()
-        widget.setLayout(layout)
-        self.setCentralWidget(widget)
+        # widget = QtWidgets.QWidget()
+        self.setLayout(layout)
+        # self.setCentralWidget(widget)
         self.seed_W_view.ui.roiPlot.setMinimumSize(QtCore.QSize(0, 60))
         axis = self.seed_W_view.ui.roiPlot.getAxis('bottom')
         axis.setLabel("W component")
@@ -1057,6 +1078,32 @@ class SeedWindow(QtWidgets.QMainWindow):
         layout.addLayout(hbox)
         self.show()
 
+    def _on_timeline_position_changed(self, *args):
+        """Called when the timeLine position changes (for current-component plotting)."""
+        self.plot_seed_pixels(self.seed_W_view.currentIndex)
+
+
+    def set_data(
+            self,
+            seed_W_3d: np.ndarray,
+            seed_H: np.ndarray,
+            wavenumbers: np.ndarray,
+            seed_pixels: dict | None,
+    ):
+        """Update all data in one go when reusing the window."""
+        self.seed_W_3d = seed_W_3d
+        self.wavenumbers = wavenumbers
+        self.seed_pixels = seed_pixels
+
+        # update W image and x-axis ticks
+        self.update_seed_W(seed_W_3d)
+
+        # update H spectra
+        self.update_seed_H(seed_H)
+
+        # re-draw seed markers according to current checkbox state
+        self._replot_seeds()
+
     def save_seeds(self):
         time = datetime.now().strftime("%Y_%m_%d_%H-%M-%S")
         file_path = QtWidgets.QFileDialog.getSaveFileName(self, f'Save W & H seeds to path', f'{time}_W_seeds.tif', 'TIFF (*.tif)')[0]
@@ -1089,50 +1136,55 @@ class SeedWindow(QtWidgets.QMainWindow):
         self.seed_W_view.setColorMap(cmap)
 
     def callback_seed_pixels(self, state, cmp: int = None):
-        if state:
+        """Handle both checkboxes:
+           - state from 'all seed pixels' → cmp is None
+           - state from 'current component' → cmp is an int
+        """
+        checked = bool(state)
+
+        if checked:
             if cmp is not None:
+                # 'current component' checkbox turned ON
                 self.plot_seed_pixels(cmp)
-                self.seed_plot_signal = self.seed_W_view.timeLine.sigPositionChanged.connect(lambda: self.plot_seed_pixels(self.seed_W_view.currentIndex))
+                if not self.seed_plot_signal:
+                    self.seed_W_view.timeLine.sigPositionChanged.connect(
+                        self._on_timeline_position_changed
+                    )
+                    self.seed_plot_signal = True
             else:
+                # 'all seed pixels' checkbox turned ON
                 self.plot_all_seed_pixels()
         else:
-            for scatter in self.scatters:
+            # checkbox turned OFF: clear current scatters
+            for scatter in list(self.scatters):
                 self.seed_W_view.removeItem(scatter)
-                self.scatters.remove(scatter)
-            if self.seed_plot_signal is not None:
-                self.disconnect(self.seed_plot_signal)
-                self.seed_plot_signal = None
+            self.scatters.clear()
+
+            # if this was the 'current component' checkbox, disconnect timeline
+            if cmp is not None and self.seed_plot_signal:
+                try:
+                    self.seed_W_view.timeLine.sigPositionChanged.disconnect(
+                        self._on_timeline_position_changed
+                    )
+                except TypeError:
+                    # was already disconnected; ignore
+                    pass
+                self.seed_plot_signal = False
 
     def plot_all_seed_pixels(self, delete_previous=True):
         if self.seed_pixels is None:
             return
 
         if delete_previous:
-            for scatter in self.scatters:
-                self.seed_W_view.removeItem(scatter)
-                self.scatters.remove(scatter)
+            self.clear_scatters()
+
         for component, pixels in self.seed_pixels.items():
-            # add +.5 to the pixel positions to center the marker in the pixel
-            vis_pixel_pos = np.array(pixels) + 0.5
-            # rearrange the pixel positions to the correct format of array([[y1, x1], [y2, x2], ...])
-            positions = np.array([[vis_pixel_pos[1][i], vis_pixel_pos[0][i]] for i in range(len(pixels[0]))])
-            scatter = pg.ScatterPlotItem(
-                pos=positions,
-                size=8,
-                brush=pg.mkBrush(self.get_color(component)),
-                symbol='+',  # Change this to 'o', 'x', 'star', etc.
-                pen=pg.mkPen(self.get_color(component), width=1)  # White outline
-            )
             self.add_scatter(pixels, component)
 
     def plot_seed_pixels(self, component: int, delete_previous=True):
         if delete_previous:
-            for scatter in self.scatters:
-                self.seed_W_view.removeItem(scatter)
-                self.scatters.remove(scatter)
-        if self.seed_pixels is None:
-            return
-        if component not in self.seed_pixels:
+            self.clear_scatters()
+        if self.seed_pixels is None or component not in self.seed_pixels:
             return
         pixels = self.seed_pixels[component]
         self.add_scatter(pixels, component)
@@ -1151,14 +1203,51 @@ class SeedWindow(QtWidgets.QMainWindow):
         self.scatters.append(scatter)
         return scatter
 
-    def update_seed_W(self, seed_W):
+    def clear_scatters(self):
+        for scatter in self.scatters:
+            self.seed_W_view.removeItem(scatter)
+        self.scatters.clear()
+
+    def update_seed_W(self, seed_W: np.ndarray):
         self.seed_W_3d = seed_W
         self.seed_W_view.setImage(seed_W)
 
+        # Update bottom axis ticks if the number of components changed
+        axis = self.seed_W_view.ui.roiPlot.getAxis('bottom')
+        axis.setTicks([[(i, str(i)) for i in range(int(self.seed_W_3d.shape[2]))]])
+
     def update_seed_H(self, seed_H):
         self.seed_H = seed_H
+        # clear previous plots
+        self.seed_H_plot.clear()
         for i in range(self.seed_H.shape[0]):
-            self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pg.mkPen(self.roi_manager.get_color(i)), name=f'Component {i}')
+            self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pg.mkPen(self.get_color(i)), name=f'Component {i}')
+
+
+    def _replot_seeds(self):
+        """Re-draw the seed markers based on current checkboxes and data."""
+        self.clear_scatters()
+        if self.seed_pixels is None:
+            return
+
+        # If you want to respect your two checkboxes, store them as attributes
+        # in init_ui, e.g. self.chk_all, self.chk_current.
+        try:
+            if getattr(self, "chk_all", None) is not None and self.chk_all.isChecked():
+                self.plot_all_seed_pixels(delete_previous=False)
+            elif getattr(self, "chk_current", None) is not None and self.chk_current.isChecked():
+                self.plot_seed_pixels(self.seed_W_view.currentIndex, delete_previous=False)
+            else:
+                # Default: show current component
+                self.plot_seed_pixels(self.seed_W_view.currentIndex, delete_previous=False)
+        except Exception:
+            # Fallback if checkboxes don't exist (first version)
+            self.plot_seed_pixels(self.seed_W_view.currentIndex, delete_previous=False)
+
+    def closeEvent(self, event: QtGui.QCloseEvent):
+        # make sure internal graphics view & scene are cleaned up deterministically
+        # self.seed_W_view.close()
+        super().closeEvent(event)
 
 if __name__ == '__main__':
     from tifffile import imread, tifffile

@@ -339,6 +339,8 @@ class MainApplication(QtWidgets.QMainWindow):
             self.analysis_manager.seed_window.close()
 
 if __name__ == '__main__':
+    import faulthandler, signal
+    faulthandler.enable(all_threads=True)
     from contents.darkmode import set_darkmode
     app = QtWidgets.QApplication(sys.argv)  # Create a QApplication instance that runs in a dedicated thread.
     # Issue: Unlike on MacOS, darkmode is not automatically set with Windows 
@@ -350,9 +352,9 @@ if __name__ == '__main__':
         logger.error(f"Could not load example data: {e}")
 
     # set default size of the main window
-    main_app.resize(1600, 900)
+    main_app.resize(1920, 1080)
     # show window maximized
-    main_app.showMaximized()
+    # main_app.showMaximized()
 
     main_app.show()
     app.exec_()

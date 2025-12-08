@@ -242,7 +242,6 @@ class MultivariateAnalyzer(object):
             raise ShapeError(self.data_2d.shape[0], W.shape[0])
         self.seed_W = W
         # check for zeros along axis 1
-
         self._W_prepared = True
 
     def set_up_random_H_seed(self, i):
@@ -262,6 +261,7 @@ class MultivariateAnalyzer(object):
         # First step: process all spectral info to create the W seeds
         if not skip_spectral_info:
             self.make_W_seeds_from_spectral_info()
+        # first try to initialize from H seeds....
         if not self._W_prepared:
             logger.warning('W seeds not prepared, using random seeds')
             self.estimate_W_seed_matrix_from_H(overwrite=False)
@@ -271,7 +271,7 @@ class MultivariateAnalyzer(object):
         return self._W_prepared
         # W seed estimation should be done by now, time for H
 
-    def set_up_H_seed(self, seed_pixels=None) -> bool:
+    def set_up_missing_H_seeds(self) -> bool:
         # 1) use ROIs, this has been done by the analysis manager or by the user manually
         # 2) find seed pixels from spectral info
 
@@ -283,7 +283,7 @@ class MultivariateAnalyzer(object):
             self.seed_H = np.zeros((self._n_components, self.data_2d.shape[1]))
 
         remaining_components = np.where(~np.all(self.seed_H, axis=1))[0]
-        logger.info(f'H Components without seed: {remaining_components}')
+        logger.info(f'H Components without seed or zeros in component: {remaining_components}')
 
         # iterate over all components and create the H seeds
         for cmp in remaining_components:
@@ -500,8 +500,10 @@ class MultivariateAnalyzer(object):
         Function that executes the NNMF with the seeds provided by the user.
         Seeds must be set before calling this function.
         Returns:
-
         """
+        # this function expects the W seed already be set up, for instance from spectral info inside the analysis
+        # manager.
+        # W seeds that are not fully prepared are calculated from H seeds
         if not skip_seed_fining:
             """ Really basic seed estimation. Only takes H into account and makes W from H"""
             # H must be set outside of the analyzer manually
@@ -534,7 +536,6 @@ class MultivariateAnalyzer(object):
         logger.info("Custom NNMF outcome: #Iter: {}".format(nnmf_model.n_iter_))
         logger.info("Parameter: \n {}".format(nnmf_model.get_params))
         return True
-        ...
 
     def reset_results(self):
         self.fixed_H = None

@@ -896,6 +896,10 @@ class ROIPlotter(pg.PlotWidget):
         # Add any additional configurations you need
         # ...
 
+    def request_gaussian_component_plot(self, component_number):
+        """ check if there is a roi defining this component, otherwise create a dummy roi to plot the gaussian component """
+        print('WIP')
+
     def roi_component_changed(self, roi_id, component_number):
         # remove the old highlight
         self.remove_highlight(roi_id)

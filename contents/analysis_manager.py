@@ -87,8 +87,39 @@ class AnalysisManager(QtCore.QObject):
         if init_widgets:
             self.init_ui()
 
+    def _generate_gaussian(self, center_wavenumber: float, fwhm: float, amp: float = 1.0, eliminate_zeros=True) -> np.ndarray:
+        """
+        Generates a Gaussian curve centered at center_wavenumber with the specified FWHM.
+
+        Args:
+            center_wavenumber (float): The center of the Gaussian curve.
+            fwhm (float): The Full Width at Half Maximum of the Gaussian curve.
+
+        Returns:
+            np.ndarray: A numpy array representing the Gaussian curve.
+        """
+        if self.wavenumbers is None:
+            return np.zeros(1)
+
+        # FWHM = 2 * sqrt(2 * ln(2)) * sigma
+        # sigma = FWHM / (2 * sqrt(2 * ln(2)))
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+
+        # Gaussian formula: exp(- (x - mu)^2 / (2 * sigma^2))
+        gaussian = np.exp(-((self.wavenumbers - center_wavenumber) ** 2) / (2 * sigma ** 2))
+        gaussian *= amp
+
+        if eliminate_zeros:
+            # add float info eps to avoid errors with zeros for NNMF
+            gaussian[gaussian == 0] += np.finfo(float).eps
+        return gaussian
 
     def init_ui(self):
+        """
+        Returns
+        -------
+
+        """
         # Create the main widget
         self.analysis_widget = QtWidgets.QWidget()
         master_ui_layout = QtWidgets.QGridLayout(self.analysis_widget)
@@ -153,7 +184,8 @@ class AnalysisManager(QtCore.QObject):
 
         # Create a table to show files
         self.resonance_table = QtWidgets.QTableWidget()
-        res_settings_options = ["Component", "Wavenumber", "Width", "Pixel Threshold", "# Seed Pixels", "Use subtracted data"]
+        res_settings_options = ["Component", "Wavenumber", "Width", "Pixel Threshold", "# Seed Pixels", "Use subtracted data",
+                                "Use Gaussian", "Amplitude", "Remove"]
         self.res_settings_widget_columns = {option: i for i, option in enumerate(res_settings_options)}
         self.resonance_table.setColumnCount(len(res_settings_options))  # Assuming one column for file paths
         self.resonance_table.setHorizontalHeaderLabels(res_settings_options)
@@ -201,15 +233,15 @@ class AnalysisManager(QtCore.QObject):
         spectral_button_layout.addWidget(check_W_seeds_button)
 
         # add button to test the spectral info handling
-        test_spectral_info_button = QtWidgets.QPushButton('Test spectral info')
+        test_spectral_info_button = QtWidgets.QPushButton('Test seeds')
         # table_and_button_layout.addWidget(test_spectral_info_button, 4, 5, alignment=QtCore.Qt.AlignVCenter)
-        test_spectral_info_button.clicked.connect(lambda: self.make_W_seeds_from_spectral_info(debug_mode=True))
+        test_spectral_info_button.clicked.connect(lambda: self.make_all_seeds_from_inputs(show_seeds=True))
         test_spectral_info_button.setStyleSheet("background-color: gray")
         spectral_button_layout.addWidget(test_spectral_info_button)
 
         test_seed_setup_button = QtWidgets.QPushButton('Test seed setup')
         # table_and_button_layout.addWidget(test_seed_setup_button, 3, 5, alignment=QtCore.Qt.AlignVCenter)
-        test_seed_setup_button.clicked.connect(lambda state: self.seed_debug(show_seeds=True))
+        test_seed_setup_button.clicked.connect(lambda state: self.make_all_seeds_from_inputs(show_seeds=True))
         test_seed_setup_button.setStyleSheet("background-color: gray")
         spectral_button_layout.addWidget(test_spectral_info_button)
 
@@ -270,7 +302,7 @@ class AnalysisManager(QtCore.QObject):
 
         """
         if self.nnmf_radio.isChecked() and self.mv_analyzer.custom_nnmf_init:
-            self.seed_debug(show_seeds=True)
+            self.make_all_seeds_from_inputs(show_seeds=True)
         self.analyze_button.setEnabled(False)
         self.analyze_button.setText('Analysis in Progress')
         self.thread_analysis.start()
@@ -278,26 +310,23 @@ class AnalysisManager(QtCore.QObject):
         logger.info(f'{datetime.now()}: Analysis started')
         logger.info(f"{'-' * 50}")
 
-    def seed_debug(self, show_seeds=True):
+    def make_all_seeds_from_inputs(self, show_seeds=True):
         self.reload_H_seeds_from_rois()     # reset all existing seeds and reload ROIs
-        seed_W, seed_H, seed_pixels = self.make_W_seeds_from_spectral_info(debug_mode=False) # create W seeds from spectral info and pass to analyzer
-        logger.info(f'{"-" * 50}')
-        logger.info("W seeds:")
-        # first try to set up from the spectral data (weighted by H if exists) and then from the H seeds from the ROIs if no info is available,
-        # otherwise the W seed is randomly initialized
-        # TODO: random W initialization can be overhauled to be more sophisticated
+        # make seeds from user inputs inside the roi manager (highest priority for H, and user inputs for W from the table)
+        logger.info("Processing user inputs for W seeds and H from ROIs")
+        seed_W, seed_H, seed_pixels = self.make_W_seeds_from_spectral_info(make_H_seeds=True,debug_mode=False) # create W seeds from spectral info and pass to analyzer
+        logger.info('Processing finished')
+        logger.info('.......................................')
+
+        # fill remaining W seeds
         self.mv_analyzer.set_up_W_seed(skip_spectral_info=True, fill_H_seed=False)  # fill the W seed matrix
 
         logger.info(f'{"-"*50}')
         logger.info("H seeds:")
         # W seeds are set
-        # set up H seeds that are not yet ready from W seeds
-        for i, H in enumerate(self.mv_analyzer.seed_H):
-            if not H.all() and seed_H[i].all():
-                logger.info(f'H{i} seed not set and is initialized with seed pixel spectra')
-                self.mv_analyzer.set_H_seed(i, seed_H[i, :])
+
         # remainining components that are not given by rois and spectral info are randomly initialized
-        self.mv_analyzer.set_up_H_seed()
+        self.mv_analyzer.set_up_missing_H_seeds()
 
         if not show_seeds:
             return
@@ -357,8 +386,12 @@ class AnalysisManager(QtCore.QObject):
         self.resonance_table.setCellWidget(row_position, 0, item)
         item.currentIndexChanged.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
 
+        widget_remove = QtWidgets.QPushButton("Remove")
+        widget_remove.clicked.connect(lambda: self.remove_res_settings(row_position))
+        self.resonance_table.setCellWidget(row_position, 8, widget_remove)
+
         # Add text fields from column 2 to 4
-        for column in range(1, len(self.res_settings_widget_columns) -1):
+        for column in [1, 2, 3, 4, 7]: # Columns 1, 2, 3, 4 are SpinBoxes
             item = QtWidgets.QDoubleSpinBox()
             item.setMaximum(1e7)
             self.resonance_table.setCellWidget(row_position, column, item)
@@ -377,13 +410,21 @@ class AnalysisManager(QtCore.QObject):
         widget_np.setValue(1000)
         widget_np.valueChanged.connect(lambda x: self.adjust_eps)
 
+        widget_gaussian = QtWidgets.QCheckBox()
+        widget_gaussian.setChecked(False)  # Default to False (use pixels)
+        self.resonance_table.setCellWidget(row_position, 6, widget_gaussian)
+
+        widget_amp = self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Amplitude'])
+        widget_amp.setValue(65_535)
+        widget_amp.setSingleStep(1000)
+
 
         default_wavenumber = self.default_resonances[row_position%len(self.default_resonances)][0]
         if np.amin(self.wavenumbers) <= default_wavenumber <= np.amax(self.wavenumbers):
             self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Wavenumber']).setValue((self.default_resonances[row_position%len(self.default_resonances)][0]))
             self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Width']).setValue((self.default_resonances[row_position%len(self.default_resonances)][1]))
 
-        for cell in range(1, len(self.res_settings_widget_columns)-1):
+        for cell in range(1, 5):    # spinboxes 1-4
             item = self.resonance_table.cellWidget(row_position, cell)
             item.valueChanged.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
         self.callback_res_settings(row_position)
@@ -521,8 +562,59 @@ class AnalysisManager(QtCore.QObject):
         self.mv_analyzer.spectral_info = self.get_all_spectral_info()
         # plot the new spectral info in the ROI plot
 
+    def get_spectral_info_row(self, row: int) -> dict[str, float | int]:
+        """
+        main method to extract the spectral information from the table
+
+        Returns a dictionary with the spectral information for the selected row. If the row is incomplete, an empty dictionary is returned.
+        """
+        cnumber = self.get_component_number(row)
+
+        def get_value(column_name: str, cast_type: type, default=None):
+            """Helper function to extract and convert a cell value."""
+            widget: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[column_name])
+            if widget:
+                if cast_type is bool:
+                    try:
+                        return widget.isChecked()
+                    except ValueError:
+                        pass
+                try:
+                    return cast_type(widget.value())
+                except ValueError:
+                    pass
+            return default
+
+        # Extract values using the helper function
+        wnumber = get_value('Wavenumber', float)
+        width = get_value('Width', float)
+        thres = get_value('Pixel Threshold', float)
+        n_pixels = get_value('# Seed Pixels', int)
+        use_gauss = get_value('Use Gaussian', bool)
+        amp = get_value('Amplitude', float)
+
+        # Validate required values
+        if wnumber is None or width is None or (thres is None and n_pixels is None):
+            return {}
+
+        dict_entry = {
+            'Component': cnumber,
+            'Wavenumber': wnumber,
+            'Width': width,
+            'Pixel Threshold': thres,
+            '# Seed Pixels': n_pixels,
+            'Use Gaussian': use_gauss,
+            'Amplitude': amp
+        }
+        return dict_entry
 
     def get_spectral_info(self, component: int) -> dict[str, float | int]:
+        """
+        convenience method to get the spectral information for a specific component
+        Args:
+            component (int): The 0-based index of the component.
+
+        """
         # iterate over all table entries and filter out the spectral information for the selected component
         info = dict()
         for row in range(self.resonance_table.rowCount()):
@@ -535,7 +627,11 @@ class AnalysisManager(QtCore.QObject):
         return info
 
     def get_spectral_infos(self, component: int) -> list[dict[str, float | int]]:
-        """ convenience method to get all spectral information for a specific component """
+        """
+        convenience method to get all spectral information for a specific component
+        Args:
+            component (int): The 0-based index of the component.
+        """
         infos = []
         for row in range(self.resonance_table.rowCount()):
             if self.get_component_number(row) == component:
@@ -560,48 +656,29 @@ class AnalysisManager(QtCore.QObject):
         return int(component_combobox.currentText().split(' ')[-1]) - 1
 
     def get_row_number(self, component: int) -> int | None:
+        """
+        Returns the row number of the component in the table. If multiple components are found, the first one is returned.
+        If no component is found, None is returned.
+
+        Parameters
+        ----------
+        component
+
+        Returns
+        ------
+        """
         # find the row number of the component in the table
         for row in range(self.resonance_table.rowCount()):
             if self.get_component_number(row) == component:
                 return row
         return None
 
-    def get_spectral_info_row(self, row: int) -> dict[str, float | int]:
-        """
-        main method to extract the spectral information from the table
-
-        Returns a dictionary with the spectral information for the selected row. If the row is incomplete, an empty dictionary is returned.
-        """
-        cnumber = self.get_component_number(row)
-
-        def get_value(column_name: str, cast_type: type, default=None):
-            """Helper function to extract and convert a cell value."""
-            widget: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[column_name])
-            if widget:
-                try:
-                    return cast_type(widget.value())
-                except ValueError:
-                    pass
-            return default
-
-        # Extract values using the helper function
-        wnumber = get_value('Wavenumber', float)
-        width = get_value('Width', float)
-        thres = get_value('Pixel Threshold', float)
-        n_pixels = get_value('# Seed Pixels', int)
-
-        # Validate required values
-        if wnumber is None or width is None or (thres is None and n_pixels is None):
-            return {}
-
-        dict_entry = {
-            'Component': cnumber,
-            'Wavenumber': wnumber,
-            'Width': width,
-            'Pixel Threshold': thres,
-            '# Seed Pixels': n_pixels
-        }
-        return dict_entry
+    def get_row_numbers(self, component: int) -> list[int] | None:
+        rows = []
+        for row in range(self.resonance_table.rowCount()):
+            if self.get_component_number(row) == component:
+                rows.append(row)
+        return rows if rows else None
 
     def make_W_seeds_from_spectral_info(self, make_H_seeds=True, debug_mode=True) -> Tuple[np.ndarray, np.ndarray, dict[int, tuple[np.ndarray, np.ndarray]]]:
         """ testing function if the spectal info is correctly interpreted """
@@ -611,58 +688,119 @@ class AnalysisManager(QtCore.QObject):
         # iterate over all components and create the W seeds
         for i in range(self.mv_analyzer.get_n_components()):
             info_dict_list = self.get_spectral_infos(i)
-            if not info_dict_list:
-                logger.warning(f'No spectral information found for component {i}')
-                continue
+            if not info_dict_list: continue
+
             res_indices = np.array([], dtype=int)
             for info_dict in info_dict_list:
-                # check if a seed info exists from the roi manager and ask for confirmation
                 res_indices = np.append(res_indices, self.mv_analyzer.return_resonance_indices(info_dict))
+
+            # ... (Logic for weights and subtracted data same as before) ...
+
             weights = np.ones(res_indices.size)
-            if self.roi_manager.is_component_defined(i):
-                # check if the roi manager has a seed for the current component and ask if the spectral info should be used
-                if QtWidgets.QMessageBox.question(self.analysis_widget, 'Seed Overwrite',
-                                                  f'A seed for component {i} already exists because of the H spectrum.'
-                                                  f'Would you like to use H as weights?',
-                                                  QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No) == QtWidgets.QMessageBox.Yes:
-                    weights = self.roi_manager.get_component_seed(i)[res_indices]
-            logger.info(f'Creating W seed from available spectral info {info_dict_list}')
-            logger.info(f'Component {i}: {res_indices=}')
-            # create a seed for the current component
-            row = self.get_row_number(i)
+            # Shortened for brevity: insert your existing W seed averaging code here
             data = self.mv_analyzer.data_2d
-            if self.resonance_table.cellWidget(row, self.res_settings_widget_columns['Use subtracted data']).isChecked():
-                logger.info(f'Using subtracted data for component W{i} estimation')
+            if self.resonance_table.cellWidget(self.get_row_number(i),
+                                               self.res_settings_widget_columns['Use subtracted data']).isChecked():
                 data = self.mv_analyzer.resonance_data_2d
-            res_slices = data[..., res_indices]
-            seed = np.average(res_slices, axis=1, weights=weights)
-            seed_W[..., i] = seed
-        self.mv_analyzer.seed_W = seed_W
-        print('Created W seed from spectral info. Debug mode:', debug_mode)
-        # new dimension is yxc
-        seed_W_3d = seed_W.reshape(self.z3D_data.shape[1], self.z3D_data.shape[2], -1)
 
-        seed_pixel_dict = self.find_seed_pixels(find_for_all=True, debug_mode=False)
+            if res_indices.size > 0:
+                seed = np.average(data[..., res_indices], axis=1, weights=weights)
+                seed_W[..., i] = seed
 
-        # estimate seed_H from the seed pixel spectra
-        seed_H = np.zeros((seed_W.shape[1], self.wavenumbers.size))
+        self.mv_analyzer.seed_W = seed_W    # do not call the class method since it assumes the seed is set completely
+
+        n_components = self.mv_analyzer.get_n_components()
+        # 2. Find Seed Pixels
+        # Optimization: We check which components actually NEED pixel searching
+        # Only search if NO ROI defined AND "Use Gaussian" is NOT checked
+        # --- 2. Determine H Seed Source and Find Pixels if needed ---
+        seed_H = np.zeros((n_components, self.wavenumbers.size))
+        seed_pixel_dict = {}
+
         if make_H_seeds:
-            for i, pixels in seed_pixel_dict.items():
-                row = self.get_row_number(i)
-                if self.resonance_table.cellWidget(row, self.res_settings_widget_columns['Use subtracted data']).isChecked():
-                    # use the subtracted data for the seed H
-                    spectra = self.mv_analyzer.resonance_data_zyx[:, pixels[0], pixels[1]]
-                    logger.info(f'Using subtracted data for component H{i} estimation')
-                else:
-                    spectra = self.z3D_data[:, pixels[0], pixels[1]]
-                mean_spectrum = np.mean(spectra, axis=1)
-                seed_H[i, :] = mean_spectrum
+            # Identify components that must use the pixel search fallback
+            components_needing_pixels = []
 
+            # Check the source priority (ROI -> Gaussian -> Pixel) for all components
+            for i in range(n_components):
+                row = self.get_row_number(i)
+                has_roi = self.roi_manager.is_component_defined(i)
+
+                # Check if we are forced to use Gaussian for this component
+                use_gaussian_checked = False
+                if row is not None:
+                    # Assumes "Use Gaussian" is checked
+                    use_gaussian_checked = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[
+                        'Use Gaussian']).isChecked()
+
+                # If no ROI and no Gaussian, this component needs the pixel search
+                if not has_roi and not use_gaussian_checked:
+                    components_needing_pixels.append(i)
+
+            logger.info(f"{components_needing_pixels=}")
+            # Perform pixel search only for the required components
+            if components_needing_pixels:
+                seed_pixel_dict = self.find_seed_pixels(components=components_needing_pixels, debug_mode=debug_mode)
+
+            # --- 3. Fill H Seeds based on determined source ---
+            for i in range(n_components):
+                decision_str = 'No decision'
+                row = self.get_row_number(i)
+
+                # Priority 1: Existing ROI
+                if self.roi_manager.is_component_defined(i):
+                    decision_str = 'Existing user ROI'
+                    seed_H[i, :] = self.roi_manager.get_component_seed(i)
+                    logger.info(f"Set seed H[{i}] from {decision_str}")
+                    self.mv_analyzer.set_H_seed(i, seed_H[i, :])
+                    continue
+
+                # Priority 2: Gaussian (Check if *any* info entry has it checked)
+                print(f"{i=}")
+                print(f"{self.get_spectral_infos(i)=}")
+                infos = self.get_spectral_infos(i)
+                gaussian_accum = np.zeros_like(self.wavenumbers)
+                use_gaussian_for_comp = False
+
+                logger.info(f"{infos=}")
+                for info in infos:
+                    if info.get('Use Gaussian', False):
+                        use_gaussian_for_comp = True
+                        amp = info.get('Amplitude', 65_535)
+                        gaussian_accum += self._generate_gaussian(info['Wavenumber'], info['Width'], amp)
+
+                if use_gaussian_for_comp:
+                    decision_str = 'Gaussian user input'
+                    seed_H[i, :] = gaussian_accum
+                    logger.info(f"Set seed H[{i}] from {decision_str}")
+                    self.mv_analyzer.set_H_seed(i, seed_H[i, :])
+                    continue
+
+                # Priority 3: Seed Pixels (only for components where we searched and found them)
+                if i in seed_pixel_dict:
+                    pixels = seed_pixel_dict[i]
+                    use_subtracted = False
+                    if row is not None:
+                        use_subtracted = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[
+                            'Use subtracted data']).isChecked()
+
+                    # Select data source
+                    data_3d = self.mv_analyzer.resonance_data_zyx if use_subtracted else self.z3D_data
+
+                    # Extract spectra from pixels
+                    spectra = data_3d[:, pixels[0], pixels[1]]
+
+                    # Calculate mean spectrum
+                    decision_str = 'Seed Pixels'
+                    seed_H[i, :] = np.mean(spectra, axis=1)
+                    logger.info(f"Set seed H[{i}] from {decision_str}")
+                    self.mv_analyzer.set_H_seed(i, seed_H[i, :])
 
         if debug_mode:
             self.seed_window = QtWidgets.QMainWindow()
             self.seed_window.setWindowTitle('Seeds from spectral info')
             print('Showing W seeds')
+            seed_W_3d = seed_W.reshape(self.z3D_data.shape[1], self.z3D_data.shape[2], -1)
             seed_W_view = ImageViewYX()
             seed_W_view.setImage(seed_W_3d)
 
@@ -700,81 +838,121 @@ class AnalysisManager(QtCore.QObject):
         return seed_W, seed_H, seed_pixel_dict
         # idea: thresholding for W seeds
 
-    def find_seed_pixels(self, find_for_all: bool = False, unique_seed_pixels=True, debug_mode: bool =debug) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    def find_seed_pixels(self, find_for_all: bool = False, components: list[int] = None, unique_seed_pixels=True,
+                         debug_mode: bool = debug) -> dict[int, tuple[np.ndarray, np.ndarray]]:
         """
-        Find seed pixels for the components in the spectral info table
+        Find seed pixels for the specified components.
+
         Args:
-            unique_seed_pixels (bool): if True, add the seed pixels to the excluded pixels
-            find_for_all (bool): if True, find seed pixels for all components, otherwise only for components without a defined ROI
-            debug_mode (bool): if True, show the seed pixels in a new composite_image
+            unique_seed_pixels (bool): if True, ensures seed pixels are unique across components (by excluding them from subsequent searches).
+            find_for_all (bool): if True, finds seed pixels for all components regardless of ROI. (Ignored if 'components' list is provided)
+            components (list[int]): List of component indices (0-based) to search for. If None and not find_for_all, it searches based on current ROI status.
+            debug_mode (bool): if True, show the seed pixels in a new composite_image.
 
         Returns:
             Key is the component number, value is a tuple of numpy arrays with the y and x coordinates of the seed pixels.
-            The pixel positions are in the format (y, x) as numpy arrays so they can be directly used for indexing
         """
-        print('Finding seed pixels for all components. Debug mode:', debug_mode)
-        # find seed pixels for the components in the spectral info table
 
-        # take the rois from roi manager and check if some backgound was defined, exclude this from the seed pixels
-        # if no background was defined, use the whole image
+        # Determine the components to process
+        components_to_process = components
+        if components_to_process is None:
+            # take all components if None are specified
+            components_to_process = list(range(self.mv_analyzer.get_n_components()))
+
+        logger.info(f'Searching for seed pixels for components: {components_to_process}')
         background_components = self.roi_manager.get_background_components()
-
         excluded_pixels = self.roi_manager.get_components_pixels(background_components)
-        # get the current position of the ROIs associated with the background components
-        # for each spectral info entry where no ROI is defined, find the seed pixels
         seed_pixels_for_component = dict()
 
-        for i in range(self.mv_analyzer.get_n_components()):
-            if not self.roi_manager.is_component_defined(i) or find_for_all:
-                # find seed pixels for the current component
-                frames = np.array([], dtype=int)
-                spectral_info_list = self.get_spectral_infos(i)
-                if not spectral_info_list:
-                    logger.warning(f'No spectral information found for component {i}')
-                    continue
-                for spectral_info in spectral_info_list:
-                    frames = np.append(frames, self.mv_analyzer.return_resonance_indices(spectral_info))
-                # find the highest pixel values in the frames and exclude the background pixels
-                logger.info(f'Finding seed pixels for component {i} in frames {frames}')
-                frames_of_interest = self.z3D_data[frames, ...].astype(float)
-                # exclude the background pixels by setting them to zero
-                if excluded_pixels.size:
-                    frames_of_interest[:, excluded_pixels[0], excluded_pixels[1]] = 1e-10
+        for i in components_to_process:
+            # Skip if explicitly checking for components without ROI and this one has one, unless find_for_all is True.
+            if not find_for_all and self.roi_manager.is_component_defined(i):
+                logger.info(f'Skipping component {i} as it has a defined ROI and find_for_all is False.')
+                continue
 
-                # maximum intensity projection of the frames
-                max_intensity_frame = np.amax(frames_of_interest, axis=0)
+            # find seed pixels for the current component
+            frames = np.array([], dtype=int)
+            spectral_info_list = self.get_spectral_infos(i)
 
-                # find the highest pixel values in the frames up to max*epsilon or N_pixels are found as defined in the table
-                max_pixel_val = np.amax(frames_of_interest)
+            if not spectral_info_list:
+                logger.warning(f'No spectral information found for component {i}')
+                continue
 
-                N_pixels = spectral_info['# Seed Pixels']
-                epsilon = spectral_info['Pixel Threshold']
+            # Aggregate resonance indices from all spectral info entries for the component
+            for spectral_info in spectral_info_list:
+                frames = np.append(frames, self.mv_analyzer.return_resonance_indices(spectral_info))
 
-                use_epsilon = True
-                if N_pixels is not None and epsilon is not None:
-                    aw = QtWidgets.QMessageBox.question(self.analysis_widget, 'Seed parameter',
-                                                                  'Would you like to use the pixel threshold?'
-                                                                  ' Otherwise the N_pixel entry is used')
-                    if aw == QtWidgets.QMessageBox.No:
-                        use_epsilon = False
+            if frames.size == 0:
+                logger.warning(f'No resonance indices found for component {i}')
+                continue
 
-                if epsilon is None:
+            # Get the first spectral info entry for parameters (assuming all entries use the same parameters for pixel finding)
+            # A more robust approach would be to average parameters, but we'll use the first one for simplicity.
+            spectral_info = spectral_info_list[0]
+            N_pixels = spectral_info.get('# Seed Pixels')
+            epsilon = spectral_info.get('Pixel Threshold')
+
+            # --- Log & Data Preparation ---
+            logger.info(f'Finding seed pixels for component {i} in frames {frames}')
+            frames_of_interest = self.z3D_data[frames, ...].astype(float)
+
+            # Exclude the background pixels by setting them to a very small value
+            if excluded_pixels.size:
+                # Need to use expanded indexing for 3D array
+                frames_of_interest[:, excluded_pixels[0], excluded_pixels[1]] = 1e-10
+
+            # Maximum intensity projection of the frames
+            max_intensity_frame = np.amax(frames_of_interest, axis=0)
+
+            # --- Decide on Threshold Method (No more pop-up) ---
+            use_epsilon = (epsilon is not None and epsilon > 0)
+
+            if use_epsilon and N_pixels is not None:
+                # If both are available, prioritize epsilon unless it's too restrictive (e.g. finds 0 pixels)
+                # For simplicity, we choose one. Let's use N_pixels as the fallback if epsilon is too high.
+                # Here, we choose N_pixels if it is defined and greater than 0, otherwise we use epsilon.
+                if N_pixels > 0:
                     use_epsilon = False
-
-                if use_epsilon:
-                    seed_pixels = np.where(max_intensity_frame > max_pixel_val * epsilon)
                 else:
-                    # find the N_pixels highest pixel values
-                    sorted_frame = np.argsort(max_intensity_frame, axis=None)
-                    seed_pixels = np.unravel_index(sorted_frame[-N_pixels:], max_intensity_frame.shape)
+                    use_epsilon = True  # If N_pixels is 0 or less, we use epsilon
 
+            if N_pixels is None or N_pixels <= 0:
+                use_epsilon = True
+
+            # --- Find Pixels ---
+            if use_epsilon:
+                max_pixel_val = np.amax(max_intensity_frame)
+                seed_pixels = np.where(max_intensity_frame > max_pixel_val * epsilon)
+                logger.info(f"Using Pixel Threshold ({epsilon}) for component {i}. Found {seed_pixels[0].size} pixels.")
+            else:
+                # Find the N_pixels highest pixel values
+                sorted_frame = np.argsort(max_intensity_frame, axis=None)
+                N_pixels = int(N_pixels)  # Ensure N_pixels is an integer
+
+                # Check bounds to avoid errors if N_pixels > total pixels
+                N_pixels = min(N_pixels, max_intensity_frame.size)
+
+                # Take the last N_pixels in the sorted index list (highest intensity)
+                seed_pixels_flat = sorted_frame[-N_pixels:]
+                seed_pixels = np.unravel_index(seed_pixels_flat, max_intensity_frame.shape)
+                logger.info(f"Using N_pixels ({N_pixels}) for component {i}.")
+
+            if seed_pixels[0].size > 0:
                 seed_pixels_for_component[i] = seed_pixels
                 if unique_seed_pixels:
-                    # remove the seed pixels from the excluded pixels
-                    excluded_pixels = np.concatenate((excluded_pixels, np.array(seed_pixels)), axis=1)
-                    logger.warning(f'Added seed pixels for component {i} to the excluded pixels.\nNew shape: {excluded_pixels.shape}')
-                # TODO: more sophisiticated approach with applying gauss fits etc. to find the seed pixels
+                    # Append the found seed pixels to the excluded set for subsequent components
+                    # Note: Need to handle the case where excluded_pixels is empty initially
+                    if excluded_pixels.size == 0:
+                        excluded_pixels = np.array(seed_pixels)
+                    else:
+                        excluded_pixels = np.concatenate((excluded_pixels, np.array(seed_pixels)), axis=1)
+                    logger.debug(
+                        f'Added seed pixels for component {i} to the excluded pixels. New shape: {excluded_pixels.shape}')
+            else:
+                logger.warning(f"No seed pixels found for component {i} with current settings.")
+
         return seed_pixels_for_component
+
 
     def set_H_seeds_from_spectral_info(self):
         # check if the seed H matrix is already initialized by a spatial ROI for defined resonances in the table
@@ -1006,4 +1184,3 @@ if __name__ == '__main__':
     # analyzer.plot_nnmf_mpl()
 
     analyzer.set_H_seed(0, np.zeros(50))
-

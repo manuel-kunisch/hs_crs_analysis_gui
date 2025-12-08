@@ -348,10 +348,11 @@ if __name__ == '__main__':
         main_app.set_data('./example_data/2016_05_13_Nematode_K11_60mW_816,7nm_60mW_1064nm_PMT804_HyperwaveVar.mat_COR_Channel1.tif')
     except FileNotFoundError as e:
         logger.error(f"Could not load example data: {e}")
-    # run in full screen
-    # main_app.showMaximized()
 
     # set default size of the main window
     main_app.resize(1600, 900)
+    # show window maximized
+    main_app.showMaximized()
+
     main_app.show()
     app.exec_()

@@ -319,6 +319,8 @@ class CompositeImageViewWidget(QMainWindow):
         """
             Update the label of a PlotDataItem in the spectrum view without replotting it.
             """
+        if not self.spectrum_lines:
+            return
         line = self.spectrum_lines[index]
 
         # Remove the old legend entry

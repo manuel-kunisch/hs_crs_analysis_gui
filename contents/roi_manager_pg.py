@@ -104,11 +104,23 @@ class ROIManager(QtCore.QObject):
     def update_wavenumbers(self, wavenumbers):
         self.wavenumbers = wavenumbers
         # update the loaded spectra to the new wavenumbers
-        for roi_id, spec in self.spectrum_loaders.items():
+        for roi_id, (spec, index) in self.spectrum_loaders.items():
             dummy_roi = self.rois[self.roi_id_idx[roi_id]]
+
+            # Update the target wavenumbers on the shared loader object
             spec.update_wavenumbers(wavenumbers)
-            spectrum = spec.prepare_spectrum()
-            dummy_roi.spectrum_data = spectrum
+
+            # Prepare spectrum for ALL components in this file (populates spec.target_spectra)
+            spec.prepare_spectrum()
+
+            # 2. Get the correct spectrum data for this specific ROI
+            # spectrum is the list of arrays (spec.target_spectra)
+            # We use the stored 'index' to get the correct component's array
+            spectrum_data = spec.target_spectra[index]
+
+            # 3. Update the DummyROI with its specific data
+            dummy_roi.update_spectrum(spectrum_data)
+
         self.replot_all_rois()
 
     def component_prompt(self) -> int:
@@ -475,7 +487,7 @@ class ROIManager(QtCore.QObject):
         self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
         # This line stores the loader object. Since the loader now contains ALL spectra,
         # this mapping is technically complex, but follows your original intent to store the loader object.
-        self.spectrum_loaders[roi_id] = spec_loader
+        self.spectrum_loaders[roi_id] = (spec_loader, index)
 
     def load_presets(self):
         fpath, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Load presets", "", "Preset Files (*.preset)")
@@ -1454,15 +1466,15 @@ class DummyROI(pg.ROI):
         # make roi invisible
         self.setPen(pg.mkPen(None))
         self.spectrum_name = spectrum_name
-        self.spectrum_data = spectrum_data  # Store the spectral data
+        self.spectrum_data = np.asarray(spectrum_data).copy()  # Store the spectral data
         self.label = spectrum_name
 
     def getArrayRegion(self, *args, **kwargs):
         spectrum_3d = self.spectrum_data[:, np.newaxis, np.newaxis]
         return spectrum_3d # Return the stored spectral data as 3d image data to immiate the behavior of the pg.ROI class
 
-    def update_spectrum(self, new_spectrum_data):
-        self.spectrum_data = new_spectrum_data
+    def update_spectrum(self, new_spectrum_data: list or np.ndarray):
+        self.spectrum_data = np.asarray(new_spectrum_data).copy()
 
 if __name__ == '__main__':
     print('Please run the main.py file to start the application')

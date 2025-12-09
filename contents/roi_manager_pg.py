@@ -479,34 +479,54 @@ class ROIManager(QtCore.QObject):
 
     def load_presets(self):
         fpath, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Load presets", "", "Preset Files (*.preset)")
+        if not fpath:
+            return
+
         colormap_colors, vmin_vmax, wavenumbers, seeds = ci.load_from_presets(fpath)
 
         fname = fpath.split('/')[-1].split('.')[0]
 
-        # check if rois exist
+        # Check if ROIs exist and ask user to delete them
         if len(self.rois) > 0:
-            # ask user to delete all previous ROIs
             reply = QtWidgets.QMessageBox.question(None, 'Delete all ROIs?',
                                                    'Do you want to delete all previous ROIs?',
                                                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                                                    QtWidgets.QMessageBox.No)
             if reply == QtWidgets.QMessageBox.Yes:
-                for roi in self.rois:
+                # We must iterate over a copy of the list because remove_roi modifies self.rois
+                for roi in self.rois.copy():
                     self.remove_roi(roi)
 
+        # 1. Initialize the SpectrumLoader ONCE
+        spectrum_loader = SpectrumLoader(self.wavenumbers)
+        spectrum_loader.wavenumbers = np.array(wavenumbers)
+
+        # 2. Populate the SpectrumLoader's internal lists (spectra and names)
         for idx, seed in enumerate(seeds):
-            # initialize the spectrum loader with the current wavenumbers as interpolation target
-            spectrum_loader = SpectrumLoader(self.wavenumbers)
-            # assign the loaded values to the spectrum loader
-            spectrum_loader.wavenumbers = np.array(wavenumbers)
-            # iterate over the seeds and load them into the spectrum loader and in/extropolate them to the target wavenumbers
-            spectrum_loader.spectrum = np.array(seed)
-            spectrum_loader.name = f"{fname} H{idx}"
-            spectrum_loader.interpolate_and_cut_spectrum()
-            # add the spectrum loader to the dictionary and other bookkeeping
-            self.prepare_roi_from_external_spectrum(spectrum_loader, idx + 1)
-            # load the colormap color from the preset
-            self.update_roi_color(idx, QColor(*colormap_colors[idx]))
+            # Add the seed array to the list of spectra
+            spectrum_loader.spectra.append(np.array(seed))
+
+            # Add a name to the list of names
+            name = f"{fname} H{idx}"
+            spectrum_loader.names.append(name)
+
+        # 3. Process all spectra (interpolation/cutting) simultaneously
+        # This populates spectrum_loader.target_spectra
+        spectrum_loader.prepare_spectrum()
+
+        # 4. Loop through the resulting target spectra and create ROIs
+        for idx in range(len(spectrum_loader.target_spectra)):
+            # Component number for the ROI table (starts at 1)
+            component_number = idx + 1
+
+            # FIX: Call the updated prepare_roi function with the required index
+            self.prepare_roi_from_external_spectrum(spectrum_loader, component_number, index=idx)
+
+            # Load the colormap color from the preset.
+            # Use idx (0-based) for the colormap_colors list, but component_number (1-based) for the lookup.
+            self.update_roi_color(component_number - 1, QColor(*colormap_colors[idx]))
+
+        self.preset_load_signal.emit(len(seeds), vmin_vmax, colormap_colors)
 
         self.preset_load_signal.emit(len(seeds), vmin_vmax, colormap_colors)
 

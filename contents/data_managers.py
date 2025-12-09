@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 
 import numpy as np
 from PyQt5 import QtWidgets, QtCore
@@ -157,14 +158,10 @@ class ImageLoader(QtWidgets.QWidget):
     def load_tiff(self, fpath):
         # check if a wavelength json file is in the directory
         self.try_load_wavelength_json(os.path.dirname(fpath))
-        self.image = imread(fpath).astype(np.uint16)
+        image = imread(fpath).astype(np.uint16)     # assume 16 bit image and read in as such
         self.drag_label.setText(f"✔ Loaded: {fpath.split('/')[-1]}")
         logger.info(f"Loaded image from {fpath}")
-        # check if the tiff contains zeros
-        if np.any(self.image == 0):
-            logger.warning('Image contains zeros')
-            self.image[self.image == 0] = 1
-            logger.warning('Zeros replaced with 1')
+        self.image = image  # load as image and trigger callback in other classes
         return self.image
 
     def try_load_wavelength_json(self, directory: str):

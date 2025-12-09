@@ -1040,6 +1040,9 @@ class AnalysisManager(QtCore.QObject):
         self.z3D_data = img
         self.wavenumbers = wavenumbers
         self.mv_analyzer.update_image_data(img, self.mv_analyzer.get_n_components(), self.wavenumbers)
+        logger.info(f"Analysis Manager: Image of shape {img.shape} and wavenumbers of length {len(wavenumbers)} updated in mv_analyzer.")
+        logger.info(f"Analysis Manager: Image dtype {img.dtype}")
+        logger.info(f"Analysis Manager: Image contains zeros: {np.any(img == 0)}")
 
     def update_modified_data(self, data: np.ndarray):
         self.mv_analyzer.update_resonance_image_data(data)

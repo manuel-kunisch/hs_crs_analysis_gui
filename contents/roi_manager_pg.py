@@ -587,7 +587,6 @@ class ROIManager(QtCore.QObject):
         if signal is None:
             signal = self.get_roi_average(roi)
         self.plot_roi_signal.emit(roi_id, signal, label)
-        logger.info(f"Plotting ROI {roi_id} with label {label}")
         self.roi_plotter.plot_roi_average(roi_id, signal, label)
 
     def update_roi_plot(self, roi):
@@ -790,6 +789,8 @@ class ROIManager(QtCore.QObject):
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component:
                 self.roi_table.cellWidget(idx, self.widget_columns['Background']).setChecked(state)
+        # replot is needed as the background selection requires unsubtracted data for the roi
+        self.replot_all_rois()
 
     def is_component_defined(self, component, return_index=False):
         for idx in range(self.roi_table.rowCount()):

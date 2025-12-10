@@ -311,19 +311,32 @@ class AnalysisManager(QtCore.QObject):
         logger.info(f"{'-' * 50}")
 
     def make_all_seeds_from_inputs(self, show_seeds=True):
+        """
+        1. Reload H seeds from ROIs
+        2. Process spectral info (initialize also H components from it that are not yet defined via seed pixels)
+        3. Fill remaining W seeds with possibly existing H seeds, if not just average the image data
+        3. All remaining H seeds are randomly initialized
+        Parameters
+        ----------
+        show_seeds: bool
+            If True, a seed window will be displayed showing the generated seeds.
+
+        Returns
+        -------
+
+        """
         self.reload_H_seeds_from_rois()     # reset all existing seeds and reload ROIs
         # make seeds from user inputs inside the roi manager (highest priority for H, and user inputs for W from the table)
         logger.info("Processing user inputs for W seeds and H from ROIs")
         seed_W, seed_H, seed_pixels = self.make_W_seeds_from_spectral_info(make_H_seeds=True,debug_mode=False) # create W seeds from spectral info and pass to analyzer
-        logger.info('Processing finished')
-        logger.info('.......................................')
 
+        logger.info('..... Trying to set W seeds from H components ........')
         # fill remaining W seeds
         # tries to either fill from given H seeds or from average image data (fallback)
-        self.mv_analyzer.set_up_W_seed(skip_spectral_info=True, fill_H_seed=False)  # fill the W seed matrix
+        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)  # fill the W seed matrix
 
-        logger.info(f'{"-"*50}')
-        logger.info("H seeds:")
+        logger.info(f'{"-"*10}')
+        logger.info("Set up remaining H seeds:")
         # W seeds are set
 
         # remainining components that are not given by rois and spectral info are randomly initialized
@@ -585,13 +598,10 @@ class AnalysisManager(QtCore.QObject):
 
     def update_spectral_info(self):
         logger.info('Spectral Info Updated')
-
         # Keep raw table info in the analyzer if you want it elsewhere
-        self.mv_analyzer.spectral_info = self.get_all_spectral_info()
-
+        self.mv_analyzer.update_spectral_info(self.get_all_spectral_info())
         gaussian_specs = self.get_gaussian_specs_grouped()
-        print(gaussian_specs)
-
+        logger.info(f'Gaussian specs: {gaussian_specs}')
         # delegate everything Gaussian-related to ROIManager
         self.roi_manager.update_gaussian_models_from_spectral_info(gaussian_specs)
 
@@ -748,15 +758,34 @@ class AnalysisManager(QtCore.QObject):
         return rows if rows else None
 
     def make_W_seeds_from_spectral_info(self, make_H_seeds=True, debug_mode=True) -> Tuple[np.ndarray, np.ndarray, dict[int, tuple[np.ndarray, np.ndarray]]]:
-        """ testing function if the spectal info is correctly interpreted """
+        """
+        Creates W seeds from the spectral information in the resonance table. Takes into account the ROI definitions in the ROI manager for H seeds.
+        The created seeds are passed to the MV analyzer.
+
+        Important! This function cannot be moved to the MV analyzer, as it depends on the GUI elements for spectral info and ROIs.
+
+        Parameters
+        ----------
+        make_H_seeds
+        debug_mode
+
+        Returns
+        -------
+
+        """
+        logger.info(f"Processing spectral info to create W {"and H" if make_H_seeds else ""} seeds")
         # get the spectral information from the table
         # convert the wavenumber to indices
         seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()))
         # iterate over all components and create the W seeds
         for i in range(self.mv_analyzer.get_n_components()):
+            # check if any spectral info exists for this component
             info_dict_list = self.get_spectral_infos(i)
-            if not info_dict_list: continue
+            if not info_dict_list:
+                logger.info(f'No spectral info found for component W[{i}], skipping W seed creation for now.')
+                continue
 
+            # collect all resonance indices for this component, slices where resonance is expected
             res_indices = np.array([], dtype=int)
             for info_dict in info_dict_list:
                 res_indices = np.append(res_indices, self.mv_analyzer.return_resonance_indices(info_dict))
@@ -774,7 +803,7 @@ class AnalysisManager(QtCore.QObject):
                 seed = np.average(data[..., res_indices], axis=1, weights=weights)
                 seed_W[..., i] = seed
 
-        self.mv_analyzer.seed_W = seed_W    # do not call the class method since it assumes the seed is set completely
+        self.mv_analyzer.set_W_seed_matrix(seed_W)
 
         n_components = self.mv_analyzer.get_n_components()
         # 2. Find Seed Pixels
@@ -786,40 +815,16 @@ class AnalysisManager(QtCore.QObject):
 
         if make_H_seeds:
             # Identify components that must use the pixel search fallback
-            components_needing_pixels = []
-
-            # Check the source priority (ROI -> Gaussian -> Pixel) for all components
-            for i in range(n_components):
-                row = self.get_row_number(i)
-                has_roi = self.roi_manager.is_component_defined(i)
-
-                # Check if we are forced to use Gaussian for this component
-                use_gaussian_checked = False
-                if row is not None:
-                    # Assumes "Use Gaussian" is checked
-                    use_gaussian_checked = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[
-                        'Use Gaussian']).isChecked()
-
-                # If no ROI and no Gaussian, this component needs the pixel search
-                if not has_roi and not use_gaussian_checked:
-                    components_needing_pixels.append(i)
-
-            logger.info(f"{components_needing_pixels=}")
-            # Perform pixel search only for the required components
-            if components_needing_pixels:
-                seed_pixel_dict = self.find_seed_pixels(components=components_needing_pixels, debug_mode=debug_mode)
+            seed_pixel_dict = self._check_and_find_seeds(n_components)
 
             # --- 3. Fill H Seeds based on determined source ---
             for i in range(n_components):
-                decision_str = 'No decision'
-                row = self.get_row_number(i)
-
                 # Priority 1: Existing ROI
                 if self.roi_manager.is_component_defined(i):
                     decision_str = 'Existing user ROI'
-                    seed_H[i, :] = self.roi_manager.get_component_seed(i)
-                    logger.info(f"Set seed H[{i}] from {decision_str}")
-                    self.mv_analyzer.set_H_seed(i, seed_H[i, :])
+                    # seed_H[i, :] = self.roi_manager.get_component_seed(i)
+                    logger.info(f"Seed H[{i}] is already set from {decision_str}")
+                    # self.mv_analyzer.set_H_seed(i, seed_H[i, :], flag_background=)
                     continue
                 else:
                     logger.info(f"No ROI defined for component H{i}; Trying to process spectral info.")
@@ -848,11 +853,12 @@ class AnalysisManager(QtCore.QObject):
                     self.mv_analyzer.set_H_seed(i, seed_H[i, :])
                     continue
                 """
-
                 # Priority 3: Seed Pixels (only for components where we searched and found them)
+                # Create H spectrum from seed pixels
                 if i in seed_pixel_dict:
                     pixels = seed_pixel_dict[i]
                     use_subtracted = False
+                    row = self.get_row_number(i)
                     if row is not None:
                         use_subtracted = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[
                             'Use subtracted data']).isChecked()
@@ -868,48 +874,54 @@ class AnalysisManager(QtCore.QObject):
                     seed_H[i, :] = np.mean(spectra, axis=1)
                     logger.info(f"Set seed H[{i}] from {decision_str}")
                     self.mv_analyzer.set_H_seed(i, seed_H[i, :])
+                else:
+                    logger.info(f"No valid seed source found for component H[{i}]; it will need to be randomly initialized later.")
 
         if debug_mode:
-            self.seed_window = QtWidgets.QMainWindow()
-            self.seed_window.setWindowTitle('Seeds from spectral info')
-            print('Showing W seeds')
-            seed_W_3d = seed_W.reshape(self.z3D_data.shape[1], self.z3D_data.shape[2], -1)
-            seed_W_view = ImageViewYX()
-            seed_W_view.setImage(seed_W_3d)
-
-            # seed pixels
-            for component, pixels in seed_pixel_dict.items():
-                # add +.5 to the pixel positions to center the marker in the pixel
-                vis_pixel_pos = np.array(pixels) + 0.5
-                # rearrange the pixel positions to the correct format of array([[y1, x1], [y2, x2], ...])
-                positions = np.array([[vis_pixel_pos[1][i], vis_pixel_pos[0][i]] for i in range(len(pixels[0]))])
-                scatter = pg.ScatterPlotItem(
-                    pos=positions,
-                    size=8,
-                    brush=pg.mkBrush(self.roi_manager.get_color(component)),
-                    symbol='+',  # Change this to 'o', 'x', 'star', etc.
-                    pen=pg.mkPen(self.roi_manager.get_color(component), width=1)  # White outline
-                )
-                seed_W_view.addItem(scatter)
-
-            seed_h_plot = pg.PlotWidget()
-            for i in range(seed_H.shape[0]):
-                seed_h_plot.plot(self.wavenumbers, seed_H[i, :], pen=pg.mkPen(self.roi_manager.get_color(i)),
-                                 name=f'Component {i}')
-            seed_h_plot.setLabel('left', 'Intensity')
-            seed_h_plot.setLabel('bottom', 'Wavenumber [1/cm]')
-            seed_h_plot.addLegend()
-
-            layout = QtWidgets.QHBoxLayout()
-            layout.addWidget(seed_W_view)
-            layout.addWidget(seed_h_plot)
-            widget = QtWidgets.QWidget()
-            widget.setLayout(layout)
-            self.seed_window.setCentralWidget(widget)
-            self.seed_window.show()
+            self.show_seed_window(seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
+                                                 self.mv_analyzer.raw_data_3d.shape[2], -1),
+                                  seed_H,
+                                  seed_pixel_dict)
 
         return seed_W, seed_H, seed_pixel_dict
         # idea: thresholding for W seeds
+
+    def _check_and_find_seeds(self, n_components: int, debug_mode: bool = debug) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+        """
+        Identify components that need seed pixel searching and perform the search.
+        Parameters
+        ----------
+        n_components
+        debug_mode
+
+        Returns
+        -------
+
+        """
+        components_needing_pixels = []
+        seed_pixel_dict = {}
+        # Check the source priority (ROI -> Gaussian -> Pixel) for all components
+        for i in range(n_components):
+            row = self.get_row_number(i)
+            has_roi = self.roi_manager.is_component_defined(i)
+
+            # Check if we are forced to use Gaussian for this component
+            use_gaussian_checked = False
+            if row is not None:
+                # Assumes "Use Gaussian" is checked
+                use_gaussian_checked = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[
+                    'Use Gaussian']).isChecked()
+
+            # If no ROI and no Gaussian, this component needs the pixel search
+            if not has_roi and not use_gaussian_checked:
+                components_needing_pixels.append(i)
+
+        logger.info(f"{components_needing_pixels=}")
+        # Perform pixel search only for the required components
+        if components_needing_pixels:
+            # find the seed pixels for these components
+            seed_pixel_dict = self.find_seed_pixels(components=components_needing_pixels, debug_mode=debug_mode)
+        return seed_pixel_dict
 
     def find_seed_pixels(self, find_for_all: bool = False, components: list[int] = None, unique_seed_pixels=True,
                          debug_mode: bool = debug) -> dict[int, tuple[np.ndarray, np.ndarray]]:

@@ -193,6 +193,9 @@ class MainApplication(QtWidgets.QMainWindow):
         self.data_handler.wavenumber_widget.set_nframes(img_array.shape[0])
         self.analysis_manager.update_image_data(img_array, self.data_handler.wavenumber_widget.wavenumbers)
         self.data_widget.update_img(img_array)
+        # make the roi manager highlight all rois again if spectral info exists
+        self.data_widget.roi_manager.roi_plotter.remove_all_highlights()
+        self.analysis_manager.highlight_all_resonances()
         logger.info("Data update finished")
         logger.info(f"{"-"*50}")
         # add in future here callbacks to all classes that have to be informed about the refresh!

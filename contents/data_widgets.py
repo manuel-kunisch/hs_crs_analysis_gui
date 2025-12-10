@@ -361,6 +361,7 @@ class DataWidget(QtWidgets.QWidget):
             self.show_average_image(True)
             return
         self.display_raw_image(keep_view=False)
+        logger.info("Updating ROI manager data")
         self.roi_manager.update_data(img)
 
     def display_raw_image(self, keep_view=True):

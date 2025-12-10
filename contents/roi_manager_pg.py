@@ -1,4 +1,5 @@
 import logging
+import sys
 
 import numpy as np
 import pyqtgraph as pg
@@ -95,10 +96,12 @@ class ROIManager(QtCore.QObject):
             for row in range(self.roi_table.rowCount()):
                 if self.roi_table.cellWidget(row, self.widget_columns['Subtract']).isChecked():
                     self.subtract_background(self.rois[row], refill=False)
-                    self.replot_all_rois()
-                    return True
-            self.replot_all_rois()
-            return False
+                    # break the for loop, only one roi can be used for background subtraction
+                    break
+
+        logger.info("Updating gaussian models")
+        # check for gaussian model rois and replot them
+        self.update_gaussian_models_from_spectral_info(self.gaussian_specs_by_component)
         self.replot_all_rois()
 
     def update_wavenumbers(self, wavenumbers):
@@ -121,7 +124,10 @@ class ROIManager(QtCore.QObject):
             # 3. Update the DummyROI with its specific data
             dummy_roi.update_spectrum(spectrum_data)
 
-        self.replot_all_rois()
+        try:
+            self.replot_all_rois()
+        except Exception as e:
+            logger.error(f"Error while replotting ROIs after wavenumber update: {e}. Data must still be updated")
 
     def component_prompt(self) -> int:
         roi_number = len(self.rois)
@@ -364,6 +370,7 @@ class ROIManager(QtCore.QObject):
             # get the roi
             roi.update_spectrum(spectrum)
             self.update_roi_plot(roi)
+            logger.info(f"Updated Gaussian dummy ROI for component {component} with new spectrum length {len(spectrum)}")
             return
 
         logger.info(f"Creating new Gaussian dummy ROI for component {component}")
@@ -887,7 +894,7 @@ class ROIManager(QtCore.QObject):
         tiled_background = spectral_background[:, np.newaxis, np.newaxis]
         # subtract the average background for each Raman shift from the image stack
         self.subtracted_data = self.raw_data - tiled_background
-        self.subtracted_data[self.subtracted_data <= 0] = 1e-6
+        self.subtracted_data[self.subtracted_data <= 0] = sys.float_info.epsilon
         """
         # debug: show the subtracted data in a pg imageview
         self.debug_image_view = pg.ImageView()
@@ -896,7 +903,11 @@ class ROIManager(QtCore.QObject):
         # compare with the initial data to see the difference
         """
         # request to replot all rois
-        self.replot_all_rois()
+        try:
+            self.replot_all_rois()
+        except Exception as e:
+            logger.error(f'Error replotting ROIs after background subtraction: {e}. Data not fully updated.')
+            logger.error(f"Raw data shape: {self.raw_data.shape}, Subtracted data shape: {self.subtracted_data.shape}")
         self.processed_data_signal.emit(self.subtracted_data)
 
     def get_background_components(self) -> list:
@@ -1398,6 +1409,9 @@ class ROIPlotter(pg.PlotWidget):
                 curve_masked, curve_zero = fill.curves  # Get the highlight curves
                 # Retrieve the x data from curve_masked
                 x_range = curve_masked.xData
+                if x_range is None:
+                    logger.warning('Curve {roi_id} has no x data for highlight update and seems not to be highlighted anymore.')
+                    continue
                 # Extract updated y-values based on x_range
                 x_mask = np.isin(self.roi_manager.wavenumbers, x_range)
                 y_fill = y[x_mask]

@@ -319,6 +319,7 @@ class AnalysisManager(QtCore.QObject):
         logger.info('.......................................')
 
         # fill remaining W seeds
+        # tries to either fill from given H seeds or from average image data (fallback)
         self.mv_analyzer.set_up_W_seed(skip_spectral_info=True, fill_H_seed=False)  # fill the W seed matrix
 
         logger.info(f'{"-"*50}')
@@ -331,10 +332,12 @@ class AnalysisManager(QtCore.QObject):
         if not show_seeds:
             return
 
+        # show seeds from the MV analyzer tj
         seed_W_3d = self.mv_analyzer.seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
                                                     self.mv_analyzer.raw_data_3d.shape[2], -1)
+        seed_H_final = self.mv_analyzer.seed_H
 
-        self.show_seed_window(seed_W_3d, seed_H, seed_pixels)
+        self.show_seed_window(seed_W_3d, seed_H_final, seed_pixels)
 
     def show_seed_window(self, seed_W_3d, seed_H, seed_pixels):
         if self.seed_window is None:

@@ -386,6 +386,19 @@ class MultivariateAnalyzer(object):
         return np.sort(resonance_indices)  # Return indices in ascending order of original wavenumbers
 
     def estimate_W_seed_matrix_from_H(self, spectral_info=None, overwrite=False):
+        """
+        Estimate the W seed matrix from the H seed matrix.
+        If overwrite is False, only components that are not yet set up (i.e. contain zeros) are estimated.
+
+        Parameters
+        ----------
+        spectral_info
+        overwrite
+
+        Returns
+        -------
+
+        """
         if self.seed_H is None:
             self.seed_H = np.zeros((self._n_components, self.raw_data_3d.shape[0]))
         """
@@ -463,6 +476,18 @@ class MultivariateAnalyzer(object):
         return max_val / cur_max
 
     def set_up_random_W_seed(self, overwrite=True):
+        """
+        Set up random W seed matrix for all components that are not yet set up.
+
+        Parameters
+        ----------
+        overwrite : bool
+            If True, all components are overwritten. If False, only components that are not yet set up are filled.
+
+        Returns
+        -------
+
+        """
         logger.info('Setting up random W seed')
         if self.seed_W is None:
             self.seed_W = np.zeros((self.data_2d.shape[0], self._n_components))

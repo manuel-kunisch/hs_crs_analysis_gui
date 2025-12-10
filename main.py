@@ -210,6 +210,7 @@ class MainApplication(QtWidgets.QMainWindow):
         self.scale_bar_raw.update_pixel_size(px_size_um)
         self.scale_bar_channels.update_pixel_size(px_size_um)
         self.scale_bar_composite.update_pixel_size(px_size_um)
+        # adjust the pixel size in the image saver such that physical units are saved correctly in Fiji
         self.result_viewer_widget.fiji_saver.pixel_size_um = px_size_um
 
     def update_scale_bars(self, len: float):
@@ -238,8 +239,6 @@ class MainApplication(QtWidgets.QMainWindow):
         self.scale_bar_raw.setVisible(show)
         self.scale_bar_channels.setVisible(show)
         self.scale_bar_composite.setVisible(show)
-
-
 
 
     def get_current_image(self):

@@ -83,6 +83,7 @@ class AnalysisManager(QtCore.QObject):
             lambda: self.analyze_button.setText('Analyze')
         )
 
+        self._seed_pixel_mode = "Max Intensity"  # or "Score"
 
         if init_widgets:
             self.init_ui()
@@ -184,7 +185,9 @@ class AnalysisManager(QtCore.QObject):
 
         # Create a table to show files
         self.resonance_table = QtWidgets.QTableWidget()
-        res_settings_options = ["Component", "Wavenumber", "Width", "Pixel Threshold", "# Seed Pixels", "Use subtracted data",
+        res_settings_options = ["Component", "Wavenumber", "Width",
+                                # "Pixel Threshold",
+                                "# Seed Pixels", "Use subtracted data",
                                 "Use Gaussian", "Amplitude", "Remove"]
         self.res_settings_widget_columns = {option: i for i, option in enumerate(res_settings_options)}
         self.resonance_table.setColumnCount(len(res_settings_options))  # Assuming one column for file paths
@@ -266,6 +269,21 @@ class AnalysisManager(QtCore.QObject):
         W_seed_group.addButton(avg_w_seed_radio)
         W_seed_group.addButton(empty_w_seed_radio)
 
+        # find seed pixel widget
+        seed_pixel_wid = QtWidgets.QWidget()
+        seed_pixel_layout = QtWidgets.QHBoxLayout()
+        seed_pixel_wid.setLayout(seed_pixel_layout)
+        seed_pixel_label = QtWidgets.QLabel("Seed Pixel Metric:")
+        seed_pixel_layout.addWidget(seed_pixel_label)
+        seed_pixel_mode_dropdown = QtWidgets.QComboBox()
+        seed_pixel_mode_dropdown.addItems(["Max Intensity", "Score"])
+        seed_pixel_layout.addWidget(seed_pixel_mode_dropdown)
+        seed_pixel_mode_dropdown.currentTextChanged.connect(
+            lambda text: setattr(self, '_seed_pixel_mode', text)
+        )
+        seed_pixel_mode_dropdown.setCurrentIndex(0)
+        table_and_button_layout.addWidget(seed_pixel_wid, 6, 0, 1, 2, alignment=QtCore.Qt.AlignLeft)
+
         h_weight_seed_check.setChecked(True)
         table_and_button_layout.addWidget(h_weight_seed_check, 5, 1, alignment=QtCore.Qt.AlignLeft)
         table_and_button_layout.addWidget(avg_w_seed_radio, 5, 2, alignment=QtCore.Qt.AlignLeft)
@@ -328,7 +346,8 @@ class AnalysisManager(QtCore.QObject):
         self.reload_H_seeds_from_rois()     # reset all existing seeds and reload ROIs
         # make seeds from user inputs inside the roi manager (highest priority for H, and user inputs for W from the table)
         logger.info("Processing user inputs for W seeds and H from ROIs")
-        seed_W, seed_H, seed_pixels = self.make_W_seeds_from_spectral_info(make_H_seeds=True,debug_mode=False) # create W seeds from spectral info and pass to analyzer
+        seed_W, seed_H, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True,
+                                                                            debug_mode=False)  # create W seeds from spectral info and pass to analyzer
 
         logger.info('..... Trying to set W seeds from H components ........')
         # fill remaining W seeds
@@ -428,32 +447,31 @@ class AnalysisManager(QtCore.QObject):
         self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Remove"], widget_remove)
 
         # Add text fields from column 2 to 4
-        for column in [1, 2, 3, 4, 7]: # Columns 1, 2, 3, 4 are SpinBoxes
+        for column in [1, 2, 3, 6]: # Columns 1, 2, 3, 4 are SpinBoxes
             item = QtWidgets.QDoubleSpinBox()
             item.setMaximum(1e7)
             self.resonance_table.setCellWidget(row_position, column, item)
 
-        # Add checkbox for the last column
-        item = QtWidgets.QCheckBox()
-        item.setChecked(True)
-        self.resonance_table.setCellWidget(row_position, 5, item)
 
         # adjust default values
-        widget_eps: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Pixel Threshold'])
-        widget_eps.setValue(0.7)
-        widget_eps.valueChanged.connect(lambda x: self.adjust_npixels)
+        # widget_eps: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Pixel Threshold'])
+        # widget_eps.setValue(0.7)
+        # widget_eps.valueChanged.connect(lambda x: self.adjust_npixels)
+
+        widget_subtract: QtWidgets.QCheckBox = QtWidgets.QCheckBox()
+        widget_subtract.setChecked(True)  # Default to True (use subtracted data)
+        self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Use subtracted data"], widget_subtract)
 
         widget_np: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['# Seed Pixels'])
-        widget_np.setValue(1000)
+        widget_np.setValue(150)
         widget_np.valueChanged.connect(lambda x: self.adjust_eps)
 
         widget_gaussian = QtWidgets.QCheckBox()
         widget_gaussian.setChecked(False)  # Default to False (use pixels)
-        self.resonance_table.setCellWidget(row_position, 6, widget_gaussian)
+        self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Use Gaussian"], widget_gaussian)
         widget_gaussian.clicked.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
 
         widget_amp = self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Amplitude'])
-        widget_amp.valueChanged.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
         widget_amp.setValue(65_535)
         widget_amp.setSingleStep(1000)
 
@@ -463,7 +481,8 @@ class AnalysisManager(QtCore.QObject):
             self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Wavenumber']).setValue((self.default_resonances[row_position%len(self.default_resonances)][0]))
             self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Width']).setValue((self.default_resonances[row_position%len(self.default_resonances)][1]))
 
-        for cell in range(1, 5):    # spinboxes 1-4
+        for cell in [self.res_settings_widget_columns["Wavenumber"], self.res_settings_widget_columns["Width"], self.res_settings_widget_columns["# Seed Pixels"],
+                     self.res_settings_widget_columns["Amplitude"]]:
             item = self.resonance_table.cellWidget(row_position, cell)
             item.valueChanged.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
         self.callback_res_settings(row_position)
@@ -490,7 +509,7 @@ class AnalysisManager(QtCore.QObject):
     def adjust_eps(self):
         print('adjusting eps')
         current_row = self.resonance_table.currentRow()
-        widget_eps: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(current_row, self.res_settings_widget_columns['Pixel Threshold'])
+        # widget_eps: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(current_row, self.res_settings_widget_columns['Pixel Threshold'])
         widget_np: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(current_row, self.res_settings_widget_columns['# Seed Pixels'])
         # get the number of pixels
         n_pixels = widget_np.value()
@@ -499,7 +518,7 @@ class AnalysisManager(QtCore.QObject):
         # get the max intensity of these frames and find the amount of pixels above the threshold
         max_i = np.max(self.mv_analyzer.raw_data_3d[frames, :, :], axis=None)
         eps = np.min(max_i)/max_i[n_pixels]
-        widget_eps.setValue(eps)
+        # widget_eps.setValue(eps)
 
     def callback_res_settings(self, current_row):
         logger.info(f'Resonance callback triggered')
@@ -615,7 +634,11 @@ class AnalysisManager(QtCore.QObject):
 
         def get_value(column_name: str, cast_type: type, default=None):
             """Helper function to extract and convert a cell value."""
-            widget: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[column_name])
+            widget_pos = self.res_settings_widget_columns.get(column_name, None)
+            if widget_pos is None:
+                return default
+            widget: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(row, widget_pos)
+
             if widget:
                 if cast_type is bool:
                     try:
@@ -757,7 +780,7 @@ class AnalysisManager(QtCore.QObject):
                 rows.append(row)
         return rows if rows else None
 
-    def make_W_seeds_from_spectral_info(self, make_H_seeds=True, debug_mode=True) -> Tuple[np.ndarray, np.ndarray, dict[int, tuple[np.ndarray, np.ndarray]]]:
+    def _make_W_seeds_from_spectral_info(self, make_H_seeds=True, debug_mode=True) -> Tuple[np.ndarray, np.ndarray, dict[int, tuple[np.ndarray, np.ndarray]]]:
         """
         Creates W seeds from the spectral information in the resonance table. Takes into account the ROI definitions in the ROI manager for H seeds.
         The created seeds are passed to the MV analyzer.
@@ -923,121 +946,186 @@ class AnalysisManager(QtCore.QObject):
             seed_pixel_dict = self.find_seed_pixels(components=components_needing_pixels, debug_mode=debug_mode)
         return seed_pixel_dict
 
-    def find_seed_pixels(self, find_for_all: bool = False, components: list[int] = None, unique_seed_pixels=True,
-                         debug_mode: bool = debug) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    def find_seed_pixels(
+            self,
+            find_for_all: bool = False,
+            components: list[int] = None,
+            unique_seed_pixels: bool = True,
+            debug_mode: bool = debug
+    ) -> dict[int, tuple[np.ndarray, np.ndarray]]:
         """
         Find seed pixels for the specified components.
 
         Args:
-            unique_seed_pixels (bool): if True, ensures seed pixels are unique across components (by excluding them from subsequent searches).
-            find_for_all (bool): if True, finds seed pixels for all components regardless of ROI. (Ignored if 'components' list is provided)
-            components (list[int]): List of component indices (0-based) to search for. If None and not find_for_all, it searches based on current ROI status.
+            unique_seed_pixels (bool): if True, ensures seed pixels are unique across
+                components (by excluding them from subsequent searches).
+            find_for_all (bool): if True, finds seed pixels for all components regardless
+                of ROI. (Ignored if 'components' list is provided)
+            components (list[int]): List of component indices (0-based) to search for.
+                If None and not find_for_all, it searches based on current ROI status.
             debug_mode (bool): if True, show the seed pixels in a new composite_image.
+            metric (str): "intensity" → use max intensity in resonance frames (old behavior);
+                          "score"     → use SNR-like score: resonance peak vs baseline.
 
         Returns:
-            Key is the component number, value is a tuple of numpy arrays with the y and x coordinates of the seed pixels.
+            dict[int, tuple[np.ndarray, np.ndarray]]:
+                Key is component index, value is (y_coords, x_coords) of seed pixels.
         """
-
+        metric = self._seed_pixel_mode
+        logger.info(f'Starting seed pixel search with {metric} metric.')
         # Determine the components to process
         components_to_process = components
         if components_to_process is None:
-            # take all components if None are specified
             components_to_process = list(range(self.mv_analyzer.get_n_components()))
 
         logger.info(f'Searching for seed pixels for components: {components_to_process}')
         background_components = self.roi_manager.get_background_components()
         excluded_pixels = self.roi_manager.get_components_pixels(background_components)
-        seed_pixels_for_component = dict()
+        seed_pixels_for_component: dict[int, tuple[np.ndarray, np.ndarray]] = {}
 
         for i in components_to_process:
-            # Skip if explicitly checking for components without ROI and this one has one, unless find_for_all is True.
+            # Skip if explicitly checking for components without ROI and this one has one,
+            # unless find_for_all is True.
             if not find_for_all and self.roi_manager.is_component_defined(i):
                 logger.info(f'Skipping component {i} as it has a defined ROI and find_for_all is False.')
                 continue
 
-            # find seed pixels for the current component
-            frames = np.array([], dtype=int)
+            # get all spectral info rows for this component
             spectral_info_list = self.get_spectral_infos(i)
-
             if not spectral_info_list:
                 logger.warning(f'No spectral information found for component {i}')
                 continue
 
-            # Aggregate resonance indices from all spectral info entries for the component
+            # --- Aggregate resonance frames AND parameters from *all* spectral infos ---
+            frames = np.array([], dtype=int)
+            epsilons = []
+            n_pixels_list = []
+
             for spectral_info in spectral_info_list:
+                # collect resonance indices
                 frames = np.append(frames, self.mv_analyzer.return_resonance_indices(spectral_info))
+
+                # collect thresholds / N_pixels if present
+                eps = spectral_info.get('Pixel Threshold')
+                if eps is not None and eps > 0:
+                    epsilons.append(float(eps))
+
+                npix = spectral_info.get('# Seed Pixels')
+                if npix is not None and npix > 0:
+                    n_pixels_list.append(int(npix))
+
+            # unique frames (in case multiple specs share frames)
+            frames = np.unique(frames)
 
             if frames.size == 0:
                 logger.warning(f'No resonance indices found for component {i}')
                 continue
 
-            # Get the first spectral info entry for parameters (assuming all entries use the same parameters for pixel finding)
-            # A more robust approach would be to average parameters, but we'll use the first one for simplicity.
-            spectral_info = spectral_info_list[0]
-            N_pixels = spectral_info.get('# Seed Pixels')
-            epsilon = spectral_info.get('Pixel Threshold')
+            # combine epsilon and N_pixels from all rows:
+            # - epsilon: use smallest (most permissive) epsilon
+            # - N_pixels: sum of requested pixels across all peaks
+            epsilon = min(epsilons) if epsilons else None
+            N_pixels = int(np.sum(n_pixels_list)) if n_pixels_list else None
 
-            # --- Log & Data Preparation ---
-            logger.info(f'Finding seed pixels for component {i} in frames {frames}')
-            frames_of_interest = self.z3D_data[frames, ...].astype(float)
-
-            # Exclude the background pixels by setting them to a very small value
-            if excluded_pixels.size:
-                # Need to use expanded indexing for 3D array
-                frames_of_interest[:, excluded_pixels[0], excluded_pixels[1]] = 1e-10
-
-            # Maximum intensity projection of the frames
-            max_intensity_frame = np.amax(frames_of_interest, axis=0)
-
-            # --- Decide on Threshold Method (No more pop-up) ---
+            # --- Decide on Threshold Method (no popup) ---
             use_epsilon = (epsilon is not None and epsilon > 0)
 
             if use_epsilon and N_pixels is not None:
-                # If both are available, prioritize epsilon unless it's too restrictive (e.g. finds 0 pixels)
-                # For simplicity, we choose one. Let's use N_pixels as the fallback if epsilon is too high.
-                # Here, we choose N_pixels if it is defined and greater than 0, otherwise we use epsilon.
+                # If both are available, we treat N_pixels as fallback if epsilon too strict.
+                # For now we choose the same logic as before: prefer N_pixels if >0.
                 if N_pixels > 0:
                     use_epsilon = False
                 else:
-                    use_epsilon = True  # If N_pixels is 0 or less, we use epsilon
+                    use_epsilon = True
 
             if N_pixels is None or N_pixels <= 0:
                 use_epsilon = True
 
+            # --- Log & Data Preparation ---
+            logger.info(f'Finding seed pixels for component {i} in frames {frames.tolist()}')
+            frames_of_interest = self.z3D_data[frames, ...].astype(float)
+
+            # Exclude the background pixels by setting them to a very low score later
+            # (we'll explicitly overwrite metric_frame for these).
+            # No need to touch frames_of_interest directly anymore.
+
+            # --- Build metric frame ---
+            if metric.lower() == "score":
+                # 1) "Signal": max intensity in resonance frames
+                signal_frame = np.amax(frames_of_interest, axis=0)
+
+                # 2) "Baseline": mean intensity outside resonance frames
+                n_frames_total = self.z3D_data.shape[0]
+                all_frames = np.arange(n_frames_total)
+                outside_frames = np.setdiff1d(all_frames, frames)
+
+                if outside_frames.size > 0:
+                    baseline_frame = np.mean(
+                        self.z3D_data[outside_frames, ...].astype(float), axis=0
+                    )
+                else:
+                    baseline_frame = np.zeros_like(signal_frame)
+
+                # 3) SNR-like score: high if bright at resonance and dim elsewhere
+                eps = 1e-6
+                metric_frame = (signal_frame - baseline_frame) / (baseline_frame + eps)
+                metric_frame[metric_frame < 0] = 0.0  # clip negatives
+                logger.info(f"Using 'score' metric for component {i}.")
+            else:
+                # Pure intensity (old behavior): maximum intensity in resonance frames
+                metric_frame = np.amax(frames_of_interest, axis=0)
+                logger.info(f"Using 'intensity' metric for component {i}.")
+
+            # Make absolutely sure excluded pixels are never picked
+            if excluded_pixels.size:
+                metric_frame[excluded_pixels[0], excluded_pixels[1]] = -np.inf
+
             # --- Find Pixels ---
             if use_epsilon:
-                max_pixel_val = np.amax(max_intensity_frame)
-                seed_pixels = np.where(max_intensity_frame > max_pixel_val * epsilon)
-                logger.info(f"Using Pixel Threshold ({epsilon}) for component {i}. Found {seed_pixels[0].size} pixels.")
+                max_pixel_val = np.nanmax(metric_frame)
+                if not np.isfinite(max_pixel_val):
+                    logger.warning(f"Metric frame for component {i} has no finite values.")
+                    continue
+
+                seed_pixels = np.where(metric_frame > max_pixel_val * (epsilon if epsilon is not None else 0.0))
+                logger.info(
+                    f"Using Pixel Threshold ({epsilon}) for component {i}. "
+                    f"Found {seed_pixels[0].size} pixels."
+                )
             else:
-                # Find the N_pixels highest pixel values
-                sorted_frame = np.argsort(max_intensity_frame, axis=None)
-                N_pixels = int(N_pixels)  # Ensure N_pixels is an integer
+                # Find the N_pixels highest metric values
+                flat = metric_frame.ravel()
+                # handle case where everything might be -inf
+                if not np.isfinite(flat).any():
+                    logger.warning(f"Metric frame for component {i} has no finite values.")
+                    continue
 
-                # Check bounds to avoid errors if N_pixels > total pixels
-                N_pixels = min(N_pixels, max_intensity_frame.size)
+                sorted_idx = np.argsort(flat)  # ascending
+                N_pixels = int(N_pixels)
+                N_pixels = min(N_pixels, flat.size)
 
-                # Take the last N_pixels in the sorted index list (highest intensity)
-                seed_pixels_flat = sorted_frame[-N_pixels:]
-                seed_pixels = np.unravel_index(seed_pixels_flat, max_intensity_frame.shape)
+                seed_pixels_flat = sorted_idx[-N_pixels:]
+                seed_pixels = np.unravel_index(seed_pixels_flat, metric_frame.shape)
                 logger.info(f"Using N_pixels ({N_pixels}) for component {i}.")
 
+            # --- Store / update exclusion ---
             if seed_pixels[0].size > 0:
                 seed_pixels_for_component[i] = seed_pixels
                 if unique_seed_pixels:
                     # Append the found seed pixels to the excluded set for subsequent components
-                    # Note: Need to handle the case where excluded_pixels is empty initially
+                    new_pixels = np.array(seed_pixels)
                     if excluded_pixels.size == 0:
-                        excluded_pixels = np.array(seed_pixels)
+                        excluded_pixels = new_pixels
                     else:
-                        excluded_pixels = np.concatenate((excluded_pixels, np.array(seed_pixels)), axis=1)
+                        excluded_pixels = np.concatenate((excluded_pixels, new_pixels), axis=1)
                     logger.debug(
-                        f'Added seed pixels for component {i} to the excluded pixels. New shape: {excluded_pixels.shape}')
+                        f'Added seed pixels for component {i} to the excluded pixels. '
+                        f'New shape: {excluded_pixels.shape}'
+                    )
             else:
                 logger.warning(f"No seed pixels found for component {i} with current settings.")
 
         return seed_pixels_for_component
-
 
     def set_H_seeds_from_spectral_info(self):
         # check if the seed H matrix is already initialized by a spatial ROI for defined resonances in the table

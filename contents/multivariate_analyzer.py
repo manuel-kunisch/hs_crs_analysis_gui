@@ -273,7 +273,7 @@ class MultivariateAnalyzer(object):
             logger.warning('W seeds not prepared. Trying to set up from H')
             self.estimate_W_seed_matrix_from_H(overwrite=False)
         if not self._W_prepared:
-            logger.warning('W seeds not prepared, using average intensity for remaining components')
+            logger.warning('W seeds still not prepared, using average intensity for remaining components')
             self.set_up_random_W_seed(overwrite=False)
         return self._W_prepared
         # W seed estimation should be done by now, time for H
@@ -298,9 +298,8 @@ class MultivariateAnalyzer(object):
             if self.seed_H_background_flag[cmp]:
                 logger.info(f'Component {cmp} is marked as background, using raw data for H seed estimation')
                 self.seed_H[cmp] = np.mean(self.data_2d, axis=1)
-
+                return True
             self.set_up_random_H_seed(cmp)
-
         return True
 
     def make_W_seeds_from_spectral_info(self, reset_old_seed=True, debug_mode=True):
@@ -512,7 +511,7 @@ class MultivariateAnalyzer(object):
         # 1) MAIN MODE: masked similarity from H
         # ------------------------------------------------------------------
         if self.H_weighted_W_seed:
-            logger.info('Using H weights for W seed estimation.')
+            logger.info('Using exponential H weights for W seed estimation.')
             # make exponential weights
             if np.any(H):
                 weights = H - np.min(H)

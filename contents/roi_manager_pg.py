@@ -857,6 +857,7 @@ class ROIManager(QtCore.QObject):
                     curves.append(xy_avg)
                     res_index = idx
             # average the curves and add them to the list of dictionaries where 'H' stores the mean curve, 'resonance' the resonance and 'label' the user defined label
+            logger.info(f"Averaging {len(curves)} curves for  H[{resonance}]]")
             mean_curves.append({'H': np.mean(curves, axis=0), 'resonance': resonance, 'label': self.roi_table.cellWidget(res_index, self.widget_columns['Name']).text()})
         return mean_curves
 

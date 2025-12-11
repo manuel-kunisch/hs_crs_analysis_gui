@@ -1052,7 +1052,7 @@ class AnalysisManager(QtCore.QObject):
             # --- Build metric frame ---
             if metric.lower() == "score":
                 # 1) "Signal": max intensity in resonance frames
-                signal_frame = np.amax(frames_of_interest, axis=0)
+                signal_frame = np.mean(frames_of_interest, axis=0)
 
                 # 2) "Baseline": mean intensity outside resonance frames
                 n_frames_total = self.z3D_data.shape[0]
@@ -1350,9 +1350,9 @@ class SeedWidget(QtWidgets.QWidget):
         scatter = pg.ScatterPlotItem(
             pos=positions,
             size=8,
-            brush=pg.mkBrush(self.get_color(component)),
+            brush=pg.mkBrush(self.get_color(component)[:3]),
             symbol='+',
-            pen=pg.mkPen(self.get_color(component), width=1)
+            pen=pg.mkPen(self.get_color(component)[:3], width=1)
         )
         self.seed_W_view.addItem(scatter)
         self.scatters.append(scatter)

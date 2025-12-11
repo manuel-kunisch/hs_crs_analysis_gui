@@ -508,7 +508,7 @@ class MultivariateAnalyzer(object):
         n_pixels, n_bands = image_data.shape
 
         # ------------------------------------------------------------------
-        # 1) MAIN MODE: masked similarity from H
+        # 1) MAIN MODE: exponential weights
         # ------------------------------------------------------------------
         if self.H_weighted_W_seed:
             logger.info('Using exponential H weights for W seed estimation.')
@@ -521,7 +521,7 @@ class MultivariateAnalyzer(object):
                 return np.average(image_data, axis=1, weights=weights)
 
         # ------------------------------------------------------------------
-        # 2) OTHER MODES (unchanged semantics, but enforce > 0)
+        # 2) OTHER MODES
         # ------------------------------------------------------------------
         if self.avg_W_seed:
             logger.info('avg_W_seed=True: filling W with averaged image (clamped to eps).')

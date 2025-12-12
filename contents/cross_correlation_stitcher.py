@@ -49,7 +49,8 @@ class CrossCorrelationStitcher:
     display_channel: int = 0          # which channel to show if plot=True
     vmax: float = 2500.0              # only used when plot=True
     plot: bool = False
-    scan_x_direction: str = "left"  # or "right to left"
+    scan_x_direction: str = "left"  # or "right"
+    scan_y_direction: str = "down"  # or "up"
     binning: int = 2  # binning factor for raw data before stitching
 
     # --- filename parsing (x/y indices from filenames) ---
@@ -213,6 +214,7 @@ class CrossCorrelationStitcher:
             if self.channel_list is not None
             else None,
             scan_x_direction=self.scan_x_direction,
+            scan_y_direction=self.scan_y_direction,
             mode=self.mode,
             ch=self.display_channel,
             vmax_var=self.vmax,
@@ -303,9 +305,10 @@ if __name__ == "__main__":
 
     stitcher.plot = False
     stitcher.scan_x_direction = "right"  # or "right to left"
+    stitcher.scan_y_direction = "down"
     stitcher.channel_list = [40]  # only use channel 20 for stitching cross-correlation
 
-    folder = '/Users/mkunisch/Desktop/Herzgewebe Tiffs/2025_11_04 thg_autofluorescence/mosaic split/thg'
+    folder = '/Users/mkunisch/Desktop/Herzgewebe Tiffs/2025_11_04 thg_autofluorescence/mosaic split/thg binned small fov'
     stitched = stitcher.stitch_folder(folder, pattern="*.tif")
     plt.imshow(stitched[10], cmap="viridis")
     plt.show()

@@ -114,10 +114,9 @@ def max_correlation(im1, im2, channels = None, _plot=False):
     return offset 
 
 def row_correlation(data, lookup_x, lookup_y, overlap_row, mode,
-                    sigma_interval = 1, channel_list = None):
+                    sigma_interval = 1, channel_list = None,
+                    row_scan_direction = 'down'):
     """
-    
-
     Parameters
     ----------
     data : dict
@@ -135,18 +134,34 @@ def row_correlation(data, lookup_x, lookup_y, overlap_row, mode,
         if both are selected, first outliers are removed, then the mean is calculated.
     sigma_interval : int, optional
         confidence interval used to accept offset values.
+    channel_list : list, optional
+        If channels is passed to the function, only the channels specified will
+        be convoluted. The default is None --> all channels are convoluted.
+    row_scan_direction : str, optional
+        'down' or 'up', indicates the scan direction of the rows. The default is 'down'.
     Returns
     -------
     Array with correlations.
 
     """
     corr_list = []
-    print(len(lookup_x), len(lookup_y))
+    print(f'Expecting a {len(lookup_x)- 1} x {len(lookup_y)- 1} tile image')
     for i, xpos in enumerate(lookup_x):
         for j, ypos in enumerate(lookup_y[:-1]):
-            # iterate row-wise
-            overlap_top = data[xpos][ypos]['img'][-overlap_row:,:,:]
-            overlap_bot = data[xpos][lookup_y[j+1]]['img'][:overlap_row,:,:]
+            y0 = ypos
+            y1 = lookup_y[j + 1]
+
+            if row_scan_direction.lower() == "down":
+                # y increases physically downward: y0 is above y1
+                overlap_top = data[xpos][y0]["img"][-overlap_row:, :, :]
+                overlap_bot = data[xpos][y1]["img"][:overlap_row, :, :]
+            elif row_scan_direction.lower() == "up":
+                # y increases physically upward: y0 is below y1
+                # top image (physically) is y1, bottom image is y0
+                overlap_top = data[xpos][y1]["img"][-overlap_row:, :, :]  # bottom of upper
+                overlap_bot = data[xpos][y0]["img"][:overlap_row, :, :]  # top of lower
+            else:
+                raise ValueError("row_scan_direction must be 'down' or 'up'")
             offset = max_correlation(overlap_top, overlap_bot, channels=channel_list, _plot=False)
             # stack overlap top and bottom vertically
             corr_list.append(offset)
@@ -161,7 +176,6 @@ def row_correlation(data, lookup_x, lookup_y, overlap_row, mode,
         a = np.array(corr_list)
         corr_list = np.mean(a, axis=0)
         corr_list = np.array([corr_list] * len(a))
-    print(corr_list)
     return corr_list
         
 def adjust_y(im_top, im_bot, offset, overlap):
@@ -769,6 +783,7 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
                 overlap_col: int, sigma_interval: float = 1,
                 channel_list:list = None, mode: str = 'normal',
                 scan_x_direction: str = 'left',
+                scan_y_direction: str = 'down',
                 ch: int=0, vmax_var: float = 10000, _plot=False) -> np.ndarray:
     """
     Stitch and correct the data.
@@ -824,11 +839,14 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
             showerror('Indices out of range', 'Please consider removing these indices %s'%outliers
                       +' for your channel correlation data.')
             return
+
     start = time.process_time()
+    print(f'Assuming images are scanned from {"top to bottom" if scan_y_direction=="down" else "bottom to top"} in y-direction'
+          f'when the y index increases.')
     offsets = row_correlation(data, lookup_x, lookup_y, overlap_row, mode,
-                              sigma_interval, channel_list = channel_list)
+                              sigma_interval, channel_list = channel_list,
+                              row_scan_direction=scan_y_direction)
     x_stitch_list = []
-    start = time.process_time()
     for j, xpos in enumerate(lookup_x):
         # colum stitching for each y
         stitch = data[xpos][lookup_y[0]]['img']
@@ -837,20 +855,31 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
         dummy_list = [np.array(dummy_added)]
         loop = j*len(lookup_y[:-1])
         for ii, ypos in enumerate(lookup_y[:-1]):
-            print('-'*50 + 'row%i'%ii + '-'*50)
-            overlap_top = data[xpos][ypos]['img'][-overlap_row:,:,:]    # overlap without dummy data, using raw data
+            print(f'Stitching position x:{xpos} y:{ypos} with x:{xpos} y:{lookup_y[ii+1]}')
             bot = data[xpos][lookup_y[ii+1]]['img']
-            overlap_bot = bot[:overlap_row,:,:]
             # if offsets is None:
             #     offset = max_correlation(overlap_top, overlap_bot, channels=channel_list)  # correlation of raw signals, w/o dummy data
             # else:
             offset = offsets[ii+loop]
             if _plot:
+                if scan_y_direction.lower() == "down":
+                    overlap_top = data[xpos][ypos]["img"][-overlap_row:, :, :]
+                    overlap_bot = bot[:overlap_row, :, :]
+                else:  # up
+                    overlap_top = bot[-overlap_row:, :, :]
+                    overlap_bot = stitch[:overlap_row, :, :]
                 before_corr = np.concatenate((overlap_top, overlap_bot), axis=0)
                 plt.imshow(before_corr[:,:,ch], vmax=vmax_var)
                 plt.title('data before correlation')
-                plt.show()    
-            stitch, row_overhang, connections = correct_y_offset(stitch,
+                plt.show()
+            if scan_y_direction.lower() == 'up':
+                # swap the roles of top and bottom image
+                top = bot
+                bot = stitch
+            else:
+                top = stitch
+
+            stitch, row_overhang, connections = correct_y_offset(top,
                                                                  bot,
                                                                  offset,
                                                                  overlap_row,
@@ -866,6 +895,7 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
             # dummy_added is the total dummy signal added to the latest stitching image
             # [0]: dummy added to the bottom left image 
             # important info for the averaging procedure, sets its limits
+            print(f'Corrected offset between rows: {offset}')
         # also free last tile of this column
         last_y = lookup_y[-1]
         data[xpos][last_y]['img'] = None

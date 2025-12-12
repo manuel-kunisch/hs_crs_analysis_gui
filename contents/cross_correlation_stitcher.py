@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Sequence, Callable, Optional, Dict, Tuple, Union
 import re
 
+import matplotlib.pyplot as plt
 import numpy as np
 import tifffile as tiff
 
@@ -39,6 +40,7 @@ class CrossCorrelationStitcher:
     display_channel: int = 0          # which channel to show if plot=True
     vmax: float = 2500.0              # only used when plot=True
     plot: bool = False
+    scan_x_direction: str = "left"  # or "right to left"
 
     # --- filename parsing (x/y indices from filenames) ---
     # default matches e.g. "tile_x3_y7.tif", "stack-X-1_Y-2.tif", ...
@@ -52,6 +54,9 @@ class CrossCorrelationStitcher:
     )
 
     _compiled_regex: re.Pattern = field(init=False, repr=False)
+
+    def __init__(self):
+        self._added_channel_dim = None
 
     def __post_init__(self) -> None:
         self._compiled_regex = re.compile(self.filename_regex,
@@ -84,19 +89,16 @@ class CrossCorrelationStitcher:
         self._compiled_regex = re.compile(self.filename_regex,
                                           self.filename_regex_flags)
 
-    def parse_xy_from_name(self, path: Union[str, Path]) -> Tuple[int, int]:
+    def parse_xy_from_name(self, path: Union[str, Path]) -> Tuple[int, int] or Tuple[None, None]:
         """
         Extract (x, y) from a filename using the configured regex.
 
-        Raises ValueError if the pattern does not match.
+        Returns none if no match is found.
         """
         name = Path(path).name
         m = self._compiled_regex.search(name)
         if not m:
-            raise ValueError(
-                f"Could not extract (x, y) from filename '{name}' "
-                f"using pattern '{self.filename_regex}'"
-            )
+            return None, None
         return int(m.group("x")), int(m.group("y"))
 
     # ------------------------------------------------------------------
@@ -131,8 +133,23 @@ class CrossCorrelationStitcher:
 
         for f in files:
             x, y = self.parse_xy_from_name(f)
+            if x is None or y is None:
+                print(f"Warning: could not parse x/y from filename '{f}', skipping.")
+                continue
             img = loader(str(f))
+            # reshape to format (y, x, c) if needed
+            if img.ndim == 2:
+                img = img[:, :, np.newaxis]
+                self._added_channel_dim = True
+            elif img.ndim == 3:
+                img = np.moveaxis(img, 0, 2)  # assume (c, y, x) → (y, x, c)
+                self._added_channel_dim = False
+            else:
+                raise ValueError(
+                    f"Loaded image from '{f}' has invalid number of dimensions: {img.ndim}"
+                )
 
+            # DEBUG
             xs.add(x)
             ys.add(y)
             data.setdefault(x, {})[y] = {"img": img}
@@ -151,8 +168,9 @@ class CrossCorrelationStitcher:
         lookup_y: Sequence[int],
     ) -> np.ndarray:
         """
-        Run the real `stitch_corr` with the current configuration.
+        Run the `stitch_corr` with the current configuration.
         """
+        print('Using scan x direction:', self.scan_x_direction)
         return stitch_corr(
             data=data,
             lookup_x=list(lookup_x),
@@ -163,6 +181,7 @@ class CrossCorrelationStitcher:
             channel_list=list(self.channel_list)
             if self.channel_list is not None
             else None,
+            scan_x_direction=self.scan_x_direction,
             mode=self.mode,
             ch=self.display_channel,
             vmax_var=self.vmax,
@@ -204,4 +223,48 @@ class CrossCorrelationStitcher:
             raise FileNotFoundError(
                 f"No files matching pattern '{pattern}' in '{folder}'"
             )
-        return self.stitch_from_files(file_list, loader)
+        stitch_result = self.stitch_from_files(file_list, loader)
+        if self._added_channel_dim:
+            # delete the final channel dimension we added
+            return stitch_result[:, :, 0]
+
+        stitch_result = np.moveaxis(stitch_result, 2, 0)  # (y, x, c) -> (c, y, x)
+        return stitch_result
+
+
+if __name__ == "__main__":
+    # Simple test / demo
+    stitcher = CrossCorrelationStitcher()
+    stitcher.overlap_row = 200
+    stitcher.overlap_col = 200
+    stitcher.sigma_interval = 1.0
+    stitcher.mode = "sigma mean"    # sigma mean means outlier correction for calculation of shifts and averaging over all channels
+    stitcher.display_channel = 0
+
+    stitcher.set_filename_regex(
+        r".*xyz-Table\[(?P<y>\d+)\]\s*-\s*xyz-Table\[(?P<x>\d+)\].*",
+        flags=re.IGNORECASE,
+    )
+    """
+    General recipe for custom regex for arbitrary x/y name encodings.
+    Example for filenames like:
+        [[ _C5.ome) xyz-Table[3] - xyz-Table[7].tif
+    
+    How it works:
+        .* → ignore everything before
+        
+        xyz-Table\[(?P<x>\d+)\] → first number in brackets → named group x
+        \s*-\s* → the - between the two table entries
+        
+        xyz-Table\[(?P<y>\d+)\] → second number in brackets → named group y
+        .* → ignore the rest (]] _C5.ome)
+    """
+
+    stitcher.plot = False
+    stitcher.scan_x_direction = "right"  # or "right to left"
+    stitcher.channel_list = [20]  # only use channel 20 for stitching cross-correlation
+
+    folder = '/Users/mkunisch/Desktop/Herzgewebe Tiffs/2025_11_04 thg_autofluorescence/mosaic split/thg binned small fov'
+    stitched = stitcher.stitch_folder(folder, pattern="*.tif")
+    plt.imshow(stitched[20], cmap="gray", vmax=stitcher.vmax)
+    plt.show()

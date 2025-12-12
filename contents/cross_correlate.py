@@ -43,6 +43,7 @@ def cross_image(img1, img2, channels=None):
     # get rid of the channels by performing a grayscale transform
     # the type cast into 'float' is to avoid overflows
     if channels is None:
+        # TODO: fix: use max intensity projection or more sophisticated. Not suited for HS data!
         # print('Correlating all channels')
         im1_sum = np.sum(im1.astype('float'), axis=2)
         im2_sum = np.sum(im2.astype('float'), axis=2)
@@ -134,11 +135,18 @@ def row_correlation(data, lookup_x, lookup_y, overlap_row, mode,
 
     """
     corr_list = []
+    print(len(lookup_x), len(lookup_y))
     for i, xpos in enumerate(lookup_x):
         for j, ypos in enumerate(lookup_y[:-1]):
+            # iterate row-wise
             overlap_top = data[xpos][ypos]['img'][-overlap_row:,:,:]
             overlap_bot = data[xpos][lookup_y[j+1]]['img'][:overlap_row,:,:]
             offset = max_correlation(overlap_top, overlap_bot, channels=channel_list, _plot=False)
+            # stack overlap top and bottom vertically
+            stacked = np.vstack((overlap_top, overlap_bot))
+            plt.imshow(stacked[:,:,0])
+            plt.title('Overlap region of images at x=%i, y=%i and y=%i'%(xpos, ypos, lookup_y[j+1]))
+            plt.show()
             corr_list.append(offset)
     modes = set(mode.lower().split())   # to allow multiple modes, converts "SIGMA mEan" to {'sigma', 'mean'}
     print(modes)
@@ -372,17 +380,7 @@ def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
     
     
     print('xmin: ', x_min, 'xstart: ', xstart)
-    # reduced avergaing area (only where signal is present)
-    if _plot:
-        test = np.concatenate((overlap_top, overlap_bot), axis=0)
-        plt.imshow(test[:,:,ch], vmax=vmax_var)
-        plt.title('original averaging area %s'%offset)
-        plt.show()
-        test = np.concatenate((overlap_top[:,x_l:x_max_data,:], overlap_bot[:,x_l:x_max_data,:]), axis=0)
-        plt.imshow(test[:,:,ch], vmax=vmax_var)
-        plt.title('reduced averaging area %s'%offset)
-        plt.show()
-    
+
     weight_list_x = lin_weights(overlap_top.shape[0])
     stitch_center = np.full((overlap_top.shape[0], top.shape[1], overlap_top.shape[2]), np.NaN)
     # avg is limited by offsets 
@@ -397,22 +395,22 @@ def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
     # This is not trivial, if we just extend it by the overhanging signal, the image appears too bright
     if _plot:
         fig, ax = plt.subplots(2, 1)
-        ax[0].imshow(stitch_center[:,:,ch], vmax=vmax_var)
+        ax[0].imshow(stitch_center[:,:, 0])
         ax[0].set_title('stitch center uncompleted %s')
-     
+
    
     stitch_center[:, dummy[0]:x_l, :] = stitch_left
     # if stitch_right.shape[1] != 0:
     stitch_center[:, x_max_data:x_max_data+int_offset_col, :] = stitch_right
     if _plot: 
-        ax[1].imshow(stitch_center[:,:,ch], vmax=vmax_var)
+        ax[1].imshow(stitch_center[:,:,0])
         ax[1].set_title('stitch center expanded')
         plt.show()
     
     #%% 
     stitch = np.row_stack((top, stitch_center, bot))
     if _plot:
-        plt.imshow(stitch[:,:,ch], vmax=vmax_var)
+        plt.imshow(stitch[:,:,0])
         plt.show()
     
     return stitch, new_overhang, connections
@@ -472,7 +470,7 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
         the right image data including 'img', 'dummy', 'connection' keys
     overlap : int
         Pixel overlap of adjacent images. Must not be exactly known. The region used for averaging.
-    sigma_interval : int
+    sigma_interval : float
         confidence interval used to accept offset values.
     channel_list : list, optional
         If channels is passed to the function, only the channels specified will
@@ -793,7 +791,8 @@ def translate_offset_to_text(offset):
 def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
                 overlap_col: int, sigma_interval: float = 1,
                 channel_list:list = None, mode: str = 'normal',
-                ch: int=0, vmax_var: float = 2500, _plot=False) -> np.ndarray:
+                scan_x_direction: str = 'left',
+                ch: int=0, vmax_var: float = 10000, _plot=False) -> np.ndarray:
     """
     Stitch and correct the data.
 
@@ -813,6 +812,10 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
         The sigma interval for row correlation. The default is 1.
     channel_list : list, optional
         List of channels to use for stitching. If not provided, all channels will be used. The default is None.
+    scan_x_direction : str, optional
+        The scan direction in x ('left' or 'right'). The default is 'left'.
+        Left means the scan starts at the rightmost position (x index 0) and moves to the left (increasing x indices).
+        Right is the opposite convention.
     mode : str, optional
         The mode for row correlation. The default is 'normal'.
     ch : int, optional
@@ -829,6 +832,7 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
     """
     # Checking the Channel list entries for possible overflows
     if channel_list is not None:
+        print('no channel list is provided, using all channels for stitching')
         xpos, ypos = lookup_x[0], lookup_y[0]
         channels = data[xpos][ypos]['img'].shape[-1]
         outliers = [x for x in channel_list if x >= channels]
@@ -887,31 +891,40 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
                               'col': j})
         if _plot:
             plt.imshow(stitch[:,:,ch], vmax=vmax_var)
-            plt.savefig(spath+ '/column%i_stitch_extensions.png'%j, dpi=400)
-    print('TIME FOR ROW STITCHING: ', time.process_time()-start)
+            plt.show()
+            # plt.savefig(spath+ '/column%i_stitch_extensions.png'%j, dpi=400)
+    print('TIME FOR attaching rows: ', time.process_time()-start)
     #%% rows done
-    im_r = x_stitch_list[0]['img']
+
+    im_r = x_stitch_list[0]['img']  # start with the outermost left image or right image depending on scan direction
     for i, entry in enumerate(x_stitch_list[1:]):
-        im_l, im_r = adjust_rows(entry['img'], im_r)    # opposite way for oppsoite scan direction
+        if scan_x_direction == 'right':
+            im_l = im_r
+            im_r = entry['img']
+        else:
+            im_l = entry['img']
+            im_r = im_r
+        im_l, im_r = adjust_rows(im_l, im_r)    # opposite way for oppsoite scan direction
         im_r = np.concatenate((im_l, im_r), axis=1)
 
     
     print('-'*100, im_r.shape, '-'*100, )
     if _plot:
         plt.imshow(im_r[:,:,ch], vmax=vmax_var)
-        plt.savefig(spath+'/rows_stitched_with_extensions.png', dpi=400)
+        # plt.savefig(spath+'/rows_stitched_with_extensions.png', dpi=400)
         plt.show()
     
     for i, list_entry in enumerate(x_stitch_list[1:]):
-        col_stitch = attach_cols(list_entry, x_stitch_list[i], overlap_col,
+        if scan_x_direction == 'right':
+            # left image is the previous one
+            l_dict = x_stitch_list[i]
+            r_dict = list_entry
+        else:
+            l_dict = list_entry
+            r_dict = x_stitch_list[i]
+        col_stitch = attach_cols(l_dict, r_dict, overlap_col,
                                  sigma_interval, channel_list = channel_list)
-        list_entry['img'] = col_stitch # attach results 
-    
-    if _plot:
-        # STITCH IMAGE
-        plt.imshow(col_stitch[:,:,ch], vmax=vmax_var)
-        plt.savefig(spath+'/dummy_removed01.png', dpi=400)
-    
+        list_entry['img'] = col_stitch # attach results
     return col_stitch
     
 

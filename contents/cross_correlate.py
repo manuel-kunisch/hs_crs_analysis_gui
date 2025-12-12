@@ -309,9 +309,10 @@ def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
     x_l = dummy[0]
     top_overlap = top.shape[0]+overlap_top.shape[0]
     if int_offset_col != 0:
-        dummy_bot = np.full((bot.shape[0], abs(int_offset_col), bot.shape[2]), np.NaN)
-        dummy_top = np.full((top.shape[0], abs(int_offset_col), top.shape[2]), np.NaN)
-        dummy_overlap = np.full((overlap_top.shape[0], abs(int_offset_col), overlap_top.shape[2]), np.NaN)
+        dtype = top.dtype
+        dummy_bot = np.full((bot.shape[0], abs(int_offset_col), bot.shape[2]), np.nan, dtype=dtype)
+        dummy_top = np.full((top.shape[0], abs(int_offset_col), top.shape[2]), np.nan, dtype=dtype)
+        dummy_overlap = np.full((overlap_top.shape[0], abs(int_offset_col), overlap_top.shape[2]), np.nan, dtype=dtype)
         if int_offset_col > 0:            
             # add dummy signal to top left and bottom right
             logger.debug('Bottom image is shifted towards the right by %i pixels'
@@ -371,7 +372,11 @@ def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
         new_overhang = [0, 0]
     # do not delete cols, vital for the column stitching step
     weight_list_x = lin_weights(overlap_top.shape[0])
-    stitch_center = np.full((overlap_top.shape[0], top.shape[1], overlap_top.shape[2]), np.NaN)
+    stitch_center = np.full(
+        (overlap_top.shape[0], top.shape[1], overlap_top.shape[2]),
+        np.nan,
+        dtype=overlap_top.dtype,
+    )
     # avg is limited by offsets 
     
     for i in range(0, overlap_top.shape[0]):   # start at the top, place the bottom image on top of it
@@ -409,20 +414,20 @@ def extend(image, length, axis=1):
     Extends the input image by adding dummy signal to the right.
     """
     diff = length - image.shape[axis]
-    shape_ = np.array(image.shape)
-    if diff > 0:
-        shape_[axis] = diff
-        extension = np.full(shape_, np.NaN)
-        full_extension = np.concatenate((image, extension), axis=axis)
-    else:
-        full_extension = image
-    return full_extension
+    if diff <= 0:
+        return image
+    shape_ = list(image.shape)
+    shape_[axis] = diff
+    dtype = image.dtype
+    extension = np.full(shape_, np.nan, dtype=dtype)
+    return np.concatenate((image, extension), axis=axis, dtype=dtype)
 
 def add_cols(image, dummy):
     shape_ = np.array(image.shape)
-    extension_l =  np.full((shape_[0], dummy[0], shape_[-1]), np.NaN)
-    extension_r = np.full((shape_[0], dummy[1], shape_[-1]), np.NaN)
-    image = np.concatenate((extension_l, image, extension_r), axis=1)
+    dtype = image.dtype
+    extension_l =  np.full((shape_[0], dummy[0], shape_[-1]), np.NaN, dtype=dtype)
+    extension_r = np.full((shape_[0], dummy[1], shape_[-1]), np.NaN, dtype=dtype)
+    image = np.concatenate((extension_l, image, extension_r), axis=1, dtype=dtype)
     return image
 
 def adjust_rows(im_l, im_r):
@@ -430,13 +435,14 @@ def adjust_rows(im_l, im_r):
     Extends the row image by adding zeros signal to the bottom.
     """
     diff = im_r.shape[0] - im_l.shape[0]
+    dtype = im_l.dtype
     if diff != 0:
         if diff > 0:
-            dummy = np.full((diff, im_l.shape[1], im_l.shape[2]), np.NaN)
-            im_l = np.concatenate((im_l, dummy), axis=0)
+            dummy = np.full((diff, im_l.shape[1], im_l.shape[2]), np.NaN, dtype=dtype)
+            im_l = np.concatenate((im_l, dummy), axis=0, dtype=dtype)
         else:
-            dummy = np.full((abs(diff), im_r.shape[1], im_r.shape[2]), np.NaN)
-            im_r = np.concatenate((im_r, dummy), axis=0)
+            dummy = np.full((abs(diff), im_r.shape[1], im_r.shape[2]), np.NaN, dtype=dtype)
+            im_r = np.concatenate((im_r, dummy), axis=0, dtype=dtype)
     return im_l, im_r
 
 
@@ -503,8 +509,9 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
         logger.debug(img_l.shape)
         int_offset = int(mean_corr[0])
         dummy_length = abs(int_offset)
-        dummy_l = np.full((dummy_length, img_l.shape[1], img_l.shape[2]), np.NaN)
-        dummy_r = np.full((dummy_length, img_r.shape[1], img_r.shape[2]), np.NaN)
+        dtype = img_l.dtype
+        dummy_l = np.full((dummy_length, img_l.shape[1], img_l.shape[2]), np.NaN, dtype=dtype)
+        dummy_r = np.full((dummy_length, img_r.shape[1], img_r.shape[2]), np.NaN, dtype=dtype)
         if int_offset != 0:
             if int_offset > 0:
                 l_extension = (dummy_l, img_l)
@@ -522,8 +529,8 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
                 for key in list_r['connection']:
                     list_r['connection'][key] = np.add(list_r['connection'][key], dummy_length)
         
-            list_l['img'] = np.concatenate(l_extension, axis=0)
-            list_r['img'] = np.concatenate(r_extension, axis=0)
+            list_l['img'] = np.concatenate(l_extension, axis=0, dtype=dtype)
+            list_r['img'] = np.concatenate(r_extension, axis=0, dtype=dtype)
             
         logger.debug(list_l['img'].shape)
         # recalc slices and dummies again, in case offset is very large, these can change!
@@ -801,6 +808,13 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
     col_stitch : np.ndarray
         The stitched image data.
     """
+    # convert all images to float32 once (can still hold NaNs)
+    for xpos in lookup_x:
+        for ypos in lookup_y:
+            img = data[xpos][ypos]['img']
+            if img is not None and not np.issubdtype(img.dtype, np.floating):
+                data[xpos][ypos]['img'] = img.astype(np.float32)
+
     # Checking the Channel list entries for possible overflows
     if channel_list is not None:
         # clear channel list from outliers

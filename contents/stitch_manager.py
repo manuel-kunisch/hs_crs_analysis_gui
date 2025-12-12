@@ -210,6 +210,13 @@ class StitchManager(QtCore.QObject):
         parse.addRow("", self.ignorecase_check)
 
         btns = QtWidgets.QHBoxLayout()
+        self.regex_helper_btn = QtWidgets.QPushButton("Regex helper…")
+        self.regex_helper_btn.clicked.connect(self._open_regex_helper)
+        # highlight button
+        self.regex_helper_btn.setStyleSheet("font-weight: bold;")
+        btns.addWidget(self.regex_helper_btn)
+
+
         self.apply_regex_btn = QtWidgets.QPushButton("Apply regex")
         self.apply_regex_btn.clicked.connect(self._apply_regex_from_ui)
         btns.addWidget(self.apply_regex_btn)
@@ -287,6 +294,17 @@ class StitchManager(QtCore.QObject):
             self._refresh_table()
         except Exception as e:
             self.status_lbl.setText(f"Regex error: {e}")
+
+    def _open_regex_helper(self):
+        dlg = RegexHelperDialog(
+            parent=self.stitch_data_widget,
+            initial_regex=self.regex_edit.text(),
+            ignorecase=self.ignorecase_check.isChecked(),
+        )
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            self.regex_edit.setText(dlg.regex_pattern)
+            self.ignorecase_check.setChecked(bool(dlg.ignorecase))
+            self._apply_regex_from_ui()
 
     def _refresh_table(self):
         self.table.clear()
@@ -516,4 +534,151 @@ class StitchManager(QtCore.QObject):
         self.refresh_btn.setEnabled(not busy)
         self.apply_regex_btn.setEnabled(not busy)
 
+
+
+
+
+class RegexHelperDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None, initial_regex: str = "", ignorecase: bool = True):
+        super().__init__(parent)
+        self.setWindowTitle("Regex helper (x/y from filename)")
+        self.setModal(True)
+        self.resize(720, 260)
+
+        self.regex_pattern = initial_regex or r".*[_-]x(?P<x>-?\d+)[_-]y(?P<y>-?\d+).*"
+        self.ignorecase = bool(ignorecase)
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # --- templates ---
+        tpl_box = QtWidgets.QGroupBox("Quick templates")
+        tpl_layout = QtWidgets.QFormLayout(tpl_box)
+
+        self.template_combo = QtWidgets.QComboBox()
+        self.templates = {
+            "x<num>_y<num>  (tile_x3_y7.tif)": r".*[_-]x(?P<x>-?\d+)[_-]y(?P<y>-?\d+).*",
+            "X<num> ... Y<num>  (scanX-1_Y-2.tif)": r".*X(?P<x>-?\d+).*Y(?P<y>-?\d+).*",
+            "pos_<x>_<y>  (pos_3_7.tif)": r".*pos[_-](?P<x>-?\d+)[_-](?P<y>-?\d+).*",
+            "pos_<y>_<x>  (pos_7_3.tif)": r".*pos[_-](?P<y>-?\d+)[_-](?P<x>-?\d+).*",
+            "xyz-Table[y] - xyz-Table[x]": r".*xyz-Table\[(?P<y>\d+)\]\s*-\s*xyz-Table\[(?P<x>\d+)\].*",
+        }
+        self.template_combo.addItems(self.templates.keys())
+        tpl_layout.addRow("Template", self.template_combo)
+
+        # --- simple builder (covers your 'pos_x_y' style easily) ---
+        builder_box = QtWidgets.QGroupBox("Simple builder")
+        b = QtWidgets.QGridLayout(builder_box)
+
+        self.prefix_edit = QtWidgets.QLineEdit("pos")
+        self.sep_edit = QtWidgets.QLineEdit("_")
+        self.order_combo = QtWidgets.QComboBox()
+        self.order_combo.addItems(["x then y", "y then x"])
+        self.include_markers_check = QtWidgets.QCheckBox("Include x/y letters (x12_y7)")
+        self.include_markers_check.setChecked(False)
+
+        b.addWidget(QtWidgets.QLabel("Prefix"), 0, 0)
+        b.addWidget(self.prefix_edit, 0, 1)
+        b.addWidget(QtWidgets.QLabel("Separator"), 0, 2)
+        b.addWidget(self.sep_edit, 0, 3)
+        b.addWidget(QtWidgets.QLabel("Order"), 1, 0)
+        b.addWidget(self.order_combo, 1, 1)
+        b.addWidget(self.include_markers_check, 1, 2, 1, 2)
+
+        # --- preview + test ---
+        preview_box = QtWidgets.QGroupBox("Preview / test")
+        p = QtWidgets.QFormLayout(preview_box)
+
+        self.ignorecase_check = QtWidgets.QCheckBox("IGNORECASE")
+        self.ignorecase_check.setChecked(self.ignorecase)
+        p.addRow("", self.ignorecase_check)
+
+        self.regex_preview = QtWidgets.QLineEdit(self.regex_pattern)
+        self.regex_preview.setReadOnly(False)  # user may still tweak
+        p.addRow("Regex", self.regex_preview)
+
+        self.sample_edit = QtWidgets.QLineEdit("tile_x3_y7.tif")
+        p.addRow("Sample filename", self.sample_edit)
+
+        self.test_lbl = QtWidgets.QLabel("—")
+        self.test_lbl.setStyleSheet("color:#aaa;")
+        p.addRow("Parsed (x,y)", self.test_lbl)
+
+        # buttons
+        btns = QtWidgets.QHBoxLayout()
+        self.use_btn = QtWidgets.QPushButton("Use this regex")
+        self.cancel_btn = QtWidgets.QPushButton("Cancel")
+        btns.addStretch(1)
+        btns.addWidget(self.cancel_btn)
+        btns.addWidget(self.use_btn)
+
+        layout.addWidget(tpl_box)
+        layout.addWidget(builder_box)
+        layout.addWidget(preview_box)
+        layout.addLayout(btns)
+
+        # wiring
+        self.template_combo.currentTextChanged.connect(self._apply_template)
+        for w in (self.prefix_edit, self.sep_edit, self.order_combo, self.include_markers_check):
+            if hasattr(w, "textChanged"):
+                w.textChanged.connect(self._rebuild_from_builder)
+            if hasattr(w, "currentTextChanged"):
+                w.currentTextChanged.connect(self._rebuild_from_builder)
+            if hasattr(w, "toggled"):
+                w.toggled.connect(self._rebuild_from_builder)
+
+        self.regex_preview.textChanged.connect(self._test_regex)
+        self.sample_edit.textChanged.connect(self._test_regex)
+        self.ignorecase_check.toggled.connect(self._test_regex)
+
+        self.use_btn.clicked.connect(self._accept)
+        self.cancel_btn.clicked.connect(self.reject)
+
+        # init
+        self._apply_template(self.template_combo.currentText())
+        self._test_regex()
+
+    def _apply_template(self, name: str):
+        self.regex_preview.setText(self.templates[name])
+
+    def _rebuild_from_builder(self):
+        prefix = re.escape(self.prefix_edit.text().strip())
+        sep = re.escape(self.sep_edit.text().strip() or "_")
+        order = self.order_combo.currentText()
+        include_markers = self.include_markers_check.isChecked()
+
+        # signed ints by default
+        num = r"(?P<{}>-?\d+)"
+
+        if include_markers:
+            if order == "x then y":
+                pat = rf".*{prefix}{sep}x{num.format('x')}{sep}y{num.format('y')}.*"
+            else:
+                pat = rf".*{prefix}{sep}y{num.format('y')}{sep}x{num.format('x')}.*"
+        else:
+            if order == "x then y":
+                pat = rf".*{prefix}{sep}{num.format('x')}{sep}{num.format('y')}.*"
+            else:
+                pat = rf".*{prefix}{sep}{num.format('y')}{sep}{num.format('x')}.*"
+
+        self.regex_preview.setText(pat)
+
+    def _test_regex(self):
+        pat = self.regex_preview.text()
+        flags = re.IGNORECASE if self.ignorecase_check.isChecked() else 0
+        try:
+            rx = re.compile(pat, flags)
+            m = rx.search(self.sample_edit.text().strip())
+            if not m:
+                self.test_lbl.setText("no match")
+                return
+            x = m.group("x") if "x" in m.groupdict() else "?"
+            y = m.group("y") if "y" in m.groupdict() else "?"
+            self.test_lbl.setText(f"({x}, {y})")
+        except Exception as e:
+            self.test_lbl.setText(f"invalid regex: {e}")
+
+    def _accept(self):
+        self.regex_pattern = self.regex_preview.text()
+        self.ignorecase = self.ignorecase_check.isChecked()
+        self.accept()
 

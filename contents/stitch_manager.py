@@ -253,7 +253,13 @@ class StitchManager(QtCore.QObject):
 
         self.stitch_btn = QtWidgets.QPushButton("Stitch now")
         self.stitch_btn.clicked.connect(self.stitch)
+        # highlight button
+        self.stitch_btn.setStyleSheet("font-weight: bold;")
         bottom.addWidget(self.stitch_btn)
+
+        self.save_stitched_btn = QtWidgets.QPushButton("Save stitched image…")
+        self.save_stitched_btn.clicked.connect(self._save_stitched_image)
+        bottom.addWidget(self.save_stitched_btn)
 
     # ---------------- drag/drop ----------------
     def _drag_enter(self, event):
@@ -461,6 +467,24 @@ class StitchManager(QtCore.QObject):
         except Exception as e:
             self.status_lbl.setText(f"Load preset failed: {e}")
 
+    def _save_stitched_image(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            None, "Save stitched image", "", "TIFF (*.tif *.tiff)"
+        )
+        if not path:
+            return
+        try:
+            stitched = self._last_stitched_image
+            if stitched is None:
+                self.status_lbl.setText("No stitched image to save.")
+                return
+            # Save using tifffile
+            import tifffile
+            tifffile.imwrite(path, stitched.astype(np.uint16))
+            self.status_lbl.setText(f"Saved stitched image: {Path(path).name}")
+        except Exception as e:
+            self.status_lbl.setText(f"Save stitched image failed: {e}")
+
     # ---------------- stitching ----------------
     def stitch(self):
         if self._folder is None:
@@ -520,6 +544,7 @@ class StitchManager(QtCore.QObject):
     def _on_stitch_done(self, stitched: np.ndarray):
         self._set_busy(False, f"Done. Stitched shape: {getattr(stitched, 'shape', None)}")
         self.stitchedImageChanged.emit(stitched)
+        self._last_stitched_image = stitched
 
     def _on_stitch_failed(self, tb: str):
         logger.error("Stitch failed:\n%s", tb)

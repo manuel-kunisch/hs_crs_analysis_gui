@@ -54,7 +54,7 @@ class CrossCorrelationStitcher:
 
     # --- filename parsing (x/y indices from filenames) ---
     filename_regex: str = field(
-        default=r".*[_-]x(?P<y>-?\d+)[_-]y(?P<x>-?\d+).*",
+        default=r".*pos[_-](?P<x>-?\d+)[_-](?P<y>-?\d+).*",
         repr=False,
     )
     filename_regex_flags: int = field(default=re.IGNORECASE, repr=False)

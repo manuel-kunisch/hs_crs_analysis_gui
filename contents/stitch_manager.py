@@ -173,8 +173,20 @@ class StitchManager(QtCore.QObject):
         self.scan_hint_lbl = QtWidgets.QLabel()
         self.scan_hint_lbl.setStyleSheet("color: #aaa;")  # subtle
         params.addRow("", self.scan_hint_lbl)
-        self._on_scan_dir_changed(self.scan_combo.currentText())
 
+        self.scan_row_combo = QtWidgets.QComboBox()
+        self.scan_row_combo.addItems(["down", "up"])
+        self.scan_row_combo.setCurrentText(str(self.stitcher.scan_y_direction))
+        self.scan_row_combo.currentTextChanged.connect(self._on_scan_dir_changed)
+        params.addRow("Scan Y direction", self.scan_row_combo)
+
+        self.scan_y_hint_lbl = QtWidgets.QLabel("Layout: Y increases ↓ (higher y at bottom)")
+        self.scan_y_hint_lbl.setStyleSheet("color: #aaa;")
+        params.addRow("", self.scan_y_hint_lbl)
+
+        # initial hint update
+        self._on_scan_dir_changed(self.scan_row_combo.currentText())
+        self._on_scan_dir_changed(self.scan_combo.currentText())
 
 
         self.input_order_combo = QtWidgets.QComboBox()
@@ -352,13 +364,18 @@ class StitchManager(QtCore.QObject):
             self.status_lbl.setText(f"Found {len(files)} files, parsed 0 tiles. (skipped={skipped})")
             return
 
-        lookup_y = sorted(ys)
 
-        scan = self.scan_combo.currentText() if hasattr(self, "scan_combo") else "right"
-        if scan == "left":
+        scan_x = self.scan_combo.currentText() if hasattr(self, "scan_combo") else "left"
+        if scan_x == "left":
             lookup_x = sorted(xs, reverse=True)  # mirror layout
         else:
             lookup_x = sorted(xs)  # normal layout
+
+        scan_y = self.scan_row_combo.currentText() if hasattr(self, "scan_row_combo") else "down"
+        if scan_y == "up":
+            lookup_y = sorted(ys, reverse=True)
+        else:
+            lookup_y = sorted(ys)
 
         self.table.setColumnCount(len(lookup_x))
         self.table.setRowCount(len(lookup_y))
@@ -411,9 +428,12 @@ class StitchManager(QtCore.QObject):
         # "left" : higher x goes to the left (mirrored display)
         if direction == "right":
             self.scan_hint_lbl.setText("Layout: X increases → (higher x on the right)")
-        else:
+        elif direction == "left":
             self.scan_hint_lbl.setText("Layout: X increases ← (higher x on the left)")
-
+        elif direction == "up":
+            self.scan_y_hint_lbl.setText("Layout: Y increases ↑ (higher y at the top)")
+        else:  # down
+            self.scan_y_hint_lbl.setText("Layout: Y increases ↓ (higher y at the bottom)")
         # update visualization immediately
         try:
             self._refresh_table()
@@ -430,6 +450,7 @@ class StitchManager(QtCore.QObject):
             "sigma_interval": float(self.sigma_spin.value()),
             "mode": self.mode_combo.currentText(),
             "scan_x_direction": self.scan_combo.currentText(),
+            "scan_y_direction": self.scan_row_combo.currentText(),
             "input_channel_order": self.input_order_combo.currentText(),
             "channel_list": self.channel_list_edit.text().strip(),
             "display_channel": int(self.display_channel_spin.value()),
@@ -447,6 +468,7 @@ class StitchManager(QtCore.QObject):
         self.sigma_spin.setValue(float(d.get("sigma_interval", 2.0)))
         self.mode_combo.setCurrentText(d.get("mode", "sigma mean"))
         self.scan_combo.setCurrentText(d.get("scan_x_direction", "left"))
+        self.scan_row_combo.setCurrentText(d.get("scan_y_direction", "down"))
         self.input_order_combo.setCurrentText(d.get("input_channel_order", "zyx"))
         self.channel_list_edit.setText(d.get("channel_list", ""))
         self.display_channel_spin.setValue(int(d.get("display_channel", 0)))
@@ -520,6 +542,7 @@ class StitchManager(QtCore.QObject):
         self.stitcher.sigma_interval = float(self.sigma_spin.value())
         self.stitcher.mode = self.mode_combo.currentText()
         self.stitcher.scan_x_direction = self.scan_combo.currentText()
+        self.stitcher.scan_y_direction = self.scan_row_combo.currentText()
         self.stitcher.input_channel_order = self.input_order_combo.currentText()
         self.stitcher.channel_list = _parse_int_list(self.channel_list_edit.text())
         self.stitcher.display_channel = int(self.display_channel_spin.value())
@@ -530,6 +553,7 @@ class StitchManager(QtCore.QObject):
               f"overlap_row={self.stitcher.overlap_row}, overlap_col={self.stitcher.overlap_col},"
               f" sigma_interval={self.stitcher.sigma_interval}, mode={self.stitcher.mode}, "
               f"scan_x_direction={self.stitcher.scan_x_direction}, "
+              f"scan_y_direction={self.stitcher.scan_y_direction}, "
               f"input_channel_order={self.stitcher.input_channel_order}, "
               f"channel_list={self.stitcher.channel_list}, ")
 
@@ -625,7 +649,10 @@ class StitchManager(QtCore.QObject):
         else:
             lookup_x = sorted(lookup_x)
 
-        lookup_y = sorted(lookup_y)
+        if self.scan_row_combo.currentText() == "up":
+            lookup_y = sorted(lookup_y, reverse=True)
+        else:
+            lookup_y = sorted(lookup_y)
 
         stitched_yxc = self._stitch_grid_linear(
             data=data,

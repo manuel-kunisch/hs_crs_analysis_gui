@@ -305,10 +305,10 @@ if __name__ == "__main__":
 
     stitcher.plot = False
     stitcher.scan_x_direction = "right"  # or "right to left"
-    stitcher.scan_y_direction = "down"
+    stitcher.scan_y_direction = "up"
     stitcher.channel_list = [40]  # only use channel 20 for stitching cross-correlation
 
-    folder = '/Users/mkunisch/Desktop/Herzgewebe Tiffs/2025_11_04 thg_autofluorescence/mosaic split/thg binned small fov'
+    folder = '/Users/mkunisch/Desktop/Herzgewebe Tiffs/2025_11_04 thg_autofluorescence/mosaic split/thg binned small fov y up'
     stitched = stitcher.stitch_folder(folder, pattern="*.tif")
     plt.imshow(stitched[10], cmap="viridis")
     plt.show()

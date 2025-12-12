@@ -304,3 +304,4 @@ if __name__ == "__main__":
     stitched = stitcher.stitch_folder(folder, pattern="*.tif")
     plt.imshow(stitched[10], cmap="viridis")
     plt.show()
+    tiff.imwrite("stitched.tif", stitched)

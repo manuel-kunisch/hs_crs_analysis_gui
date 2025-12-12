@@ -890,6 +890,9 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
     print('TIME FOR attaching rows: ', time.process_time()-start)
     #%% rows done
     if _plot:
+        """
+        debug plot to show the row stitching result with extensions
+        """
         im_r = x_stitch_list[0]['img']  # start with the outermost left image or right image depending on scan direction
         for i, entry in enumerate(x_stitch_list[1:]):
             if scan_x_direction == 'right':
@@ -925,6 +928,7 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
         x_stitch_list[i]['img'] = None
         x_stitch_list[i]['dummy'] = None
         x_stitch_list[i]['connection'] = None
+
         # At the end, col_stitch is the full stitched mosaic, and only the last list_entry still holds a reference.
 
     return col_stitch

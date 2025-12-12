@@ -50,17 +50,14 @@ class ImageLoader(QtWidgets.QWidget):
         self.drag_label.setWordWrap(True)
         # Set style for the drag label
         self.drag_label.setStyleSheet("""
-                    QLabel {
-                        border: 2px thick #aaa;
-                        background-color: darkgray;
-                        color: #555;
-                        font-size: 8pt;
-                        padding: 3px;
-                    }
-                    QLabel:hover {
-                        background-color: #e8e8e8;
-                    }
-                """)
+            QLabel {
+                border: 1px dashed #888;
+                border-radius: 6px;
+                padding: 8px;
+                background: #2b2b2b;
+                color: #ddd;
+            }
+        """)
 
         # Enable drag & drop
         self.drag_label.setAcceptDrops(True)
@@ -72,7 +69,7 @@ class ImageLoader(QtWidgets.QWidget):
         self.drag_label.mousePressEvent = self.load_image_from_file_dialog
 
         # data_h_layout.addWidget(QtWidgets.QLabel("Data Path"), alignment=QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
-        data_h_layout.addWidget(self.drag_label, alignment=QtCore.Qt.AlignLeft | QtCore.Qt.AlignRight)
+        data_h_layout.addWidget(self.drag_label)
 
         path_widget = QtWidgets.QWidget()
         path_widget.setLayout(data_h_layout)

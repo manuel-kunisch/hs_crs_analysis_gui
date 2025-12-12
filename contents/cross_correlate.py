@@ -10,9 +10,12 @@ import scipy.signal
 import tifffile as tiff
 import matplotlib.pyplot as plt
 import stitch_functions as stitching
-import math
 import time
 from tkinter.messagebox import showerror
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 def lin_weights(overlap, max_weight=1): # first avg = top image, last avg = bottom_image
     m = ((.5-max_weight)/(overlap/2+1)) # slope triangle y = mx+b
@@ -83,14 +86,7 @@ def max_correlation(im1, im2, channels = None, _plot=False):
         plt.imshow(corr_img)
         plt.show()
     center = np.divide(corr_img.shape, 2)
-    max_corr = np.unravel_index(np.argmax(corr_img), corr_img.shape)   # brightest spot  
-    # deviation = np.subtract(np.argwhere(corr_img > .5 * corr_img[max_corr]), 
-    #                         max_corr)
-    # thres = np.divide(center, 4)
-    # for dev in deviation:
-    #     if dev[0] >  thres[0] or dev[1] > thres[1]:
-    #         plt.title('Deviation too large')
-    
+    max_corr = np.unravel_index(np.argmax(corr_img), corr_img.shape)   # brightest spot
     offset = np.subtract(center, max_corr)
     """
     if _plot:
@@ -124,11 +120,12 @@ def row_correlation(data, lookup_x, lookup_y, overlap_row, mode,
     lookup_y : list
         returned by stitch_load.
     overlap_row : int
-        Pixel overlap of adjacent images.
+        Pixel overlap of adjacent images. Must not be exactly known. The region used for averaging.
     mode : str, optional
         {'mean', 'sigma', 'sigma mean'}
-        
-        'sigma': discards
+        'sigma': discards outliers based on the sigma interval.
+        'mean': averages over all correlations to get a single offset value.
+        if both are selected, first outliers are removed, then the mean is calculated.
     sigma_interval : int, optional
         confidence interval used to accept offset values.
     Returns
@@ -143,13 +140,14 @@ def row_correlation(data, lookup_x, lookup_y, overlap_row, mode,
             overlap_bot = data[xpos][lookup_y[j+1]]['img'][:overlap_row,:,:]
             offset = max_correlation(overlap_top, overlap_bot, channels=channel_list, _plot=False)
             corr_list.append(offset)
-    modes = mode.split(' ')
+    modes = set(mode.lower().split())   # to allow multiple modes, converts "SIGMA mEan" to {'sigma', 'mean'}
     print(modes)
     if 'sigma' in modes:
         modes.remove('sigma')
         corr_list = remove_outliers(corr_list, sigma_interval)
         corr_list = np.nan_to_num(corr_list, copy=False)
     if 'mean' in modes:
+        # average over all correlations, each image is offset by the same value
         a = np.array(corr_list)
         corr_list = np.mean(a, axis=0)
         corr_list = np.array([corr_list] * len(a))
@@ -266,8 +264,6 @@ def adjust_x(im_left, im_right, offset, overlap, _plot=False):
             overhang_im_right = overlap_im_right[:,right_slice,:]
             print(overhang_im_left.shape, overhang_im_right.shape)
             im_right = np.concatenate((overhang_im_right, im_right), axis=1)
-            
-            
         else:
             int_offset_col = abs(int_offset_col)
             print('Left image is shifted towards the right by %i pixels'
@@ -460,102 +456,48 @@ def adjust_rows(im_l, im_r):
 def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
                 _plot = False):
     """
-    Extends the row image by adding zeros signal to the bottom.
+    Function, which attaches two column images based on their dummy signal and
+    cross-correlation of the overlapping region.
+
+    Attach two stitched column-blocks (left/right) with:
+    1) robust vertical offset estimation across slices
+    2) iterative coarse alignment via dummy padding
+    3) final horizontal blending in the overlap region
+
+    Parameters
+    ----------
+    list_l : dict
+        the left image data including 'img', 'dummy', 'connection' keys
+    list_r : dict
+        the right image data including 'img', 'dummy', 'connection' keys
+    overlap : int
+        Pixel overlap of adjacent images. Must not be exactly known. The region used for averaging.
+    sigma_interval : int
+        confidence interval used to accept offset values.
+    channel_list : list, optional
+        If channels is passed to the function, only the channels specified will
+        be convoluted. The default is None --> all channels are convoluted.
+    _plot : boolean, optional
+        If True, intermediate steps are plotted. The default is False.
+    Returns
+    -------
+    new_image : array
+        The stitched image of the two columns.
     """
     list_l['img'], list_r['img'] = adjust_rows(list_l['img'], list_r['img'])    
-    #%% find offset in y-direction, PROBLEM: DOES NOT WORK WITH DUMMY SIGNAL
-    #   so we simply attach the row images with offset and correlate them
-    
-    # d_max = 0
-    # connections_l = list_l['connection']['right']
-    # connections_r = list_r['connection']['left']
-    
-    # r_idx = 1
-    # d = []
-    # slice_idx = [0]
-    # dummy_list = []
-    # max_idx = len(list_r['dummy'])-1 
-    # for i, idx in enumerate(connections_l[1:]): # first entry is 0, irrelevant
-    #     # dummy betweeen next data points
-    #     j = i
-    #     dummy_idx = r_idx-1 # dummy idx in the list is always -1 compared to the slice index
-    #     while idx > connections_r[r_idx] and r_idx < max_idx:
-    #         d.append(list_l['dummy'][j][1] + list_r['dummy'][dummy_idx][0])
-    #         slice_idx.append(connections_r[r_idx])
-    #         dummy_list.append({'left': list_l['dummy'][j][1],
-    #                            'right': list_r['dummy'][dummy_idx][0]})
-    #         print(idx, connections_r[r_idx])
-    #         r_idx += 1
-    #         dummy_idx += 1
-    #     d.append(list_l['dummy'][j][1] + list_r['dummy'][dummy_idx][0])
-    #     slice_idx.append(min(connections_r[r_idx], idx))
-    #     dummy_list.append({'left': list_l['dummy'][j][1],
-    #                        'right': list_r['dummy'][dummy_idx][0]})
-    #     # if r_idx < max_idx:
-    #     #     r_idx += 1
-    # d.append(list_l['dummy'][-1][1] + list_r['dummy'][-1][0])
-    # dummy_list.append({'left': list_l['dummy'][-1][1],
-    #                    'right': list_r['dummy'][-1][0]})
-    # slice_idx.append(idx)
-    # slice_idx.append(img_l.shape[0])
-    # d.append(d[-1])
-    # dummy_list.append(dummy_list[-1])
-    # print(d)
-    # print(slice_idx)
-    # print(dummy_list)
-    # d_max_idx = np.argmax(d)
-    # d_max = d[d_max_idx]
-    
-    # new_image = np.empty((img_l.shape[0], img_l.shape[1]+img_r.shape[1]-d_max, img_l.shape[2]))
-    # # move left image to the right such that no empty pixels in between images
-    # correlations = []
-    # for i, idx in enumerate(slice_idx[1:]):
-    #     spare_pixels = d_max - d[i]
-    #     remove_l = spare_pixels // 2
-    #     remove_r = remove_l + spare_pixels % 2  
-    #     y_slice = np.s_[slice_idx[i]:idx]
-    #     # middle = new_image.shape[1]/2
-    #     # i_left = math.ceil(middle)  # left image gets at max 1 pixel more
-    #     # i_right = math.floor(middle)
-        
-        
-    #     # left part 
-    #     # clear empty inbetween plus the spare pixels 
-         
-    #     #implement the average here!!! otherwise we lose the information where images start 
-        
-    #     # --> CORRELATE AND AVERAGE!
-    #     x_slice_l = np.s_[0: img_l.shape[1]-(dummy_list[i]['left']+remove_l)]
-    #     img_l_cleared = img_l[y_slice, x_slice_l, :]
-    #     x_slice_r = np.s_[dummy_list[i]['right']+remove_r:]
-    #     img_r_cleared = img_r[y_slice, x_slice_r,:]
-        
-        
-        
-    #     correlations_im = np.concatenate((img_l_cleared[:,-overlap:, :], img_r_cleared[:,:overlap, :]), axis=1)
-    #     plt.title('Correlations %s'%y_slice)
-    #     plt.imshow(correlations_im[:,:,ch])
-    #     plt.show()
-    #     corr = max_correlation(img_l_cleared[:,-overlap:, :], img_r_cleared[:,:overlap, :])
-    #     correlations.append(corr)
-        
-    #     new_image[y_slice, 0:img_l_cleared.shape[1],:] = img_l_cleared
-    #     # right part  
-    #     new_image[y_slice, img_l_cleared.shape[1]: ,:] = img_r_cleared
-    
-    
+
     d_list, slice_idx_list, dummy_list = find_dummy_indices(list_l, list_r)
-    print(slice_idx_list)
+    logger.debug(slice_idx_list)
     new_image, correlations, overlap_list = dummy_correlation(list_l, list_r, overlap,
                                                    d_list, slice_idx_list, dummy_list, channel_list = channel_list)
     
     """ we need to find the best MEAN correlation since the images need to be attached the way they are
         we can't change their relative placement anymore after the row stitching    
     """
-    print(correlations)
+    logger.debug(correlations)
     mean_corr = mean_corr_no_outliers(correlations, sigma_interval)
-    print(correlations)
-    print('NEW MEAN', mean_corr)
+    logger.debug(correlations)
+    logger.debug('NEW MEAN', mean_corr)
     
     # plt.imshow(new_image[:,:,ch], vmax=vmax_var)
     
@@ -567,9 +509,9 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
     tries = 0
     """ find iteratively the best offset """
     while abs(mean_corr[0]) >= 1 and tries < 5:
-        print(('TRY %s '%tries)*10)
+        logger.debug(('TRY %s '%tries)*10)
         img_l, img_r =  list_l['img'], list_r['img']
-        print(img_l.shape)
+        logger.debug(img_l.shape)
         int_offset = int(mean_corr[0])
         dummy_length = abs(int_offset)
         dummy_l = np.full((dummy_length, img_l.shape[1], img_l.shape[2]), np.NaN)
@@ -579,7 +521,7 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
                 l_extension = (dummy_l, img_l)
                 r_extension = (img_r, dummy_r)
                 text = 'added %i rows to top left'%dummy_length
-                print(text)
+                logger.debug(text)
                 # new indices
                 for key in list_l['connection']:
                     list_l['connection'][key] = np.add(list_l['connection'][key], dummy_length)
@@ -587,32 +529,32 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
                 l_extension = (img_l, dummy_l)
                 r_extension = (dummy_r, img_r)
                 text = 'added %i rows to top right'%dummy_length
-                print(text)
+                logger.debug(text)
                 for key in list_r['connection']:
                     list_r['connection'][key] = np.add(list_r['connection'][key], dummy_length)
         
             list_l['img'] = np.concatenate(l_extension, axis=0)
             list_r['img'] = np.concatenate(r_extension, axis=0)
             
-        print(list_l['img'].shape)
+        logger.debug(list_l['img'].shape)
         # recalc slices and dummies again, in case offset is very large, these can change!
         d_list, slice_idx_list, dummy_list = find_dummy_indices(list_l, list_r)
         new_image, corr_new, overlap_list = dummy_correlation(list_l, list_r, overlap, 
                                                               d_list, slice_idx_list, dummy_list,
                                                               channel_list = channel_list)        
         # new (more precise correlations)
-        print(overlap_list)
+        logger.debug(overlap_list)
         mean_corr = mean_corr_no_outliers(corr_new, sigma_interval)
-        print('_'*500)
-        print(mean_corr)
-        print('_'*500)
+        logger.debug('_'*500)
+        logger.debug(mean_corr)
+        logger.debug('_'*500)
         if _plot:
             plt.imshow(new_image[:,:,ch], vmax=vmax_var)
             plt.show()
         tries+=1
         
     mean_corr[np.isnan(mean_corr)] = 0
-    print('-'*50, 'Found best correlation with setting %s'%mean_corr, '-'*50)
+    logger.debug('-'*50, 'Found best correlation with setting %s'%mean_corr, '-'*50)
     """ after finally adjusting the relative offset, we only need to calculate the average (as already done before)
         for all slices stored in 'slice_idx'!
     """  
@@ -767,7 +709,19 @@ def average_columns(image, mean_offset, overlap, y_slice_idx_list, overlap_idx_l
     full_image = np.vstack(stitches)
     return full_image
 
-def mean_corr_no_outliers(correlations, sigma_interval):
+def mean_corr_no_outliers(correlations: np.ndarray, sigma_interval):
+    """
+    This function calculates the mean correlation while removing outliers based on a specified sigma interval.
+    Attention: modifies the input array in place.
+    Parameters
+    ----------
+    correlations
+    sigma_interval
+
+    Returns
+    -------
+
+    """
     # assume normal distribution to clear too large deviations
     # https://www.kdnuggets.com/2017/02/removing-outliers-standard-deviation-python.html
     # remove the outlier points by eliminating any points that were above (Mean + 2*SD) and any points below (Mean - 2*SD)
@@ -778,7 +732,8 @@ def mean_corr_no_outliers(correlations, sigma_interval):
 
 def remove_outliers(correlations, sigma_interval = 2):
     """
-    This function removes outliers from a given set of correlations based on a specified sigma interval. 
+    This function removes outliers from a given set of correlations based on a specified sigma interval.
+    Attention: modifies the input array in place.
     
     Parameters:
     correlations (numpy.ndarray): An array of correlations to be processed.
@@ -838,7 +793,7 @@ def translate_offset_to_text(offset):
 def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
                 overlap_col: int, sigma_interval: float = 1,
                 channel_list:list = None, mode: str = 'normal',
-                ch: int=0, vmax_var: float = 2500, _plot=False) -> dict:
+                ch: int=0, vmax_var: float = 2500, _plot=False) -> np.ndarray:
     """
     Stitch and correct the data.
 
@@ -869,8 +824,8 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
 
     Returns
     -------
-    col_stitch : dict
-        Dictionary containing the stitched image and additional information.
+    col_stitch : np.ndarray
+        The stitched image data.
     """
     # Checking the Channel list entries for possible overflows
     if channel_list is not None:

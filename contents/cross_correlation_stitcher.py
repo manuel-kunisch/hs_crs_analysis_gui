@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence, Callable, Optional, Dict, Tuple, Union
@@ -34,7 +35,8 @@ class CrossCorrelationStitcher:
     # --- stitching parameters (bind directly to widgets) ---
     overlap_row: int = 90
     overlap_col: int = 90
-    sigma_interval: float = 1.0
+    sigma_interval: float = 2.0
+    input_channel_order = "zyx"
     channel_list: Optional[Sequence[int]] = None
     mode: str = "sigma mean"          # e.g. "normal", "mean", "sigma mean"
     display_channel: int = 0          # which channel to show if plot=True
@@ -144,8 +146,10 @@ class CrossCorrelationStitcher:
                 img = img[:, :, np.newaxis]
                 self._added_channel_dim = True
             elif img.ndim == 3:
-                img = np.moveaxis(img, 0, 2)  # assume (c, y, x) → (y, x, c)
                 self._added_channel_dim = False
+                if self.input_channel_order.lower() == "zyx" or self.input_channel_order.lower() == "cyx":
+                    img = np.moveaxis(img, 0, 2)  # assume (c, y, x) → (y, x, c)
+
             else:
                 raise ValueError(
                     f"Loaded image from '{f}' has invalid number of dimensions: {img.ndim}"
@@ -256,14 +260,17 @@ class CrossCorrelationStitcher:
             # delete the final channel dimension we added
             return stitch_result[:, :, 0]
 
-        stitch_result = np.moveaxis(stitch_result, 2, 0)  # (y, x, c) -> (c, y, x)
+        if self.input_channel_order.lower() == "zyx" or self.input_channel_order.lower() == "cyx":
+            logging.info(f"Reordering stitched result channels to original order {self.input_channel_order}.")
+            stitch_result = np.moveaxis(stitch_result, 2, 0)  # (y, x, c) -> (c, y, x)
         return stitch_result
 
 
 if __name__ == "__main__":
     # Simple test / demo
     stitcher = CrossCorrelationStitcher()
-    stitcher.binning = 1
+    stitcher.binning = 4
+    stitcher.input_channel_order = "zyx"
     stitcher.sigma_interval = 2.0
     stitcher.overlap_row = 100 // stitcher.binning
     stitcher.overlap_col = 100 // stitcher.binning

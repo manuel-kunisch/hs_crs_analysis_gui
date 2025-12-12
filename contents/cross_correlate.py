@@ -9,7 +9,6 @@ import numpy as np
 import scipy.signal
 import tifffile as tiff
 import matplotlib.pyplot as plt
-import stitch_functions as stitching
 import time
 from tkinter.messagebox import showerror
 
@@ -936,6 +935,7 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
 
 #%% END OF FUNCTIONS
 if __name__ == '__main__':
+    import stitch_functions as stitching
     overlap_row = 90
     overlap_col = 90
     data = 'new'

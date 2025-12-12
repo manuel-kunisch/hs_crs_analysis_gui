@@ -10,7 +10,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tifffile as tiff
 
-from cross_correlate import stitch_corr
+try:
+    # import from relative path if possible
+    from .cross_correlate import stitch_corr
+except ImportError:
+    # otherwise import from absolute path
+    from contents.cross_correlate import stitch_corr
 
 
 @dataclass
@@ -37,6 +42,8 @@ class CrossCorrelationStitcher:
     overlap_col: int = 90
     sigma_interval: float = 2.0
     input_channel_order = "zyx"
+    output_channel_order = "zyx"
+    return_as_int: bool = True
     channel_list: Optional[Sequence[int]] = None
     mode: str = "sigma mean"          # e.g. "normal", "mean", "sigma mean"
     display_channel: int = 0          # which channel to show if plot=True
@@ -46,24 +53,16 @@ class CrossCorrelationStitcher:
     binning: int = 2  # binning factor for raw data before stitching
 
     # --- filename parsing (x/y indices from filenames) ---
-    # default matches e.g. "tile_x3_y7.tif", "stack-X-1_Y-2.tif", ...
     filename_regex: str = field(
-        default=r".*[_-]x(?P<x>-?\d+)[_-]y(?P<y>-?\d+).*",
+        default=r".*[_-]x(?P<y>-?\d+)[_-]y(?P<x>-?\d+).*",
         repr=False,
     )
-    filename_regex_flags: int = field(
-        default=re.IGNORECASE,
-        repr=False,
-    )
-
+    filename_regex_flags: int = field(default=re.IGNORECASE, repr=False)
     _compiled_regex: re.Pattern = field(init=False, repr=False)
-
-    def __init__(self):
-        self._added_channel_dim = None
+    _added_channel_dim: bool = field(init=False, default=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._compiled_regex = re.compile(self.filename_regex,
-                                          self.filename_regex_flags)
+        self._compiled_regex = re.compile(self.filename_regex, self.filename_regex_flags)
 
     # ------------------------------------------------------------------
     #  Filename parsing
@@ -203,7 +202,7 @@ class CrossCorrelationStitcher:
         Run the `stitch_corr` with the current configuration.
         """
         print('Using scan x direction:', self.scan_x_direction)
-        return stitch_corr(
+        stitch_result = stitch_corr(
             data=data,
             lookup_x=list(lookup_x),
             lookup_y=list(lookup_y),
@@ -219,6 +218,9 @@ class CrossCorrelationStitcher:
             vmax_var=self.vmax,
             _plot=self.plot,
         )
+        if self.return_as_int:
+            stitch_result = stitch_result.astype(np.uint16)
+        return stitch_result
 
     def stitch_from_files(
         self,
@@ -260,9 +262,11 @@ class CrossCorrelationStitcher:
             # delete the final channel dimension we added
             return stitch_result[:, :, 0]
 
-        if self.input_channel_order.lower() == "zyx" or self.input_channel_order.lower() == "cyx":
-            logging.info(f"Reordering stitched result channels to original order {self.input_channel_order}.")
+        if self.output_channel_order.lower() == "cyx" or self.output_channel_order.lower() == "zyx":
+            logging.info(f"Reordering stitched result channels to original{self.output_channel_order}.")
             stitch_result = np.moveaxis(stitch_result, 2, 0)  # (y, x, c) -> (c, y, x)
+        else:
+            logging.info(f"Keeping stitched result channels in (y, x, c) order.")
         return stitch_result
 
 
@@ -275,6 +279,7 @@ if __name__ == "__main__":
     stitcher.overlap_row = 100 // stitcher.binning
     stitcher.overlap_col = 100 // stitcher.binning
     stitcher.mode = "sigma"    # sigma mean means outlier correction for calculation of shifts and averaging over all channels
+    stitcher.return_as_int = False
     stitcher.display_channel = 0
 
     stitcher.set_filename_regex(

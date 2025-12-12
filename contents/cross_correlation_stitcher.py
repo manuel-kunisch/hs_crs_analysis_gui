@@ -263,7 +263,7 @@ class CrossCorrelationStitcher:
 if __name__ == "__main__":
     # Simple test / demo
     stitcher = CrossCorrelationStitcher()
-    stitcher.binning = 4
+    stitcher.binning = 1
     stitcher.sigma_interval = 2.0
     stitcher.overlap_row = 100 // stitcher.binning
     stitcher.overlap_col = 100 // stitcher.binning

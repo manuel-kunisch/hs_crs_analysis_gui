@@ -862,9 +862,16 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
                 connection_indices[key] += connections[key]
             
             dummy_list += [dummy_added]
+            # <<< FREE used tile >>>
+            data[xpos][ypos]['img'] = None  # free memory
             # dummy_added is the total dummy signal added to the latest stitching image
             # [0]: dummy added to the bottom left image 
             # important info for the averaging procedure, sets its limits
+        # also free last tile of this column
+        last_y = lookup_y[-1]
+        data[xpos][last_y]['img'] = None
+
+
         for dummy in dummy_list[:-1]:
             old_dummy = dummy.copy()
             dummy[0] += dummy_added[1] - old_dummy[1]
@@ -878,38 +885,48 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
             plt.imshow(stitch[:,:,ch], vmax=vmax_var)
             plt.show()
             # plt.savefig(spath+ '/column%i_stitch_extensions.png'%j, dpi=400)
+
+    del data
     print('TIME FOR attaching rows: ', time.process_time()-start)
     #%% rows done
-
-    im_r = x_stitch_list[0]['img']  # start with the outermost left image or right image depending on scan direction
-    for i, entry in enumerate(x_stitch_list[1:]):
-        if scan_x_direction == 'right':
-            im_l = im_r
-            im_r = entry['img']
-        else:
-            im_l = entry['img']
-            im_r = im_r
-        im_l, im_r = adjust_rows(im_l, im_r)    # opposite way for oppsoite scan direction
-        im_r = np.concatenate((im_l, im_r), axis=1)
-
-    
-    print(f"First columm has shape {im_r.shape}")
     if _plot:
+        im_r = x_stitch_list[0]['img']  # start with the outermost left image or right image depending on scan direction
+        for i, entry in enumerate(x_stitch_list[1:]):
+            if scan_x_direction == 'right':
+                im_l = im_r
+                im_r = entry['img']
+            else:
+                im_l = entry['img']
+                im_r = im_r
+            im_l, im_r = adjust_rows(im_l, im_r)    # opposite way for oppsoite scan direction
+            im_r = np.concatenate((im_l, im_r), axis=1)
+        print(f"First columm has shape {im_r.shape}")
         plt.imshow(im_r[:,:,ch], vmax=vmax_var)
         # plt.savefig(spath+'/rows_stitched_with_extensions.png', dpi=400)
         plt.show()
-    
+
+    col_stitch = x_stitch_list[0]['img']  # as float32
+
     for i, list_entry in enumerate(x_stitch_list[1:]):
         if scan_x_direction == 'right':
-            # left image is the previous one
             l_dict = x_stitch_list[i]
             r_dict = list_entry
         else:
             l_dict = list_entry
             r_dict = x_stitch_list[i]
+
         col_stitch = attach_cols(l_dict, r_dict, overlap_col,
-                                 sigma_interval, channel_list = channel_list)
-        list_entry['img'] = col_stitch # attach results
+                                 sigma_interval, channel_list=channel_list)
+
+        # keep only the new composite in list_entry
+        list_entry['img'] = col_stitch
+
+        # free old column data
+        x_stitch_list[i]['img'] = None
+        x_stitch_list[i]['dummy'] = None
+        x_stitch_list[i]['connection'] = None
+        # At the end, col_stitch is the full stitched mosaic, and only the last list_entry still holds a reference.
+
     return col_stitch
     
 

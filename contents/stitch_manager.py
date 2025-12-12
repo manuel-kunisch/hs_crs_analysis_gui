@@ -160,7 +160,16 @@ class StitchManager(QtCore.QObject):
         self.scan_combo = QtWidgets.QComboBox()
         self.scan_combo.addItems(["left", "right"])
         self.scan_combo.setCurrentText(str(self.stitcher.scan_x_direction))
+        self.scan_combo.currentTextChanged.connect(self._on_scan_dir_changed)
         params.addRow("Scan X direction", self.scan_combo)
+
+        # --- scan direction hint + live table update ---
+        self.scan_hint_lbl = QtWidgets.QLabel()
+        self.scan_hint_lbl.setStyleSheet("color: #aaa;")  # subtle
+        params.addRow("", self.scan_hint_lbl)
+        self._on_scan_dir_changed(self.scan_combo.currentText())
+
+
 
         self.input_order_combo = QtWidgets.QComboBox()
         self.input_order_combo.addItems(["zyx", "yxc", "cyx"])
@@ -313,8 +322,13 @@ class StitchManager(QtCore.QObject):
             self.status_lbl.setText(f"Found {len(files)} files, parsed 0 tiles. (skipped={skipped})")
             return
 
-        lookup_x = sorted(xs)
         lookup_y = sorted(ys)
+
+        scan = self.scan_combo.currentText() if hasattr(self, "scan_combo") else "right"
+        if scan == "left":
+            lookup_x = sorted(xs, reverse=True)  # mirror layout
+        else:
+            lookup_x = sorted(xs)  # normal layout
 
         self.table.setColumnCount(len(lookup_x))
         self.table.setRowCount(len(lookup_y))
@@ -348,6 +362,21 @@ class StitchManager(QtCore.QObject):
         c_bin = c_raw // N
         self.overlap_row_binned_lbl.setText(f"→ binned: {r_bin}px")
         self.overlap_col_binned_lbl.setText(f"→ binned: {c_bin}px")
+
+    def _on_scan_dir_changed(self, direction: str):
+        # "right": higher x goes to the right (normal)
+        # "left" : higher x goes to the left (mirrored display)
+        if direction == "right":
+            self.scan_hint_lbl.setText("Layout: X increases → (higher x on the right)")
+        else:
+            self.scan_hint_lbl.setText("Layout: X increases ← (higher x on the left)")
+
+        # update visualization immediately
+        try:
+            self._refresh_table()
+        except Exception:
+            pass
+
 
     # ---------------- presets ----------------
     def _collect_settings(self) -> dict:
@@ -436,6 +465,13 @@ class StitchManager(QtCore.QObject):
         self.stitcher.display_channel = int(self.display_channel_spin.value())
         self.stitcher.plot = bool(self.plot_check.isChecked())
         self.stitcher.vmax = float(self.vmax_spin.value())
+
+        print(f"Starting stitching with binning={self.stitcher.binning}, "
+              f"overlap_row={self.stitcher.overlap_row}, overlap_col={self.stitcher.overlap_col},"
+              f" sigma_interval={self.stitcher.sigma_interval}, mode={self.stitcher.mode}, "
+              f"scan_x_direction={self.stitcher.scan_x_direction}, "
+              f"input_channel_order={self.stitcher.input_channel_order}, "
+              f"channel_list={self.stitcher.channel_list}, ")
 
         # basic sanity
         if self.stitcher.overlap_row < 0 or self.stitcher.overlap_col < 0:

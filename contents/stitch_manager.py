@@ -123,12 +123,12 @@ class StitchManager(QtCore.QObject):
 
         self.overlap_row_raw = QtWidgets.QSpinBox()
         self.overlap_row_raw.setRange(0, 5000)
-        self.overlap_row_raw.setValue(180)  # raw pixels default; adjust to your typical
+        self.overlap_row_raw.setValue(self.stitcher.overlap_row)  # raw pixels default; adjust to your typical
         self.overlap_row_raw.valueChanged.connect(self._update_overlap_labels)
 
         self.overlap_col_raw = QtWidgets.QSpinBox()
         self.overlap_col_raw.setRange(0, 5000)
-        self.overlap_col_raw.setValue(180)
+        self.overlap_col_raw.setValue(self.stitcher.overlap_col)
         self.overlap_col_raw.valueChanged.connect(self._update_overlap_labels)
 
         self.overlap_row_binned_lbl = QtWidgets.QLabel("")

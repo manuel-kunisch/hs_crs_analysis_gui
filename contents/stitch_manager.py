@@ -2,7 +2,7 @@ import json
 import logging
 import traceback
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Callable
 import re
 
 import numpy as np
@@ -28,19 +28,20 @@ def _parse_int_list(text: str) -> Optional[List[int]]:
 
 
 class _StitchWorker(QtCore.QObject):
+    """
+    Small helper worker to run stitching in a separate thread. Expects a callable that returns the stitched np.ndarray.
+    """
     finished = QtCore.pyqtSignal(object)  # np.ndarray
     failed = QtCore.pyqtSignal(str)
 
-    def __init__(self, stitcher: CrossCorrelationStitcher, folder: str, pattern: str):
+    def __init__(self, run_fn: Callable[[], np.ndarray]):
         super().__init__()
-        self.stitcher = stitcher
-        self.folder = folder
-        self.pattern = pattern
+        self._run_fn = run_fn
 
     @QtCore.pyqtSlot()
     def run(self):
         try:
-            stitched = self.stitcher.stitch_folder(self.folder, pattern=self.pattern)
+            stitched = self._run_fn()
             self.finished.emit(stitched)
         except Exception:
             self.failed.emit(traceback.format_exc())
@@ -144,6 +145,11 @@ class StitchManager(QtCore.QObject):
         col_wrap.addWidget(self.overlap_col_raw)
         col_wrap.addWidget(self.overlap_col_binned_lbl)
         params.addRow("Overlap col (raw px)", col_wrap)
+
+        self.use_corr_check = QtWidgets.QCheckBox("Use correlation (estimate shifts)")
+        self.use_corr_check.setChecked(True)
+        self.use_corr_check.toggled.connect(self._on_use_corr_toggled)
+        params.addRow("", self.use_corr_check)
 
         self.sigma_spin = QtWidgets.QDoubleSpinBox()
         self.sigma_spin.setRange(0.05, 50.0)
@@ -387,6 +393,19 @@ class StitchManager(QtCore.QObject):
         self.overlap_row_binned_lbl.setText(f"→ binned: {r_bin}px")
         self.overlap_col_binned_lbl.setText(f"→ binned: {c_bin}px")
 
+    def _on_use_corr_toggled(self, checked: bool):
+        # correlation-only controls
+        for w in (
+                self.sigma_spin,
+                self.mode_combo,
+                self.channel_list_edit,
+                self.display_channel_spin,
+                self.plot_check,
+                self.vmax_spin,
+        ):
+            if w is not None:
+                w.setEnabled(checked)
+
     def _on_scan_dir_changed(self, direction: str):
         # "right": higher x goes to the right (normal)
         # "left" : higher x goes to the left (mirrored display)
@@ -400,7 +419,6 @@ class StitchManager(QtCore.QObject):
             self._refresh_table()
         except Exception:
             pass
-
 
     # ---------------- presets ----------------
     def _collect_settings(self) -> dict:
@@ -526,8 +544,14 @@ class StitchManager(QtCore.QObject):
         self._set_busy(True, "Stitching…")
         self._thread = QtCore.QThread()
         self._thread.setPriority(QtCore.QThread.HighPriority)
-        self._worker = _StitchWorker(self.stitcher, str(self._folder), pattern)
-        self._worker.moveToThread(self._thread)
+        if self.use_corr_check.isChecked():
+            run_fn = lambda: self.stitcher.stitch_folder(str(self._folder), pattern=pattern)
+            self._set_busy(True, "Stitching (correlation)…")
+        else:
+            run_fn = lambda: self._stitch_no_corr(str(self._folder), pattern)
+            self._set_busy(True, "Stitching (grid / linear blend)…")
+
+        self._worker = _StitchWorker(run_fn)
 
         self._thread.started.connect(self._worker.run)
         self._worker.finished.connect(self._on_stitch_done)
@@ -559,9 +583,105 @@ class StitchManager(QtCore.QObject):
         self.refresh_btn.setEnabled(not busy)
         self.apply_regex_btn.setEnabled(not busy)
 
+    def _stitch_grid_linear(
+            self,
+            data: dict,
+            lookup_x: List[int],
+            lookup_y: List[int],
+            overlap_row: int,
+            overlap_col: int,
+    ) -> np.ndarray:
+        # build each column (stitch along y)
+        cols = []
+        for x in lookup_x:
+            if x not in data:
+                raise KeyError(f"Missing x={x} in data")
+            col = data[x][lookup_y[0]]["img"]
+            for y in lookup_y[1:]:
+                if y not in data[x]:
+                    raise KeyError(f"Missing tile at (x={x}, y={y})")
+                col = self._blend_vertical(col, data[x][y]["img"], overlap_row)
+            cols.append(col)
 
+        # stitch columns along x
+        out = cols[0]
+        for col in cols[1:]:
+            out = self._blend_horizontal(out, col, overlap_col)
 
+        return out
 
+    def _stitch_no_corr(self, folder: str, pattern: str) -> np.ndarray:
+        folder = Path(folder)
+        files = sorted(folder.glob(pattern or "*.tif"))
+        if not files:
+            raise FileNotFoundError(f"No files matching '{pattern}' in '{folder}'")
+
+        # load + bin + reorder to (y,x,c)
+        data, lookup_x, lookup_y = self.stitcher.build_dataset_from_files(files)
+
+        # IMPORTANT: respect scan dir meaning (your visualization flips columns accordingly)
+        if self.scan_combo.currentText() == "left":
+            lookup_x = sorted(lookup_x, reverse=True)
+        else:
+            lookup_x = sorted(lookup_x)
+
+        lookup_y = sorted(lookup_y)
+
+        stitched_yxc = self._stitch_grid_linear(
+            data=data,
+            lookup_x=list(lookup_x),
+            lookup_y=list(lookup_y),
+            overlap_row=int(self.stitcher.overlap_row),
+            overlap_col=int(self.stitcher.overlap_col),
+        )
+
+        # match CrossCorrelationStitcher output conventions:
+        if getattr(self.stitcher, "_added_channel_dim", False):
+            return stitched_yxc[:, :, 0]
+
+        if self.stitcher.input_channel_order.lower() in ("zyx", "cyx"):
+            return np.moveaxis(stitched_yxc, 2, 0)  # (y,x,c)->(c,y,x)
+
+        return stitched_yxc
+
+    @staticmethod
+    def _blend_vertical(top: np.ndarray, bottom: np.ndarray, ov: int) -> np.ndarray:
+        """
+        Blend two tiles vertically with linear alpha blending in the overlap region.
+        Parameters
+        ----------
+        top: np.ndarray - top tile
+        bottom : np.ndarray - bottom tile
+        ov  : int - overlap in rows
+
+        Returns
+        -------
+        np.ndarray - blended and stitched tile
+        """
+        if ov <= 0:
+            return np.concatenate([top, bottom], axis=0)
+        if ov >= top.shape[0] or ov >= bottom.shape[0]:
+            raise ValueError(f"overlap_row={ov} too large for tile height {top.shape[0]}")
+        if top.shape[1:] != bottom.shape[1:]:
+            raise ValueError(f"Tile shape mismatch: {top.shape} vs {bottom.shape}")
+
+        a = np.linspace(1.0, 0.0, ov, dtype=np.float32)[:, None, None]  # top weight
+        blend = top[-ov:].astype(np.float32, copy=False) * a + bottom[:ov].astype(np.float32, copy=False) * (1.0 - a)
+        return np.concatenate([top[:-ov], blend, bottom[ov:]], axis=0)
+
+    @staticmethod
+    def _blend_horizontal(left: np.ndarray, right: np.ndarray, ov: int) -> np.ndarray:
+        if ov <= 0:
+            return np.concatenate([left, right], axis=1)
+        if ov >= left.shape[1] or ov >= right.shape[1]:
+            raise ValueError(f"overlap_col={ov} too large for tile width {left.shape[1]}")
+        if left.shape[0] != right.shape[0] or left.shape[2] != right.shape[2]:
+            raise ValueError(f"Tile shape mismatch: {left.shape} vs {right.shape}")
+
+        a = np.linspace(1.0, 0.0, ov, dtype=np.float32)[None, :, None]  # left weight
+        blend = left[:, -ov:].astype(np.float32, copy=False) * a + right[:, :ov].astype(np.float32, copy=False) * (
+                    1.0 - a)
+        return np.concatenate([left[:, :-ov], blend, right[:, ov:]], axis=1)
 
 class RegexHelperDialog(QtWidgets.QDialog):
     def __init__(self, parent=None, initial_regex: str = "", ignorecase: bool = True):

@@ -608,7 +608,7 @@ def dummy_correlation(list_l, list_r, overlap, d_list, slice_idx_list, dummy_lis
     
 
     # move left image to the right such that no empty pixels in between images
-    new_image = np.empty((img_l.shape[0], img_l.shape[1]+img_r.shape[1]-d_max, img_l.shape[2]))
+    new_image = np.empty((img_l.shape[0], img_l.shape[1]+img_r.shape[1]-d_max, img_l.shape[2]), dtype=np.float32)
     correlations = []
     overlap_list = [] # x index where overlap starts
     for i, idx in enumerate(slice_idx_list[1:]):
@@ -671,7 +671,7 @@ def average_columns(image, mean_offset, overlap, y_slice_idx_list, overlap_idx_l
             plt.show()
         
         weight_list = lin_weights(overlap_l.shape[1])
-        stitch_center = np.full((im_l.shape[0], overlap_l.shape[1], im_l.shape[2]), np.NaN)
+        stitch_center = np.full((im_l.shape[0], overlap_l.shape[1], im_l.shape[2]), np.NaN, dtype=np.float32)
         
         for i in range(0, overlap_l.shape[1]):   # start at the top, place the bottom image on top of it
             # averaging the ith row with weights

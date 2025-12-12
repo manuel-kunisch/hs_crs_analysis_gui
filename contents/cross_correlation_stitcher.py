@@ -41,6 +41,7 @@ class CrossCorrelationStitcher:
     vmax: float = 2500.0              # only used when plot=True
     plot: bool = False
     scan_x_direction: str = "left"  # or "right to left"
+    binning: int = 2  # binning factor for raw data before stitching
 
     # --- filename parsing (x/y indices from filenames) ---
     # default matches e.g. "tile_x3_y7.tif", "stack-X-1_Y-2.tif", ...
@@ -137,6 +138,7 @@ class CrossCorrelationStitcher:
                 print(f"Warning: could not parse x/y from filename '{f}', skipping.")
                 continue
             img = loader(str(f))
+
             # reshape to format (y, x, c) if needed
             if img.ndim == 2:
                 img = img[:, :, np.newaxis]
@@ -148,6 +150,32 @@ class CrossCorrelationStitcher:
                 raise ValueError(
                     f"Loaded image from '{f}' has invalid number of dimensions: {img.ndim}"
                 )
+
+            Y, X, C = img.shape
+            N = self.binning
+
+            print(f"Binning tiles by factor {N}.")
+
+            if Y % N != 0 or X % N != 0:
+                # Handle cases where dimensions are not perfectly divisible
+                # Option 1: Raise an error
+                # raise ValueError(
+                #     f"Image dimensions ({Y}x{X}) are not divisible by binning factor {N}"
+                # )
+                # Option 2: Crop to be divisible (recommended for robustness)
+                Y_new = Y - (Y % N)
+                X_new = X - (X % N)
+                img = img[:Y_new, :X_new, :]
+                Y, X = Y_new, X_new  # Update Y and X
+            # bin the image
+            # Reshape the image to group pixels for averaging (Y, X, C)
+            # The new shape will be (Y/N, N, X/N, N, C)
+            # E.g., for 4x4 binning: (Y/4, 4, X/4, 4, C)
+            # We then average over the second (N) and fourth (N) axes.
+            img_binned = img.reshape(Y // N, N, X // N, N, C).mean(axis=(1, 3))
+
+            # Replace the original image with the binned image
+            img = img_binned
 
             # DEBUG
             xs.add(x)
@@ -235,10 +263,11 @@ class CrossCorrelationStitcher:
 if __name__ == "__main__":
     # Simple test / demo
     stitcher = CrossCorrelationStitcher()
-    stitcher.overlap_row = 200
-    stitcher.overlap_col = 200
-    stitcher.sigma_interval = 1.0
-    stitcher.mode = "sigma mean"    # sigma mean means outlier correction for calculation of shifts and averaging over all channels
+    stitcher.binning = 4
+    stitcher.sigma_interval = 2.0
+    stitcher.overlap_row = 100 // stitcher.binning
+    stitcher.overlap_col = 100 // stitcher.binning
+    stitcher.mode = "mean sigma"    # sigma mean means outlier correction for calculation of shifts and averaging over all channels
     stitcher.display_channel = 0
 
     stitcher.set_filename_regex(
@@ -262,9 +291,9 @@ if __name__ == "__main__":
 
     stitcher.plot = False
     stitcher.scan_x_direction = "right"  # or "right to left"
-    stitcher.channel_list = [20]  # only use channel 20 for stitching cross-correlation
+    stitcher.channel_list = [40]  # only use channel 20 for stitching cross-correlation
 
-    folder = '/Users/mkunisch/Desktop/Herzgewebe Tiffs/2025_11_04 thg_autofluorescence/mosaic split/thg binned small fov'
+    folder = '/Users/mkunisch/Desktop/Herzgewebe Tiffs/2025_11_04 thg_autofluorescence/mosaic split/thg'
     stitched = stitcher.stitch_folder(folder, pattern="*.tif")
-    plt.imshow(stitched[20], cmap="gray", vmax=stitcher.vmax)
+    plt.imshow(stitched[10], cmap="viridis")
     plt.show()

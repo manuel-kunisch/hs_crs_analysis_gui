@@ -143,10 +143,6 @@ def row_correlation(data, lookup_x, lookup_y, overlap_row, mode,
             overlap_bot = data[xpos][lookup_y[j+1]]['img'][:overlap_row,:,:]
             offset = max_correlation(overlap_top, overlap_bot, channels=channel_list, _plot=False)
             # stack overlap top and bottom vertically
-            stacked = np.vstack((overlap_top, overlap_bot))
-            plt.imshow(stacked[:,:,0])
-            plt.title('Overlap region of images at x=%i, y=%i and y=%i'%(xpos, ypos, lookup_y[j+1]))
-            plt.show()
             corr_list.append(offset)
     modes = set(mode.lower().split())   # to allow multiple modes, converts "SIGMA mEan" to {'sigma', 'mean'}
     print(modes)
@@ -203,13 +199,13 @@ def adjust_y(im_top, im_bot, offset, overlap):
     overlap_im_bot = im_bot[:overlap,:,:]
     im_top = im_top[:-overlap,:,:] 
     im_bot = im_bot[overlap:,:,:]
-    print('overlap input:\n', overlap_im_top.shape, overlap_im_bot.shape)
+    logger.debug('adjust_y: overlap input:\n', overlap_im_top.shape, overlap_im_bot.shape)
     
     # slicing is slightly faster than take_indices
     int_offset_row = int(offset[0])
     if int_offset_row != 0:
         if int_offset_row > 0:   
-            print('Bottom image is shifted downwards by %i pixels'
+            logger.debug('adjust_y: Bottom image is shifted downwards by %i pixels'
                   %(int_offset_row))
             # indices_im_top = np.arange(-int_offset_row, 0)
             # indices_im_bot = np.arange(int_offset_row)
@@ -218,27 +214,25 @@ def adjust_y(im_top, im_bot, offset, overlap):
             # in this case no rows must be added to the im_top and im_bot data
             # only remove those from the overlap 
         else:
-            print('Bottom image is shifted upwards by %i pixels'
+            logger.debug('adjust_y: Bottom image is shifted upwards by %i pixels'
                   %(int_offset_row))
             int_offset_row = abs(int_offset_row)
-            # indices_im_bot = np.arange(-int_offset_row, 0)
-            # indices_im_top = np.arange(int_offset_row)
-            
+
             bot_slice = np.s_[-int_offset_row:]
             top_slice = np.s_[:int_offset_row]
             
             # most outer end of overlaps are removed, we have to attach them to the data again
-            print('Adding row overhang of overlaps to the intial data')
-            print(overlap_im_top.shape, overlap_im_bot.shape)
+            logger.debug('Adding row overhang of overlaps to the intial data')
+            logger.debug(overlap_im_top.shape, overlap_im_bot.shape)
             overhang_im_top = overlap_im_top[top_slice,:,:]
             im_top = np.concatenate((im_top, overhang_im_top), axis=0)
             overhang_im_bot = overlap_im_bot[bot_slice,:,:]
-            print(overhang_im_top.shape, overhang_im_bot.shape)
+            logger.debug(overhang_im_top.shape, overhang_im_bot.shape)
             im_bot = np.concatenate((overhang_im_bot, im_bot), axis=0)
         # delete the overhang in overlaps
         overlap_im_top = np.delete(overlap_im_top, top_slice, axis=0)
         overlap_im_bot = np.delete(overlap_im_bot, bot_slice, axis=0)
-        print('overlap output:\n', overlap_im_top.shape, overlap_im_bot.shape)
+        logger.debug('overlap output:\n', overlap_im_top.shape, overlap_im_bot.shape)
     return im_top, im_bot, overlap_im_top, overlap_im_bot
 
 
@@ -250,9 +244,6 @@ def adjust_x(im_left, im_right, offset, overlap, _plot=False):
     overlap_im_right = im_right[:, :overlap,:]
     im_left = im_left[:, :-overlap,:] 
     im_right = im_right[:, overlap:,:]
-    print('overlap input:\n', overlap_im_left.shape, overlap_im_right.shape)
-    print('im input:\n', im_left.shape, im_right.shape)
-    
     
     int_offset_col = int(offset[1])
     if int_offset_col != 0:
@@ -261,21 +252,21 @@ def adjust_x(im_left, im_right, offset, overlap, _plot=False):
         # thus signs are reversed
         
         if int_offset_col > 0:   
-            print('Left image is shifted towards the left by %i pixels'
+            logger.debug('Left image is shifted towards the left by %i pixels'
                   %(int_offset_col))
             right_slice = np.s_[-int_offset_col:]
             left_slice =  np.s_[:int_offset_col]
             # most outer end of overlaps are removed, we have to attach them to the data again
-            print('Adding row overhang of overlaps to the intial data')
+            logger.debug('Adding row overhang of overlaps to the intial data')
             overhang_im_left = overlap_im_left[:, left_slice,:]
             im_left = np.concatenate((im_left, overhang_im_left), axis=1)
             overhang_im_right = overlap_im_right[:,right_slice,:]
-            print(overhang_im_left.shape, overhang_im_right.shape)
+            logger.debug(overhang_im_left.shape, overhang_im_right.shape)
             im_right = np.concatenate((overhang_im_right, im_right), axis=1)
         else:
             int_offset_col = abs(int_offset_col)
-            print('Left image is shifted towards the right by %i pixels'
-                  %(int_offset_col))
+            logger.debug('Left image is shifted towards the right by %i pixels'
+              %(int_offset_col))
             # print('THIS IS UNREALISTIC'*100)
             # correct x offset
             right_slice = np.s_[:int_offset_col]
@@ -289,13 +280,10 @@ def adjust_x(im_left, im_right, offset, overlap, _plot=False):
             plt.imshow(np.concatenate((im_left, overlap_im_left, overlap_im_right, im_right), axis=1)[:,:,ch], vmax=vmax_var)
             plt.title('Corrected x-offset')
             plt.show()
-        print('overlap output:\n', overlap_im_left.shape, overlap_im_right.shape)
     return im_left, im_right, overlap_im_left, overlap_im_right
 
 
 def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
-    print(dummy)
-    print(offset)
     x_max = bot_im.shape[1] # initial number of colums (e.g. 512)
     x_max_data = x_max + dummy[0]   # max index where no nans
     bot_im = add_cols(bot_im, dummy)    # matches the image shape such that the calculated offset is correct
@@ -313,18 +301,17 @@ def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
     x_min = abs(int_offset_col) # min x index of the image w/o dummy 
     x_l = dummy[0]
     top_overlap = top.shape[0]+overlap_top.shape[0]
-    print('-'*5)
     if int_offset_col != 0:
         dummy_bot = np.full((bot.shape[0], abs(int_offset_col), bot.shape[2]), np.NaN)
         dummy_top = np.full((top.shape[0], abs(int_offset_col), top.shape[2]), np.NaN)
         dummy_overlap = np.full((overlap_top.shape[0], abs(int_offset_col), overlap_top.shape[2]), np.NaN)
         if int_offset_col > 0:            
             # add dummy signal to top left and bottom right
-            print('Bottom image is shifted towards the right by %i pixels'
+            logger.debug('Bottom image is shifted towards the right by %i pixels'
                   %(int_offset_col))
             # top_slice = np.s_[-int_offset_col:]
             # bot_slice = np.s_[:int_offset_col]
-            print('Extending bottom right and top left to match shape after correlation')
+            logger.debug('Extending bottom right and top left to match shape after correlation')
             top_extension = (dummy_top, top)
             bot_extension = (bot, dummy_bot)
             o_top_extension = (dummy_overlap, overlap_top)
@@ -333,13 +320,13 @@ def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
             x_l += int_offset_col
             stitch_left = overlap_bot[:,dummy[0]:x_l,:]
             stitch_right = overlap_top[:,-int_offset_col -dummy[1]: overlap_top.shape[1]-dummy[1],:]
-            print(stitch_right.shape[1])
-            print('Bottom right is expanded with dummy signal')
+            logger.debug(stitch_right.shape[1])
+            logger.debug('Bottom right is expanded with dummy signal')
             new_overhang = [0, int_offset_col] # save that dummy was added to bottom right for next correlation
             connections = {'left': [top.shape[0]],
                            'right':[top_overlap]} 
         else:
-            print('Bottom image is shifted towards the left by %i pixels'
+            logger.debug('Bottom image is shifted towards the left by %i pixels'
                   %(int_offset_col))
             int_offset_col = x_min
             x_l += int_offset_col
@@ -347,16 +334,15 @@ def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
             bot_extension = (dummy_bot, bot)
             o_top_extension = (overlap_top, dummy_overlap)
             o_bot_extension = (dummy_overlap, overlap_bot)
-            print('Extending bottom left and top right to match shape after correlation')
+            logger.debug('Extending bottom left and top right to match shape after correlation')
             # parts of stitch center not averaged, will be appended later
             stitch_left = overlap_top[:,dummy[0]:x_l,:] # left overhang of avg
             stitch_right = overlap_bot[:,-int_offset_col -dummy[1]: overlap_bot.shape[1]-dummy[1],:]
             # effective offset is diminished by this value since we added signal to the other side 
             # than with the function extend_cols
-            print(stitch_left.shape, stitch_right.shape)
-            print('CRITICAL'*100)
+            logger.debug(stitch_left.shape, stitch_right.shape)
             new_overhang = [int_offset_col, 0] # save that dummy was added to bottom left for next correlation
-            print('Bottom left is expanded with dummy signal')
+            logger.debug('Bottom left is expanded with dummy signal')
             connections = {'left': [top_overlap],
                            'right':[top.shape[0]]}
         
@@ -371,16 +357,12 @@ def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
         # overlap_top = np.delete(overlap_top, top_slice, axis=1)
         # overlap_bot = np.delete(overlap_bot, bot_slice, axis=1)
     else:
-        print('No x-offset detected')
+        logger.debug('No x-offset detected')
         connections = {'left': [top_overlap],
                        'right':[top_overlap]}
         stitch_left = stitch_right = np.empty((overlap_top.shape[0], 0, overlap_top.shape[-1]))
         new_overhang = [0, 0]
-    # do not delete cols, vital for the column stitching step 
-    
-    
-    print('xmin: ', x_min, 'xstart: ', xstart)
-
+    # do not delete cols, vital for the column stitching step
     weight_list_x = lin_weights(overlap_top.shape[0])
     stitch_center = np.full((overlap_top.shape[0], top.shape[1], overlap_top.shape[2]), np.NaN)
     # avg is limited by offsets 
@@ -506,7 +488,7 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
     #%% ADD DUMMY TO FIX 
     tries = 0
     """ find iteratively the best offset """
-    while abs(mean_corr[0]) >= 1 and tries < 5:
+    while abs(mean_corr[0]) >= 1 and tries < 10:
         logger.debug(('TRY %s '%tries)*10)
         img_l, img_r =  list_l['img'], list_r['img']
         logger.debug(img_l.shape)
@@ -550,6 +532,7 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
             plt.imshow(new_image[:,:,ch], vmax=vmax_var)
             plt.show()
         tries+=1
+        print(f'first try mean offset ')
         
     mean_corr[np.isnan(mean_corr)] = 0
     logger.debug('-'*50, 'Found best correlation with setting %s'%mean_corr, '-'*50)
@@ -620,8 +603,7 @@ def dummy_correlation(list_l, list_r, overlap, d_list, slice_idx_list, dummy_lis
         spare_pixels = d_max - d_list[i]
         remove_l = spare_pixels // 2
         remove_r = remove_l + spare_pixels % 2  
-        y_slice = np.s_[slice_idx_list[i]:idx]        
-        print(y_slice)
+        y_slice = np.s_[slice_idx_list[i]:idx]
         # left part 
         # clear empty inbetween plus the spare pixels 
         img_start_idx = dummy_list[i]['right']+remove_r
@@ -629,43 +611,35 @@ def dummy_correlation(list_l, list_r, overlap, d_list, slice_idx_list, dummy_lis
         img_l_cleared = img_l[y_slice, x_slice_l, :]
         x_slice_r = np.s_[img_start_idx:]
         img_r_cleared = img_r[y_slice, x_slice_r,:]
-        
-        
+
         corr = max_correlation(img_l_cleared[:,-overlap:, :],
                                img_r_cleared[:,:overlap, :], channels=channel_list)
         correlations.append(corr)
-            
         new_image[y_slice, 0:img_l_cleared.shape[1],:] = img_l_cleared
         # right part  
         new_image[y_slice, img_l_cleared.shape[1]: ,:] = img_r_cleared
         overlap_list.append(img_l_cleared.shape[1])
-        
-
-        # plt.title(overlap_list[-1])
-        # plt.imshow(new_image[y_slice,:,0], vmax=vmax_var)
-        # plt.show()
-        
     return new_image, correlations, overlap_list
 
 
 
 def average_columns(image, mean_offset, overlap, y_slice_idx_list, overlap_idx_list, _plot = False):
-    # move left image to the right such that no empty pixels in between images
-    
     """
-    if mean_offset != 0:
-        if mean_offset > 0:
-            pass
-            # left image is too far left
-            # cut off pixels from left of the left overlap and append them to 
-            # the left image
-            # same for the right with the right side
-        else:
-            pass
-            # left image is too far right 
-            # cut off most inner pixel and bin them (this case is easer but 
-            # will appear not so often)
-        """
+    Averages the overlapping region of two column images based on the provided mean offset.
+
+    Parameters
+    ----------
+    image
+    mean_offset
+    overlap
+    y_slice_idx_list
+    overlap_idx_list
+    _plot
+
+    Returns
+    -------
+
+    """
         
     stitches = []
     for i, idx in enumerate(y_slice_idx_list[1:]):
@@ -694,14 +668,6 @@ def average_columns(image, mean_offset, overlap, y_slice_idx_list, overlap_idx_l
             stitch_center[:, i, :] = avg_cols
         
         stitched = np.concatenate((im_l, stitch_center, im_r), axis=1)
-        # if _plot:
-        #     plt.imshow(stitch_center[:,:,ch], vmax=vmax_var)
-        #     plt.title('stitch center uncompleted')
-        #     plt.show()
-        # if _plot:
-        #     plt.imshow(stitched[:,:,ch], vmax=vmax_var)
-        #     plt.title('stitched column')
-        #     plt.show()
         stitches.append(stitched)
     
     full_image = np.vstack(stitches)
@@ -741,14 +707,13 @@ def remove_outliers(correlations, sigma_interval = 2):
     numpy.ndarray: An array of correlations with outliers removed.
     
     """
-    print(('%s'%sigma_interval)*100)
     mean_corr = np.nanmean(correlations, axis=0)
     sd = np.std(correlations, axis=0)
     for corr_array in correlations:
         for i, value in enumerate(corr_array):
             if (value < mean_corr[i] - sigma_interval * sd[i] or
                 value > mean_corr[i] + sigma_interval * sd[i]):
-                print('Standard deviation too large', value)
+                logger.debug('Standard deviation too large', value)
                 corr_array[i] = np.NaN    
     return correlations
 
@@ -832,7 +797,7 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
     """
     # Checking the Channel list entries for possible overflows
     if channel_list is not None:
-        print('no channel list is provided, using all channels for stitching')
+        # clear channel list from outliers
         xpos, ypos = lookup_x[0], lookup_y[0]
         channels = data[xpos][ypos]['img'].shape[-1]
         outliers = [x for x in channel_list if x >= channels]
@@ -908,7 +873,7 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
         im_r = np.concatenate((im_l, im_r), axis=1)
 
     
-    print('-'*100, im_r.shape, '-'*100, )
+    print(f"First columm has shape {im_r.shape}")
     if _plot:
         plt.imshow(im_r[:,:,ch], vmax=vmax_var)
         # plt.savefig(spath+'/rows_stitched_with_extensions.png', dpi=400)

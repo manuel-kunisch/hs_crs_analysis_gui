@@ -32,31 +32,38 @@ def lin_weights(overlap, max_weight=1): # first avg = top image, last avg = bott
     return weight_list
 
 def cross_image(img1, img2, channels=None):
-    # remove nans as results become much worse with nans
-    nan1 = np.isnan(img1)
-    nan2 = np.isnan(img2)
-    im1 = img1.copy()
-    im2 = img2.copy()
-    
-    im1[nan1] = 0
-    im2[nan2] = 0
-    # get rid of the channels by performing a grayscale transform
-    # the type cast into 'float' is to avoid overflows
+    """
+    Compute cross-correlation image used for shift estimation.
+    Works in float32 to keep memory down.
+    """
+    # --- choose channels ---
     if channels is None:
-        # TODO: fix: use max intensity projection or more sophisticated. Not suited for HS data!
-        # print('Correlating all channels')
-        im1_sum = np.sum(im1.astype('float'), axis=2)
-        im2_sum = np.sum(im2.astype('float'), axis=2)
+        work1 = img1
+        work2 = img2
     else:
-        # print('Correlating channels %s'%channels)
-        im1_sum = np.sum(im1[:,:,channels].astype('float'), axis=2)
-        im2_sum = np.sum(im2[:,:,channels].astype('float'), axis=2)
-     # get rid of the averages, otherwise the results are not good
-    im1_sum -= np.mean(im1_sum)
-    im2_sum -= np.mean(im2_sum)
- 
-    # calculate the correlation image; note the flipping of onw of the images
-    return scipy.signal.fftconvolve(im1_sum, im2_sum[::-1,::-1], mode='same')  # im2 rotated by 180° (mirrors both horizontally and vertically)
+        if isinstance(channels, int):
+            channels = [channels]
+        work1 = img1[:, :, channels]
+        work2 = img2[:, :, channels]
+
+    # --- convert once to float32 ---
+    work1 = work1.astype(np.float32, copy=False)
+    work2 = work2.astype(np.float32, copy=False)
+
+    # --- replace NaNs in-place on the working views ---
+    np.nan_to_num(work1, copy=False)
+    np.nan_to_num(work2, copy=False)
+
+    # --- grayscale ---
+    im1_sum = work1.sum(axis=2)
+    im2_sum = work2.sum(axis=2)
+
+    # --- remove mean ---
+    im1_sum -= im1_sum.mean()
+    im2_sum -= im2_sum.mean()
+
+    return scipy.signal.fftconvolve(im1_sum, im2_sum[::-1, ::-1], mode='same')
+
 
     
 def max_correlation(im1, im2, channels = None, _plot=False):
@@ -488,8 +495,10 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
     #%% ADD DUMMY TO FIX 
     tries = 0
     """ find iteratively the best offset """
-    while abs(mean_corr[0]) >= 1 and tries < 10:
-        logger.debug(('TRY %s '%tries)*10)
+    max_tries = 2 # in case of very larger offsets, we might need to add more than one dummy region
+    while abs(mean_corr[0]) >= 1 and tries < max_tries:
+        # iterate max twice (a second time if a very large offset is present, then add dummy again)
+        print(f"Trying to merge columns, iteration {tries+1}")
         img_l, img_r =  list_l['img'], list_r['img']
         logger.debug(img_l.shape)
         int_offset = int(mean_corr[0])
@@ -523,18 +532,15 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
                                                               d_list, slice_idx_list, dummy_list,
                                                               channel_list = channel_list)        
         # new (more precise correlations)
-        logger.debug(overlap_list)
         mean_corr = mean_corr_no_outliers(corr_new, sigma_interval)
-        logger.debug('_'*500)
-        logger.debug(mean_corr)
-        logger.debug('_'*500)
         if _plot:
             plt.imshow(new_image[:,:,ch], vmax=vmax_var)
             plt.show()
         tries+=1
-        print(f'first try mean offset ')
+        print(f'first try mean offset after adding dummy: {mean_corr}')
+
         
-    mean_corr[np.isnan(mean_corr)] = 0
+    print("Final mean offset after dummy adjustment: ", mean_corr)
     logger.debug('-'*50, 'Found best correlation with setting %s'%mean_corr, '-'*50)
     """ after finally adjusting the relative offset, we only need to calculate the average (as already done before)
         for all slices stored in 'slice_idx'!

@@ -267,7 +267,7 @@ if __name__ == "__main__":
     stitcher.sigma_interval = 2.0
     stitcher.overlap_row = 100 // stitcher.binning
     stitcher.overlap_col = 100 // stitcher.binning
-    stitcher.mode = "mean sigma"    # sigma mean means outlier correction for calculation of shifts and averaging over all channels
+    stitcher.mode = "sigma"    # sigma mean means outlier correction for calculation of shifts and averaging over all channels
     stitcher.display_channel = 0
 
     stitcher.set_filename_regex(

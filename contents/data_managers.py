@@ -195,6 +195,9 @@ class ImageLoader(QtWidgets.QWidget):
 
     def _reprocess_from_raw(self):
         logger.info("Reprocessing image from raw data")
+        if self.image is None:
+            logger.warning("No image loaded; cannot reprocess")
+            return
         if self._raw_image is None:
             # inform the user that processing is not possible
             QtWidgets.QMessageBox.warning(

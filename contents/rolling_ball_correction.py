@@ -417,6 +417,9 @@ class RollingBallCorrectionController(QtCore.QObject):
             )
         return RollingBallSnapshot(cfg=cfg_copy, reference_model=model_copy)
 
+    def last_field(self) -> Optional[np.ndarray]:
+        return self._last_field
+
     # ---- reference info ----
     def reference_filename(self) -> str:
         return self._reference_filename
@@ -516,7 +519,6 @@ class RollingBallCorrectionController(QtCore.QObject):
         snap = self.snapshot()
         out = snap.undo_correction(img, self._last_field)
         return out
-
 
 # --------------------------
 # Preview dialog with crosshair

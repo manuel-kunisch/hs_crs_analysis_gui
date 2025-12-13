@@ -24,6 +24,7 @@ class ImageLoader(QtWidgets.QWidget):
             parent:
         """
         super().__init__(parent)
+        self._raw_image = None  # store the raw image for reprocessing, e.g., rolling ball. None if not applicable
         self.wavelength_meta = None
         self.update_img_callback = update_img_callback
         self._image = None
@@ -112,6 +113,8 @@ class ImageLoader(QtWidgets.QWidget):
         self.rb_ctrl.configChanged.connect(self._reprocess_from_raw)
         self.rb_ctrl.referenceChanged.connect(self._reprocess_from_raw)
         rb_layout.addWidget(self.rb_widget)
+        # Provide StitchManager with a per-run, thread-safe tile preprocessor
+        self.stitch_manager.set_tile_preprocess_factory(self._rb_tile_preprocess_factory)
 
         # Add physical units tab
         self.physical_units_manager = PhysicalUnitsManager()
@@ -119,7 +122,21 @@ class ImageLoader(QtWidgets.QWidget):
         self.physical_units_manager.widget.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         tab_widget.addTab(physical_units_tab, "Physical Units")
 
+    def _rb_tile_preprocess_factory(self):
+        """
+        Return a thread-safe callable to preprocess tiles, or None.
+        For stitching, you typically want REFERENCE mode only (to avoid seams).
+        """
+        if not self.rb_ctrl.cfg.enabled:
+            return None
 
+        # Strong recommendation: only allow reference mode for stitching
+        if self.rb_ctrl.cfg.mode != "reference" or self.rb_ctrl.reference_model() is None:
+            logger.warning("Rolling-ball enabled but not in reference mode; not applying to tiles to avoid seams.")
+            return None
+
+        snap = self.rb_ctrl.snapshot()  # thread-safe frozen config/model
+        return snap.apply
 
     def load_image_from_text(self):
         # Get the text from the text edit widget
@@ -179,6 +196,7 @@ class ImageLoader(QtWidgets.QWidget):
     def _reprocess_from_raw(self):
         logger.info("Reprocessing image from raw data")
         if self._raw_image is None:
+            print('No raw image to reprocess. Maybe a stitched image is loaded?')
             return
         img = self.rb_ctrl.apply(self._raw_image) if self.rb_ctrl.cfg.enabled else self._raw_image
         self.image = img    # trigger callback attached to update_img_callback
@@ -225,6 +243,8 @@ class ImageLoader(QtWidgets.QWidget):
 
 
     def load_image(self, image_data):
+        # load image from external source (e.g., stitching manager)
+        self._raw_image = None  # prevent reprocessing from raw
         self.image = image_data
         return image_data
 

@@ -110,6 +110,7 @@ class CrossCorrelationStitcher:
     def build_dataset_from_files(
         self,
         files: Sequence[Union[str, Path]],
+        tile_process_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         loader: Callable[[str], np.ndarray] = tiff.imread,
     ) -> Tuple[Dict[int, Dict[int, Dict[str, np.ndarray]]], list[int], list[int]]:
         """
@@ -120,6 +121,9 @@ class CrossCorrelationStitcher:
         ----------
         files : sequence of paths
             Every filename must contain x and y indices that the regex can extract.
+        tile_process_fn : callable, optional
+            Function that receives a numpy array and returns a processed numpy array.
+            Applied to each tile after loading.
         loader : callable
             Function that receives a string path and returns a 3D numpy array.
 
@@ -140,6 +144,10 @@ class CrossCorrelationStitcher:
                 print(f"Warning: could not parse x/y from filename '{f}', skipping.")
                 continue
             img = loader(str(f))
+
+            # apply tile processing function if provided
+            if tile_process_fn is not None:
+                img = tile_process_fn(img)
 
             # reshape to format (y, x, c) if needed
             if img.ndim == 2:
@@ -228,19 +236,21 @@ class CrossCorrelationStitcher:
         self,
         files: Sequence[Union[str, Path]],
         loader: Callable[[str], np.ndarray] = tiff.imread,
+        tile_process_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None
     ) -> np.ndarray:
         """
         One-shot convenience method: parse filenames, load images, stitch.
 
         This is the method you probably want to call from a QThread in the GUI.
         """
-        data, lookup_x, lookup_y = self.build_dataset_from_files(files, loader)
+        data, lookup_x, lookup_y = self.build_dataset_from_files(files, loader=loader, tile_process_fn=tile_process_fn)
         return self.stitch(data, lookup_x, lookup_y)
 
     def stitch_folder(
         self,
         folder: Union[str, Path],
         pattern: str = "*.tif",
+        tile_preprocess_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         loader: Callable[[str], np.ndarray] = tiff.imread,
     ) -> np.ndarray:
         """
@@ -252,6 +262,11 @@ class CrossCorrelationStitcher:
             Base folder containing tiles.
         pattern : str
             Glob pattern, default "*.tif".
+        tile_preprocess_fn : callable, optional
+            Function that receives a numpy array and returns a processed numpy array.
+            Applied to each tile after loading.
+        loader : callable
+            Function that receives a string path and returns a 3D numpy array.
         """
         folder = Path(folder)
         file_list = sorted(folder.glob(pattern))
@@ -259,7 +274,7 @@ class CrossCorrelationStitcher:
             raise FileNotFoundError(
                 f"No files matching pattern '{pattern}' in '{folder}'"
             )
-        stitch_result = self.stitch_from_files(file_list, loader)
+        stitch_result = self.stitch_from_files(file_list, loader, tile_process_fn=tile_preprocess_fn)
         if self._added_channel_dim:
             # delete the final channel dimension we added
             return stitch_result[:, :, 0]

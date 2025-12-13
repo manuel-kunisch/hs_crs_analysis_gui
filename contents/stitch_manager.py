@@ -64,6 +64,9 @@ class StitchManager(QtCore.QObject):
         self._folder: Optional[Path] = None
         self._thread: Optional[QtCore.QThread] = None
         self._worker: Optional[_StitchWorker] = None
+        # tile processing
+        self._tile_preprocess_factory: Optional[Callable[[], Optional[Callable[[np.ndarray], np.ndarray]]]] = None
+        self._tile_preprocess_fn_for_run: Optional[Callable[[np.ndarray], np.ndarray]] = None
 
     # ---------------- UI ----------------
     def init_ui(self):
@@ -525,6 +528,17 @@ class StitchManager(QtCore.QObject):
         except Exception as e:
             self.status_lbl.setText(f"Save stitched image failed: {e}")
 
+    # tile preprocessing factory
+    def set_tile_preprocess_factory(
+            self,
+            factory: Optional[Callable[[], Optional[Callable[[np.ndarray], np.ndarray]]]]
+    ) -> None:
+        """
+        Provide a function that returns a per-run tile preprocessing function.
+        IMPORTANT: factory should return a thread-safe callable (e.g. rb_ctrl.snapshot().apply).
+        """
+        self._tile_preprocess_factory = factory
+
     # ---------------- stitching ----------------
     def stitch(self):
         if self._folder is None:
@@ -564,15 +578,28 @@ class StitchManager(QtCore.QObject):
 
         pattern = self.pattern_edit.text().strip() or "*.tif"
 
+        # Capture a stable, thread-safe tile preprocessor for THIS stitching run
+        self._tile_preprocess_fn_for_run = None
+        if self._tile_preprocess_factory is not None:
+            self._tile_preprocess_fn_for_run = self._tile_preprocess_factory()
+
         # start worker thread
         self._set_busy(True, "Stitching…")
         self._thread = QtCore.QThread()
         self._thread.setPriority(QtCore.QThread.HighPriority)
         if self.use_corr_check.isChecked():
-            run_fn = lambda: self.stitcher.stitch_folder(str(self._folder), pattern=pattern)
+            run_fn = lambda: self.stitcher.stitch_folder(
+                str(self._folder),
+                pattern=pattern,
+                tile_preprocess_fn=self._tile_preprocess_fn_for_run,
+            )
             self._set_busy(True, "Stitching (correlation)…")
         else:
-            run_fn = lambda: self._stitch_no_corr(str(self._folder), pattern)
+            run_fn = lambda: self._stitch_no_corr(
+                str(self._folder),
+                pattern,
+                tile_preprocess_fn=self._tile_preprocess_fn_for_run,
+            )
             self._set_busy(True, "Stitching (grid / linear blend)…")
 
         self._worker = _StitchWorker(run_fn)
@@ -634,14 +661,20 @@ class StitchManager(QtCore.QObject):
 
         return out
 
-    def _stitch_no_corr(self, folder: str, pattern: str) -> np.ndarray:
+    def _stitch_no_corr(
+            self, folder: str, pattern: str,
+            tile_preprocess_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None
+    ) -> np.ndarray:
         folder = Path(folder)
         files = sorted(folder.glob(pattern or "*.tif"))
         if not files:
             raise FileNotFoundError(f"No files matching '{pattern}' in '{folder}'")
 
         # load + bin + reorder to (y,x,c)
-        data, lookup_x, lookup_y = self.stitcher.build_dataset_from_files(files)
+        data, lookup_x, lookup_y = self.stitcher.build_dataset_from_files(
+            files,
+            tile_preprocess_fn=tile_preprocess_fn
+        )
 
         # IMPORTANT: respect scan dir meaning (your visualization flips columns accordingly)
         if self.scan_combo.currentText() == "left":

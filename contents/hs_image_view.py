@@ -148,8 +148,10 @@ class RamanImageView(ImageViewLineRoi):
         super().timeLineChanged()
         logger.debug('timeLineChanged(): Time Line call')
         self.roiChanged()
-        if self.currentIndex >= self.nframes() and self.playLoop:
-            self.setCurrentIndex(0)
+        # prevent reset when the user drags the slider to the end
+
+        # if self.currentIndex >= self.nframes() and self.playLoop:
+        #     self.setCurrentIndex(0)
 
     def hideTimeLine(self):
         self.ui.roiPlot.hideAxis('bottom')

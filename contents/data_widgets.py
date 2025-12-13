@@ -365,8 +365,13 @@ class DataWidget(QtWidgets.QWidget):
         self.roi_manager.update_data(img)
 
     def display_raw_image(self, keep_view=True):
-        logger.info('Displaying raw image')
+        logger.info('Displaying image')
+        # keep the current index
+        current_index = self.raman_raw_image_view.currentIndex
         self.raman_raw_image_view.setImage(self.image[...], keep_viewbox=keep_view)
+        if self.image.shape[0] >= current_index:
+            self.raman_raw_image_view.setCurrentIndex(current_index)
+
 
     def display_modified_image(self, modified_data: np.ndarray = None, keep_view=False):
         """

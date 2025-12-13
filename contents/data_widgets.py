@@ -744,7 +744,7 @@ class DataHandler(QtWidgets.QWidget):
         if np.isnan(image).any() or np.isinf(image).any() or np.any(image == 0):
             logger.warning('Loaded image contains NaN or Inf values, which may cause issues in further processing.')
             image = np.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
-            image = image.astype(np.float64)
+            image = image.astype(np.float32) # ensure float type for epsilon replacement, float32 is well enough
             image[image==0] = sys.float_info.epsilon    # replace zeros with small value to avoid issues in log scaling etc.
             logger.warning('NaN and Inf values replaced with 0.0, zeros replaced with small epsilon value.')
             logger.warning(f"Image dtype after replacement: {image.dtype}")

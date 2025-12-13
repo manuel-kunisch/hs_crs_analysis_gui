@@ -107,8 +107,11 @@ class ImageLoader(QtWidgets.QWidget):
         rb_tab = QtWidgets.QWidget()
         tab_widget.addTab(rb_tab, "Rolling Ball Correction")
         rb_layout = QtWidgets.QVBoxLayout(rb_tab)
-        rb_widget = RollingBallCorrectionWidget(RollingBallCorrectionController())
-        rb_layout.addWidget(rb_widget)
+        self.rb_ctrl = RollingBallCorrectionController()
+        self.rb_widget = RollingBallCorrectionWidget(self.rb_ctrl)
+        self.rb_ctrl.configChanged.connect(self._reprocess_from_raw)
+        self.rb_ctrl.referenceChanged.connect(self._reprocess_from_raw)
+        rb_layout.addWidget(self.rb_widget)
 
         # Add physical units tab
         self.physical_units_manager = PhysicalUnitsManager()
@@ -161,8 +164,24 @@ class ImageLoader(QtWidgets.QWidget):
         image = imread(fpath).astype(np.uint16)     # assume 16 bit image and read in as such
         self.drag_label.setText(f"✔ Loaded: {fpath.split('/')[-1]}")
         logger.info(f"Loaded image from {fpath}")
-        self.image = image  # load as image and trigger callback in other classes
+
+        self._raw_image = image
+
+        # 2) apply rolling ball BEFORE anything else sees it
+        if self.rb_ctrl.cfg.enabled:
+            corrected = self.rb_ctrl.apply(image)
+        else:
+            corrected = image
+
+        self.image = corrected  # load as image and trigger callback attached to update_img_callback
         return self.image
+
+    def _reprocess_from_raw(self):
+        logger.info("Reprocessing image from raw data")
+        if self._raw_image is None:
+            return
+        img = self.rb_ctrl.apply(self._raw_image) if self.rb_ctrl.cfg.enabled else self._raw_image
+        self.image = img    # trigger callback attached to update_img_callback
 
     def try_load_wavelength_json(self, directory: str):
         self.wavelength_meta = None

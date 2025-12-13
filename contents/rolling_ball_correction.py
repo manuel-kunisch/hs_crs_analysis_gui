@@ -381,6 +381,28 @@ class RollingBallCorrectionController(QtCore.QObject):
     def reference_model(self) -> Optional[GaussianReferenceModel]:
         return self._reference_model
 
+    def rebuild_reference_preview_from_model(self) -> None:
+        """
+        Recompute preview gaussian field + center based on the CURRENT reference model.
+        Keeps the original fit_input (blurred field) and raw image.
+        """
+        if self._reference_model is None:
+            return
+
+        # Prefer the stored fit_input shape (reference shape), fall back to model shape
+        if self._ref_preview_fit_input is not None:
+            shape_yx = self._ref_preview_fit_input.shape
+        else:
+            shape_yx = self._reference_model.ref_shape_yx
+
+        # Rebuild gaussian field from the (possibly edited) model
+        self._ref_preview_field = _make_gaussian_field_from_model(shape_yx, self._reference_model)
+
+        # Recompute fitted center from dx/dy
+        x0, y0 = _center_xy_from_offsets(self._reference_model.dx_px, self._reference_model.dy_px, shape_yx)
+        self._ref_preview_center_xy = (float(x0), float(y0))
+
+
     def has_reference_preview(self) -> bool:
         return self._ref_preview_fit_input is not None and self._ref_preview_field is not None and self._ref_preview_center_xy is not None
 
@@ -734,7 +756,8 @@ class RollingBallCorrectionWidget(QtWidgets.QWidget):
 
     def _on_ref_params(self):
         """
-        If a reference model exists, update it from the GUI edits (dx/dy/sigmas).
+        If a reference model exists, update it from the GUI edits (dx/dy/sigmas),
+        then rebuild the gaussian preview payload so the preview dialog shows the updated model.
         """
         model = self.ctrl.reference_model()
         if model is None:
@@ -745,11 +768,16 @@ class RollingBallCorrectionWidget(QtWidgets.QWidget):
             dy_px=float(self.dy_spin.value()),
             sigma_x_px=float(self.sigx_spin.value()),
             sigma_y_px=float(self.sigy_spin.value()),
-            amp=float(model.amp),
+            amp=float(model.amp),  # keep fitted intensity scale
             offset=float(model.offset),
             ref_shape_yx=model.ref_shape_yx,
         )
-        self.ctrl._reference_model = new_model  # keep as drop-in; no extra API needed
+
+        self.ctrl._reference_model = new_model
+
+        # rebuild preview payload
+        self.ctrl.rebuild_reference_preview_from_model()
+
         self.ctrl.referenceChanged.emit()
 
     # -----------------
@@ -816,15 +844,19 @@ class RollingBallCorrectionWidget(QtWidgets.QWidget):
             pass
 
     def _show_reference_preview(self):
-        if not self.ctrl.has_reference_preview():
+        model = self.ctrl.reference_model()
+        if model is None or not self.ctrl.has_reference_preview():
             QtWidgets.QMessageBox.information(self, "No preview", "No reference fit available yet.")
             return
 
-        raw, fit_input, gauss_field, center_xy = self.ctrl.get_reference_preview_payload()
-        model = self.ctrl.reference_model()
-        if raw is None or fit_input is None or gauss_field is None or center_xy is None or model is None:
+        raw, fit_input, _, _ = self.ctrl.get_reference_preview_payload()
+        if raw is None or fit_input is None:
             QtWidgets.QMessageBox.information(self, "No preview", "Reference preview data is incomplete.")
             return
+
+        # Build gaussian + center from CURRENT model (so it always reflects edits)
+        gauss_field = _make_gaussian_field_from_model(fit_input.shape, model)
+        center_xy = _center_xy_from_offsets(model.dx_px, model.dy_px, fit_input.shape)
 
         dlg = CorrectionPreviewDialog(
             raw=raw,

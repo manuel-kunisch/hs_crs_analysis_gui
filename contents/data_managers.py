@@ -9,6 +9,7 @@ from tifffile import imread
 
 from contents import stitch_functions as stitching
 from contents.physical_units_manager import PhysicalUnitsManager
+from contents.rolling_ball_correction import RollingBallCorrectionWidget, RollingBallCorrectionController
 from contents.stitch_manager import StitchManager
 
 logger = logging.getLogger('Data Manager')
@@ -96,8 +97,6 @@ class ImageLoader(QtWidgets.QWidget):
 
         # Add the stitching tab to the tab widget
         tab_widget.addTab(stitching_tab, "HS Image Stitching")
-
-
         # Initialize and add the StitchManager widget to the stitching tab
         self.stitch_manager = StitchManager()
         self.stitch_manager.init_ui()
@@ -107,6 +106,9 @@ class ImageLoader(QtWidgets.QWidget):
         # Add rolling ball correction tab
         rb_tab = QtWidgets.QWidget()
         tab_widget.addTab(rb_tab, "Rolling Ball Correction")
+        rb_layout = QtWidgets.QVBoxLayout(rb_tab)
+        rb_widget = RollingBallCorrectionWidget(RollingBallCorrectionController())
+        rb_layout.addWidget(rb_widget)
 
         # Add physical units tab
         self.physical_units_manager = PhysicalUnitsManager()

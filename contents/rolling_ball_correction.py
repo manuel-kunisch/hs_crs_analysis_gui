@@ -501,10 +501,17 @@ class CorrectionPreviewDialog(QtWidgets.QDialog):
         self.glw = pg.GraphicsLayoutWidget()
         self.vb = self.glw.addViewBox(row=0, col=0)
         self.vb.setAspectLocked(True)
+        self.glw.ci.layout.setColumnStretchFactor(0, 10)  # image area
+        self.glw.ci.layout.setColumnStretchFactor(1, 2)  # histogram
 
         self.img_item = pg.ImageItem(axisOrder="row-major")
         self.vb.addItem(self.img_item)
-        # add a histogram to the right
+
+        # --- Histogram / LUT on the right ---
+        self.hist = pg.HistogramLUTItem()
+        self.hist.setImageItem(self.img_item)  # links histogram + levels to the image
+        self.hist.vb.setMouseEnabled(y=True, x=False)  # typical: only vertical zoom/pan
+        self.glw.addItem(self.hist, row=0, col=1)  # place it to the right
 
         self.vline = pg.InfiniteLine(angle=90, movable=False)
         self.hline = pg.InfiniteLine(angle=0, movable=False)
@@ -536,7 +543,18 @@ class CorrectionPreviewDialog(QtWidgets.QDialog):
         hi = float(np.nanpercentile(img, 99))
         if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
             lo, hi = float(np.nanmin(img)), float(np.nanmax(img))
+
+        # Set image + initial levels
         self.img_item.setImage(img, levels=(lo, hi))
+
+        # Ensure histogram knows about the new image range/levels
+        self.hist.region.setRegion((lo, hi))
+
+        # Optional: show the actual levels in the info line
+        # (append without losing your existing info)
+        base = self.info.text().split(" | Levels:")[0]
+        self.info.setText(f"{base} | Levels: [{lo:.3g}, {hi:.3g}]")
+
         self.vb.autoRange()
 
 

@@ -196,7 +196,13 @@ class ImageLoader(QtWidgets.QWidget):
     def _reprocess_from_raw(self):
         logger.info("Reprocessing image from raw data")
         if self._raw_image is None:
-            print('No raw image to reprocess. Maybe a stitched image is loaded?')
+            # inform the user that processing is not possible
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Reprocessing Not Possible",
+                "No raw image data available for reprocessing.\n\n"
+                "Please rerun the image loading step (e.g. stitching).",
+            )
             return
         img = self.rb_ctrl.apply(self._raw_image) if self.rb_ctrl.cfg.enabled else self._raw_image
         self.image = img    # trigger callback attached to update_img_callback

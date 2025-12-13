@@ -156,28 +156,43 @@ def _make_gaussian_field(shape_yx: Tuple[int, int],
 def _make_gaussian_field_from_model(target_shape_yx: Tuple[int, int],
                                     model: GaussianReferenceModel) -> np.ndarray:
     """
-    If target shape differs from model.ref_shape_yx, scale dx/dy and sigma_x/sigma_y
-    by width/height ratios (keeps the same relative illumination geometry).
+    Build a gaussian field for target_shape_yx by scaling the MODEL parameters
+    from the reference shape to the new shape in a geometrically consistent way:
+
+    - x0,y0 are scaled in normalized pixel coordinates (relative position preserved)
+    - sigma_x,sigma_y are scaled independently for x and y
     """
     th, tw = target_shape_yx
     rh, rw = model.ref_shape_yx
 
-    if (th, tw) == (rh, rw):
-        dx, dy = model.dx_px, model.dy_px
-        sx, sy = model.sigma_x_px, model.sigma_y_px
-        amp, off = model.amp, model.offset
-        return _make_gaussian_field((th, tw), dx, dy, sx, sy, amp, off)
+    # Reference center and absolute fitted center in reference coords:
+    cx_ref = (rw - 1) / 2.0
+    cy_ref = (rh - 1) / 2.0
+    x0_ref = cx_ref + float(model.dx_px)
+    y0_ref = cy_ref + float(model.dy_px)
 
-    sx_scale = tw / max(1, rw)
-    sy_scale = th / max(1, rh)
+    # Scale positions and sigmas to target coordinates using (N-1) scaling.
+    # This preserves relative location even for even/odd size changes.
+    sx_scale = (tw - 1) / max(1.0, (rw - 1))
+    sy_scale = (th - 1) / max(1.0, (rh - 1))
 
-    dx = model.dx_px * sx_scale
-    dy = model.dy_px * sy_scale
-    sx = model.sigma_x_px * sx_scale
-    sy = model.sigma_y_px * sy_scale
+    x0 = x0_ref * sx_scale
+    y0 = y0_ref * sy_scale
 
-    # amp/offset stay in intensity units, do not scale
-    return _make_gaussian_field((th, tw), dx, dy, sx, sy, model.amp, model.offset)
+    sigma_x = max(1e-6, float(model.sigma_x_px) * sx_scale)
+    sigma_y = max(1e-6, float(model.sigma_y_px) * sy_scale)
+
+    # Build gaussian field directly at target resolution:
+    xx = np.arange(tw, dtype=np.float32)
+    yy = np.arange(th, dtype=np.float32)
+    X, Y = np.meshgrid(xx, yy)
+
+    g = float(model.amp) * np.exp(
+        -0.5 * ((X - x0) / sigma_x) ** 2
+        -0.5 * ((Y - y0) / sigma_y) ** 2
+    ) + float(model.offset)
+
+    return g.astype(np.float32)
 
 
 def _estimate_blur_field(a2: np.ndarray, cfg: RollingBallConfig) -> np.ndarray:
@@ -302,6 +317,7 @@ class RollingBallSnapshot:
                 model, field, _ = _estimate_gaussian_model_from_field(fit_input)
             else:
                 field = fit_input
+
 
         denom = field + float(self.cfg.eps)
         if self.cfg.normalize_to == "mean":
@@ -854,9 +870,16 @@ class RollingBallCorrectionWidget(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, "No preview", "Reference preview data is incomplete.")
             return
 
-        # Build gaussian + center from CURRENT model (so it always reflects edits)
+        # Build updated gaussian + updated center from CURRENT model
         gauss_field = _make_gaussian_field_from_model(fit_input.shape, model)
-        center_xy = _center_xy_from_offsets(model.dx_px, model.dy_px, fit_input.shape)
+
+        # compute center_xy in this fit_input coordinate system (for crosshair)
+        h, w = fit_input.shape
+        cx = (w - 1) / 2.0
+        cy = (h - 1) / 2.0
+        x0 = cx + model.dx_px
+        y0 = cy + model.dy_px
+        center_xy = (float(x0), float(y0))
 
         dlg = CorrectionPreviewDialog(
             raw=raw,

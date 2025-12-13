@@ -351,7 +351,34 @@ class RollingBallSnapshot:
 
         return out.astype(out_dtype, copy=False)
 
-
+    def undo_correction(self, img: np.ndarray, last_field: np.ndarray) -> np.ndarray:
+        """
+        Undo illumination correction by applying the inverse of the last used field.
+        Note: this may not perfectly restore the original image due to clamping and rounding.
+        """
+        a2 = _as_2d_float(img)
+        shape_yx = a2.shape
+        denom = last_field + float(self.cfg.eps)
+        if self.cfg.normalize_to == "mean":
+            target = float(np.mean(last_field))
+        elif self.cfg.normalize_to == "center":
+            cy, cx = shape_yx[0] // 2, shape_yx[1] // 2
+            target = float(last_field[cy, cx])
+        else:
+            target = float(np.median(last_field))
+        factor = (denom / target).astype(np.float32)
+        out_dtype = img.dtype
+        if img.ndim == 2:
+            out = img.astype(np.float32, copy=False) * factor
+        elif img.ndim == 3:
+            out = img.astype(np.float32, copy=False) * factor[None, :, :]
+        else:
+            raise ValueError(f"Expected 2D or 3D array, got shape {img.shape}")
+        if self.cfg.clip_output:
+            out_max = _dtype_max(img)
+            if out_max is not None:
+                out = np.clip(out, 0, out_max)
+        return out.astype(out_dtype, copy=False)
 # --------------------------
 # Controller
 # --------------------------
@@ -479,8 +506,16 @@ class RollingBallCorrectionController(QtCore.QObject):
         self.lastApplyChanged.emit()
         return out
 
-    def last_field(self) -> Optional[np.ndarray]:
-        return self._last_field
+    def undo_correction(self, img: np.ndarray) -> np.ndarray:
+        """
+        Undo illumination correction by applying the inverse of the last used field.
+        Note: this may not perfectly restore the original image due to clamping and rounding.
+        """
+        if self._last_field is None:
+            return img
+        snap = self.snapshot()
+        out = snap.undo_correction(img, self._last_field)
+        return out
 
 
 # --------------------------

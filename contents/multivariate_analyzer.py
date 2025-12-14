@@ -251,6 +251,69 @@ class MultivariateAnalyzer(object):
         self._W_prepared =  np.all(self.seed_W)
         logger.info(f'Set W seed matrix, prepared={self._W_prepared}')
 
+    def create_background_component_from_reference_W(
+            self,
+            signal_component: int,
+            background_component: int,
+            radius_px: int,
+            smooth_sigma: float = 3.0,
+            downsample: int = 2,
+            eps: float = 1e-6,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Create a *new* background component from an already-defined W seed of a signal component.
+
+        W_bg = rolling_ball(W_signal_image)
+        H_bg = weighted mean spectrum (raw data) with weights=W_bg
+
+        Returns
+        -------
+        W_bg : (n_pixels,) float32
+        H_bg : (n_bands,) float32
+        """
+        try:
+            from skimage.restoration import rolling_ball
+        except Exception as e:
+            raise RuntimeError("scikit-image rolling_ball not available") from e
+
+        if self.seed_W is None or not np.any(self.seed_W[:, signal_component]):
+            raise RuntimeError(f"W seed for component {signal_component} is not defined yet.")
+
+        ny, nx = self.raw_data_3d.shape[1], self.raw_data_3d.shape[2]
+
+        # --- reference image from existing W seed ---
+        ref = self.seed_W[:, signal_component].reshape(ny, nx).astype(np.float32)
+
+        # optional downsample for speed
+        ds = max(int(downsample), 1)
+        if ds > 1:
+            ref_ds = ref[::ds, ::ds]
+            rad_ds = max(int(radius_px // ds), 1)
+            bg_ds = rolling_ball(ref_ds, radius=rad_ds).astype(np.float32)
+            bg = np.repeat(np.repeat(bg_ds, ds, axis=0), ds, axis=1)[:ny, :nx]
+        else:
+            bg = rolling_ball(ref, radius=int(radius_px)).astype(np.float32)
+
+        W_bg = np.maximum(bg.reshape(-1), eps).astype(np.float32)
+
+        # --- background spectrum from RAW data (more stable than subtracted) ---
+        H_bg = np.average(self.data_2d.astype(np.float32), axis=0, weights=W_bg)
+        if smooth_sigma and smooth_sigma > 0:
+            H_bg = gaussian_filter1d(H_bg, smooth_sigma).astype(np.float32)
+        H_bg = np.maximum(H_bg, eps)
+
+        # normalize H, keep scale in W
+        H_bg = H_bg / (np.mean(H_bg) + eps)
+
+        # write into seeds (+ mark background)
+        if self.seed_H is None or self.seed_W is None:
+            self.reset_seeds()
+
+        self.seed_W[:, background_component] = W_bg
+        self.set_H_seed(background_component, H_bg, flag_background=True)
+
+        return W_bg, H_bg
+
     def set_up_random_H_seed(self, i):
         # TODO: check how to set up the best random seed for the H matrix
         if self.seed_H is None:
@@ -630,7 +693,10 @@ class MultivariateAnalyzer(object):
         nnmf_model = NMF(n_components=self._n_components, init='custom', random_state=0, max_iter=1000, solver='mu')
         logger.info(f'{self.data_2d.shape =}')
         # copy the seeds because otherwise the model will overwrite the seed values
-        self.fixed_W = nnmf_model.fit_transform(self.data_2d, H=self.seed_H.copy(), W=self.seed_W.copy())
+
+        # check the dtype of the data and seeds to be all float32
+
+        self.fixed_W = nnmf_model.fit_transform(self.data_2d, H=self.seed_H.astype(np.float32), W=self.seed_W.astype(np.float32))
         self.fixed_H = nnmf_model.components_
         normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
         # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH

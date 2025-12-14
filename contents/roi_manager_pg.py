@@ -160,17 +160,19 @@ class ROIManager(QtCore.QObject):
         # Generate a unique ID to identify the ROI
         roi_id = str(roi)
         self.roi_id_idx[roi_id] = len(self.rois) - 1
-        cur_index = self.add_roi_to_table(new_roi_id=roi_id, component_number=component_number - 1)  # Update the table view
+        cur_index = self.add_last_roi_to_table(new_roi_id=roi_id,
+                                               component_number=component_number - 1)  # Update the table view
         self.connect_signals_to_roi(roi,
                                     on_region_change=self.roi_table.cellWidget(cur_index, self.widget_columns['Live Update']).isChecked())
         self.request_plot_avg_intensity(roi_id)
         self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
 
 
-    def add_roi_to_table(self, new_roi_id=None, component_number=None, dummy: bool = False,
-                         roi_name: str or None = None):
+    def add_last_roi_to_table(self, new_roi_id=None, component_number=None, dummy: bool = False,
+                         roi_name: str or None = None,
+                         is_background: bool = False) -> int:
         """
-        Main function to update the ROI table with the current ROIs and add the cell widgets
+        Loads the last added ROI from self.rois list and adds it to the table.
         Args:
             new_roi_id:
 
@@ -233,6 +235,7 @@ class ROIManager(QtCore.QObject):
 
         background_checkbox = QtWidgets.QCheckBox()
         background_checkbox.stateChanged.connect(lambda state: self.sync_components(roi, state))
+        background_checkbox.setChecked(is_background)
 
         scale_spinbox = QtWidgets.QDoubleSpinBox()
         scale_spinbox.setValue(1)
@@ -383,12 +386,8 @@ class ROIManager(QtCore.QObject):
         roi_id = str(roi)
         self.roi_id_idx[roi_id] = len(self.rois) - 1
 
-        row = self.add_roi_to_table(
-            new_roi_id=roi_id,
-            component_number=component,  # 0-based
-            dummy=True,
-            roi_name=f"Component {component + 1} (Gaussian model)",
-        )
+        row = self.add_last_roi_to_table(new_roi_id=roi_id, component_number=component, dummy=True,
+                                         roi_name=f"Component {component + 1} (Gaussian model)")
 
         self.request_plot_avg_intensity(roi_id)
         self.new_roi_signal.emit(self.component_number_from_table_index(row))
@@ -473,28 +472,47 @@ class ROIManager(QtCore.QObject):
         spectrum_data = spec_loader.target_spectra[index]
         spectrum_name = spec_loader.names[index]
 
+        roi_id = self.add_dummy_roi(spectrum_data, component_number, spectrum_name)
+        # This line stores the loader object. Since the loader now contains ALL spectra,
+        # this mapping is technically complex, but follows your original intent to store the loader object.
+        self.spectrum_loaders[roi_id] = (spec_loader, index)
+
+    def add_dummy_roi(self, spectrum_data: np.ndarray, component_number: int, spectrum_name: str = "",
+                      is_background:bool = False) -> str:
+        """
+        Add a DummyROI with the given spectrum data and properties. Pretends to be a loaded ROI with a spectrum.
+        Parameters
+        ----------
+        spectrum_data: np.ndarray
+            The spectrum data to associate with the DummyROI.
+        component_number: int
+            The component number in 1-based indexing for color selection and table entry.
+        spectrum_name: str
+            The name to assign to the DummyROI.
+        is_background:
+            Whether this ROI is marked as background in the table.
+
+        Returns
+        -------
+        str
+            The unique ID of the created DummyROI object.
+        """
         roi = DummyROI(spectrum_name, spectrum_data)
 
         # Calculate pen color (component_number - 1 converts 1-based index to 0-based for color list)
         comp_idx = component_number - 1
         roi.pen = pg.mkPen(self.default_colors[comp_idx % len(self.default_colors)])
 
-        self.rois.append(roi)  # Add the ROI to the list
-
+        self.rois.append(roi)
         # Generate a unique ID to identify the ROI
         roi_id = str(roi)
         self.roi_id_idx[roi_id] = len(self.rois) - 1
-
-        cur_index = self.add_roi_to_table(new_roi_id=roi_id,
-                                          component_number=comp_idx,
-                                          dummy=True,
-                                          roi_name=spectrum_name)  # Use the loaded name
-
+        cur_index = self.add_last_roi_to_table(new_roi_id=roi_id, component_number=comp_idx, dummy=True,
+                                               roi_name=spectrum_name,
+                                               is_background=is_background)  # Use the loaded name
         self.request_plot_avg_intensity(roi_id)
         self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
-        # This line stores the loader object. Since the loader now contains ALL spectra,
-        # this mapping is technically complex, but follows your original intent to store the loader object.
-        self.spectrum_loaders[roi_id] = (spec_loader, index)
+        return roi_id
 
     def load_presets(self):
         fpath, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Load presets", "", "Preset Files (*.preset)")

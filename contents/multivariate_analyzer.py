@@ -256,8 +256,8 @@ class MultivariateAnalyzer(object):
             signal_component: int,
             background_component: int,
             radius_px: int,
-            smooth_sigma: float = 3.0,
-            downsample: int = 2,
+            smooth_sigma: float = 1.0,
+            downsample: int = 1,
             eps: float = 1e-6,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -300,10 +300,9 @@ class MultivariateAnalyzer(object):
         H_bg = np.average(self.data_2d.astype(np.float32), axis=0, weights=W_bg)
         if smooth_sigma and smooth_sigma > 0:
             H_bg = gaussian_filter1d(H_bg, smooth_sigma).astype(np.float32)
-        H_bg = np.maximum(H_bg, eps)
 
-        # normalize H, keep scale in W
-        H_bg = H_bg / (np.mean(H_bg) + eps)
+        # add small epsilon to avoid zeros
+        H_bg = np.maximum(H_bg, eps).astype(np.float32)
 
         # write into seeds (+ mark background)
         if self.seed_H is None or self.seed_W is None:

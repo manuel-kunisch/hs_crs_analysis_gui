@@ -235,6 +235,25 @@ class AnalysisManager(QtCore.QObject):
         check_W_seeds_button.clicked.connect(self.show_W_seeds)
         spectral_button_layout.addWidget(check_W_seeds_button)
 
+        # --- Rolling Ball BG widget ---
+        rb_widget = QtWidgets.QWidget()
+        rb_layout = QtWidgets.QHBoxLayout(rb_widget)
+        rb_layout.setContentsMargins(0, 0, 0, 0)
+
+        rb_layout.addWidget(QtWidgets.QLabel("Rolling Ball radius (px):"))
+        self.rolling_ball_radius = QtWidgets.QSpinBox()
+        self.rolling_ball_radius.setRange(1, 5000)
+        self.rolling_ball_radius.setValue(25)
+        self.rolling_ball_radius.setSingleStep(2)
+        rb_layout.addWidget(self.rolling_ball_radius)
+
+        rb_button = QtWidgets.QPushButton("Add BG component from selected resonance")
+        rb_button.clicked.connect(self.add_background_component_from_selected_resonance)
+        rb_layout.addWidget(rb_button)
+
+        spectral_button_layout.addWidget(rb_widget)
+
+
         # add button to test the spectral info handling
         test_spectral_info_button = QtWidgets.QPushButton('Test seeds')
         # table_and_button_layout.addWidget(test_spectral_info_button, 4, 5, alignment=QtCore.Qt.AlignVCenter)
@@ -908,6 +927,71 @@ class AnalysisManager(QtCore.QObject):
 
         return seed_W, seed_H, seed_pixel_dict
         # idea: thresholding for W seeds
+
+    def _find_free_component_index(self) -> int | None:
+        n = self.mv_analyzer.get_n_components()
+        used = set()
+
+        # used by resonance table
+        for r in range(self.resonance_table.rowCount()):
+            c = self.get_component_number(r)
+            if c is not None:
+                used.add(int(c))
+
+        # used by ROI manager
+        for c in range(n):
+            try:
+                if self.roi_manager.is_component_defined(c):
+                    used.add(c)
+            except Exception:
+                pass
+
+        for c in range(n):
+            if c not in used:
+                return c
+        return None
+
+    def add_background_component_from_selected_resonance(self):
+        row = self.resonance_table.currentRow()
+        if row is None or row < 0:
+            QtWidgets.QMessageBox.information(self.analysis_widget, "Info", "Select a resonance row first.")
+            return
+
+        signal_comp = self.get_component_number(row)
+        if signal_comp is None:
+            QtWidgets.QMessageBox.warning(self.analysis_widget, "Warning", "Could not determine component from row.")
+            return
+
+        # make sure W seeds exist for the signal component
+        self.reload_H_seeds_from_rois()
+        self._make_W_seeds_from_spectral_info(make_H_seeds=False, debug_mode=False)
+
+        bg_comp = self._find_free_component_index()
+        if bg_comp is None:
+            # simplest behavior: grow by one
+            new_n = self.mv_analyzer.get_n_components() + 1
+            self.num_components_spinbox.setValue(new_n)  # triggers mv_analyzer.update_components
+            bg_comp = new_n - 1
+
+        radius = int(self.rolling_ball_radius.value())
+
+        W_bg, H_bg = self.mv_analyzer.create_background_component_from_reference_W(
+            signal_component=int(signal_comp),
+            background_component=int(bg_comp),
+            radius_px=radius,
+        )
+
+        # make a new window and show the W_bg in a pyqtgraph image view
+        bg_W_view = self.make_W_seed_view(W_bg.reshape(self.mv_analyzer.raw_data_3d.shape[1],
+                                                            self.mv_analyzer.raw_data_3d.shape[2], -1))
+        bg_W_view.setWindowTitle(f"Background W Component {bg_comp+1}")
+        bg_W_view.show()
+
+        self.roi_manager.add_dummy_roi(H_bg, component_number=int(bg_comp+1), is_background=True,
+                                       spectrum_name="RollingBall BG")
+
+        # Optional: immediately show/update seed window
+        self.make_all_seeds_from_inputs(show_seeds=True)
 
     def _check_and_find_seeds(self, n_components: int, debug_mode: bool = debug) -> dict[int, tuple[np.ndarray, np.ndarray]]:
         """

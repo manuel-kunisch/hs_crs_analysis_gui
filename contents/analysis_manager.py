@@ -271,7 +271,7 @@ class AnalysisManager(QtCore.QObject):
         self.resonance_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         # restrict to single row selection
         self.resonance_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        self.resonance_table.horizontalHeader().setStretchLastSection(True)
+        # self.resonance_table.horizontalHeader().setStretchLastSection(True)
         self.resonance_table.resizeColumnsToContents()
 
         # Keep your widths where you really want them

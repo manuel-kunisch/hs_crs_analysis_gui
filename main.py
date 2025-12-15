@@ -193,7 +193,11 @@ class MainApplication(QtWidgets.QMainWindow):
         self.data_handler.wavenumber_widget.set_nframes(img_array.shape[0])
         self.analysis_manager.update_image_data(img_array, self.data_handler.wavenumber_widget.wavenumbers)
         self.data_widget.update_img(img_array)
-
+        # make the roi manager highlight all rois again if spectral info exists
+        self.data_widget.roi_manager.roi_plotter.remove_all_highlights()
+        self.analysis_manager.highlight_all_resonances()
+        logger.info("Data update finished")
+        logger.info(f"{"-"*50}")
         # add in future here callbacks to all classes that have to be informed about the refresh!
 
     def update_fov(self, fov: tuple, unit: str):
@@ -206,6 +210,7 @@ class MainApplication(QtWidgets.QMainWindow):
         self.scale_bar_raw.update_pixel_size(px_size_um)
         self.scale_bar_channels.update_pixel_size(px_size_um)
         self.scale_bar_composite.update_pixel_size(px_size_um)
+        # adjust the pixel size in the image saver such that physical units are saved correctly in Fiji
         self.result_viewer_widget.fiji_saver.pixel_size_um = px_size_um
 
     def update_scale_bars(self, len: float):
@@ -234,8 +239,6 @@ class MainApplication(QtWidgets.QMainWindow):
         self.scale_bar_raw.setVisible(show)
         self.scale_bar_channels.setVisible(show)
         self.scale_bar_composite.setVisible(show)
-
-
 
 
     def get_current_image(self):
@@ -339,6 +342,8 @@ class MainApplication(QtWidgets.QMainWindow):
             self.analysis_manager.seed_window.close()
 
 if __name__ == '__main__':
+    import faulthandler, signal
+    faulthandler.enable(all_threads=True)
     from contents.darkmode import set_darkmode
     app = QtWidgets.QApplication(sys.argv)  # Create a QApplication instance that runs in a dedicated thread.
     # Issue: Unlike on MacOS, darkmode is not automatically set with Windows 
@@ -348,10 +353,11 @@ if __name__ == '__main__':
         main_app.set_data('./example_data/2016_05_13_Nematode_K11_60mW_816,7nm_60mW_1064nm_PMT804_HyperwaveVar.mat_COR_Channel1.tif')
     except FileNotFoundError as e:
         logger.error(f"Could not load example data: {e}")
-    # run in full screen
-    # main_app.showMaximized()
 
     # set default size of the main window
-    main_app.resize(1600, 900)
+    main_app.resize(1920, 1080)
+    # show window maximized
+    # main_app.showMaximized()
+
     main_app.show()
     app.exec_()

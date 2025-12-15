@@ -16,7 +16,7 @@ class PhysicalUnitsWidget(QWidget):
 
         self.unit = "µm"
         self.image_shape = None  # to be set externally
-        self.pixel_size = .6
+        self.pixel_size = .28   # default pixel size in µm
 
         main_layout = QVBoxLayout(self)
         grid_layout = QGridLayout()

@@ -3,7 +3,8 @@ from datetime import datetime
 
 import numpy as np
 from matplotlib import pyplot as plt
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, gaussian_filter
+from skimage.restoration import rolling_ball
 from sklearn.decomposition import PCA, NMF
 
 from contents.custom_pyqt_objects import ImageViewYX
@@ -41,6 +42,11 @@ class MultivariateAnalyzer(object):
         self.resonance_data_2d = None
         self.analysis_method = method
         self.update_image_data(data, n_components, wavenumbers)
+
+    def update_spectral_info(self, spectral_info: list[dict[str, float | int]]):
+        self.spectral_info = spectral_info
+        logger.info(f'MV Anaylzer: Updated spectral info: {self.spectral_info}')
+        self._W_prepared = False
 
     def update_image_data(self, data: np.ndarray, n_components: int, wavenumbers: np.ndarray):
         self.prepared = False
@@ -121,7 +127,7 @@ class MultivariateAnalyzer(object):
         # are ordered. For that reasons we must first move the axes and then reshape the array
         raw_data_reordered = np.moveaxis(self.raw_data_3d, 0, -1)
         # Now we can reshape, where we leave the last axis untouched and only concatenate the fist two dimensions
-        self.data_2d = raw_data_reordered.reshape(-1, self.raw_data_3d.shape[0])
+        self.data_2d = raw_data_reordered.reshape(-1, self.raw_data_3d.shape[0]).astype(np.float32)
         self.resonance_data_2d = self.data_2d
         logger.info(f'{self.data_2d.shape = }')
         n_frames = self.data_2d.shape[1]
@@ -236,14 +242,72 @@ class MultivariateAnalyzer(object):
 
     def set_W_seed_matrix(self, W: np.ndarray):
         # check if W has the correct shape
+        self._W_prepared = False
         if W.shape[1] != self._n_components:
             raise ShapeError(self._n_components, W.shape[1])
         if W.shape[0] != self.data_2d.shape[0]:
             raise ShapeError(self.data_2d.shape[0], W.shape[0])
         self.seed_W = W
-        # check for zeros along axis 1
+        # check for zeros in the seed matrix, if so the matrix is not prepared
+        self._W_prepared =  np.all(self.seed_W)
+        logger.info(f'Set W seed matrix, prepared={self._W_prepared}')
 
-        self._W_prepared = True
+    def create_background_component_from_reference(
+            self,
+            ref_2d: np.ndarray,
+            background_component: int,
+            radius_px: int,
+            smooth_sigma: float = 10.0,
+            downsample: int = 1,
+            eps: float = 1e-6,
+            write_into_seeds: bool = True
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Create a *new* background component from a reference image
+
+        W_bg = rolling_ball(W_signal_image)
+        H_bg = weighted mean spectrum (raw data) with weights=W_bg
+
+        Returns
+        -------
+        W_bg : (n_pixels,) float32
+        H_bg : (n_bands,) float32
+        """
+
+        # optional downsample for speed
+        ds = max(int(downsample), 1)
+        if ds > 1:
+            ref_ds = ref_2d[::ds, ::ds]
+            rad_ds = max(int(radius_px // ds), 1)
+            bg_ds = rolling_ball(ref_ds, radius=rad_ds).astype(np.float32)
+            bg = np.repeat(np.repeat(bg_ds, ds, axis=0), ds, axis=1)[:ny, :nx]
+        else:
+            bg = rolling_ball(ref_2d, radius=int(radius_px)).astype(np.float32)
+
+        W_bg = np.maximum(bg.reshape(-1), eps).astype(np.float32)
+
+        # smoothen the W_bg spatially
+        W_bg_3d = W_bg.reshape(self.raw_data_3d.shape[1], self.raw_data_3d.shape[2])
+        W_bg_3d = gaussian_filter(W_bg_3d, sigma=smooth_sigma).astype(np.float32)
+        W_bg = W_bg_3d.reshape(-1)
+
+        # --- background spectrum from RAW data (more stable than subtracted) ---
+        H_bg = np.average(self.data_2d.astype(np.float32), axis=0, weights=W_bg)
+        if smooth_sigma and smooth_sigma > 0:
+            H_bg = gaussian_filter1d(H_bg, smooth_sigma).astype(np.float32)
+
+        # add small epsilon to avoid zeros
+        H_bg = np.maximum(H_bg, eps).astype(np.float32)
+
+        if write_into_seeds:
+            # write into seeds (+ mark background)
+            if self.seed_H is None or self.seed_W is None:
+                self.reset_seeds()
+
+            self.seed_W[:, background_component] = W_bg
+            self.set_H_seed(background_component, H_bg, flag_background=True)
+
+        return W_bg, H_bg
 
     def set_up_random_H_seed(self, i):
         # TODO: check how to set up the best random seed for the H matrix
@@ -258,20 +322,21 @@ class MultivariateAnalyzer(object):
         self.seed_H[i] = self.seed_H[i] * avg_intensity / np.mean(self.seed_H[i], axis=None)
 
 
-    def set_up_W_seed(self, skip_spectral_info=False, fill_H_seed: bool = True) -> bool:
+    def set_up_missing_W_seeds(self, skip_spectral_info=False, fill_H_seed: bool = True) -> bool:
         # First step: process all spectral info to create the W seeds
         if not skip_spectral_info:
             self.make_W_seeds_from_spectral_info()
+        # first try to initialize from H seeds....
         if not self._W_prepared:
-            logger.warning('W seeds not prepared, using random seeds')
+            logger.warning('W seeds not prepared. Trying to set up from H')
             self.estimate_W_seed_matrix_from_H(overwrite=False)
         if not self._W_prepared:
-            logger.warning('W seeds not prepared, using average intensity for remaining components')
+            logger.warning('W seeds still not prepared, using average intensity for remaining components')
             self.set_up_random_W_seed(overwrite=False)
         return self._W_prepared
         # W seed estimation should be done by now, time for H
 
-    def set_up_H_seed(self, seed_pixels=None) -> bool:
+    def set_up_missing_H_seeds(self) -> bool:
         # 1) use ROIs, this has been done by the analysis manager or by the user manually
         # 2) find seed pixels from spectral info
 
@@ -283,17 +348,16 @@ class MultivariateAnalyzer(object):
             self.seed_H = np.zeros((self._n_components, self.data_2d.shape[1]))
 
         remaining_components = np.where(~np.all(self.seed_H, axis=1))[0]
-        logger.info(f'H Components without seed: {remaining_components}')
+        logger.info(f'H Components without seed or zeros in component: {remaining_components}')
 
         # iterate over all components and create the H seeds
         for cmp in remaining_components:
             logger.info(f'Creating H seed for component {cmp}')
             if self.seed_H_background_flag[cmp]:
                 logger.info(f'Component {cmp} is marked as background, using raw data for H seed estimation')
-                self.seed_H[cmp] = np.mean(self.resonance_data_2d, axis=1)
-
+                self.seed_H[cmp] = np.mean(self.data_2d, axis=1)
+                return True
             self.set_up_random_H_seed(cmp)
-
         return True
 
     def make_W_seeds_from_spectral_info(self, reset_old_seed=True, debug_mode=True):
@@ -323,11 +387,11 @@ class MultivariateAnalyzer(object):
                         logger.info(f'Using H weights for W seed estimation for component {i}')
                         weights = self.seed_H[i][frames]
 
-            data = self.data_2d
+            data = self.resonance_data_2d
             # check if data is background
             if self.seed_H_background_flag[i]:
                 logger.info(f'Component {i} is marked as background, using raw data for W seed estimation')
-                data = self.resonance_data_2d
+                data = self.data_2d
 
             res_frames = data[..., frames]
             seed = np.average(res_frames, axis=1, weights=weights)
@@ -386,70 +450,156 @@ class MultivariateAnalyzer(object):
         return np.sort(resonance_indices)  # Return indices in ascending order of original wavenumbers
 
     def estimate_W_seed_matrix_from_H(self, spectral_info=None, overwrite=False):
+        """
+        Estimate the W seed matrix from the H seed matrix.
+        If overwrite is False, only components that are not yet fully set up
+        (i.e. contain at least one zero) are estimated.
+        """
         if self.seed_H is None:
+            # shape: (n_components, n_bands)
             self.seed_H = np.zeros((self._n_components, self.raw_data_3d.shape[0]))
-        """
-        if fill_H:
-            # find components of H that still contain zeros (no seed) and fill them with the average intensity
-            for i, H in enumerate(self.seed_H):
-                if not np.all(H):
-                    logger.warning(f'Component {i} has no seed, filling with average intensity')
-                    self.set_up_random_H_seed(i)
-        """
+
         if self.seed_W is None:
+            # shape: (n_pixels, n_components)
             self.seed_W = np.zeros((self.data_2d.shape[0], self._n_components))
 
-        seed_indices = np.arange(self._n_components)
-        # only do the seed estimation for components that only contain non-zero values
-        if not overwrite:
-            # find columns with zeros, i.e. components that are not yet set up
+        # which components need seeding / reseeding?
+        if overwrite:
+            seed_indices = np.arange(self._n_components)
+        else:
+            # columns that are NOT fully non-zero -> at least one zero element
             seed_indices = np.where(~np.all(self.seed_W, axis=0))[0]
-        logger.info(f'Empty W components {seed_indices}')
+
+        logger.info(f'W components to (re)seed (need non-zero entries): {seed_indices}')
+
         for i in seed_indices:
             H = self.seed_H[i]
+
+            # --- case 1: H is completely zero -> use fallback init for both H and W ---
+            if not np.all(H):
+                logger.info(f'Component H{i} is not set up fully. Skipping model')
+                # self._init_unseeded_component(i, bgd=self.seed_H_background_flag[i])
+                continue
+
+
             logger.info(f'Estimating W seeds from H for component {i}')
-            if np.all(H):
-                # avoid weighting
-                self.seed_W[:, i] = self.estimate_W_seed_with_H(H, spectral_info, bgd=self.seed_H_background_flag[i])
+            W_col = self.estimate_W_seed_with_H(
+                H,
+                spectral_info=spectral_info,
+                bgd=self.seed_H_background_flag[i]
+            )
 
+            self.seed_W[:, i] = W_col
+
+        # global check: all entries of W must be non-zero to be "prepared"
         if np.all(self.seed_W):
+            logger.info('All entries of W are non-zero -> W is prepared.')
             self._W_prepared = True
+        else:
+            logger.warning('Some W entries are still zero; NNMF precondition not yet fulfilled.')
 
-    def estimate_W_seed_with_H(self, H: np.ndarray, spectral_info: np.ndarray|None = None, bgd=False) -> np.ndarray:
-        # find the peak in the spectrum
-        if spectral_info is not None:
-            logger.error('Spectral information handling not implemented yet')
+    def _init_unseeded_component(self, comp_idx: int, bgd: bool = False, dtype=np.uint16):
+        """
+        Fallback initialization for components that have no H seed at all.
+        Creates:
+          - a smooth random H (all entries >= eps)
+          - a W based on averaged image intensities (all entries >= eps)
+        """
+        eps = getattr(self, "nnmf_epsilon", 1e-8)
+        logger.warning(f'Component {comp_idx} has no H seed; initializing with smooth random H and averaged W.')
 
-        # use subtracted data for components that are not marked as background for W seeds
+        # ---- H: smooth random spectrum ----
+        n_bands = self.raw_data_3d.shape[0]
+        h = np.random.rand(n_bands)
+
+        # simple box smoothing (no extra deps)
+        kernel = np.ones(5, dtype=float) / 5.0
+        h = np.convolve(h, kernel, mode="same")
+
+        # make strictly positive and normalize to mean image intensity scale
+        mean_intensity = np.mean(self.data_2d, axis=None)
+        h = np.maximum(h, eps)
+        h /= h.max() * mean_intensity
+
+        self.seed_H[comp_idx, :] = h
+
+        # ---- W: average image over spectral axis ----
         if bgd:
             image_data = self.data_2d
-            logger.info('Background component! Using raw data to maximize background contribution in this component....')
         else:
             image_data = self.resonance_data_2d
-            logger.info('Using subtracted data for W seed estimation')
 
+        W_col = np.mean(image_data, axis=1)
+        W_col = np.maximum(W_col, eps)  # ensure strictly positive
+        self.seed_W[:, comp_idx] = W_col
+
+    def estimate_W_seed_with_H(self, H: np.ndarray,
+                               spectral_info: np.ndarray | None = None,
+                               bgd: bool = False) -> np.ndarray:
+        """
+        Estimate a *strictly positive* W seed for one component given its H seed.
+
+        - For non-background components (bgd=False), we use resonance_data_2d.
+        - For background, we use data_2d.
+        - If self.H_weighted_W_seed is True:
+            * project spectra onto H
+            * normalize scores to [0, 1]
+            * optionally log-compress
+            * build a mask via percentile
+            * inside mask: high scores
+            * outside mask: small epsilon (NOT zero)
+        """
+        eps = getattr(self, "nnmf_epsilon", 1e-8)
+
+        if spectral_info is not None:
+            # can be used later; not used yet
+            logger.debug('spectral_info is currently not used inside estimate_W_seed_with_H.')
+
+        # --- choose data source (n_pixels x n_bands) ---
+        if bgd:
+            image_data = self.data_2d
+            logger.info('Background component! Using raw data for W seed estimation.')
+        else:
+            image_data = self.resonance_data_2d
+            logger.info('Using subtracted data for W seed estimation from H.')
+
+        n_pixels, n_bands = image_data.shape
+
+        # ------------------------------------------------------------------
+        # 1) MAIN MODE: exponential weights
+        # ------------------------------------------------------------------
         if self.H_weighted_W_seed:
-            logger.info('Using H weights to estimate W seed')
-            # use the data points in H to average all the n_components image slices with the spectrum as weight
-            W_image = np.average(image_data, weights=H, axis=1)
-            return W_image
-        elif self.avg_W_seed:
-            logger.info('Skipping W seed estimation, filling data with averaged image')
+            logger.info('Using exponential H weights for W seed estimation.')
+            # make exponential weights
+            if np.any(H):
+                weights = H - np.min(H)
+                weights /= np.max(weights)
+                weights = np.exp(weights) - 1.0  # exponential scaling
+                print(f"weights {weights}")
+                return np.average(image_data, axis=1, weights=weights)
+
+        # ------------------------------------------------------------------
+        # 2) OTHER MODES
+        # ------------------------------------------------------------------
+        if self.avg_W_seed:
+            logger.info('avg_W_seed=True: filling W with averaged image (clamped to eps).')
             W_image = np.mean(image_data, axis=1)
-            return W_image
-        elif self.full_W_seed:
-            logger.info('Using full W seed mode')
-            # use the full data set to estimate the W seed
-            avg_int = np.mean(image_data, axis=None)
-            W_image = np.full_like(image_data[:, 0], avg_int)
-            print(W_image.shape)
+            W_image = np.maximum(W_image, eps)
             return W_image
 
-        logger.warning('No W seed mode selected, using maximum intensity slice')
-        # TODO: make this more sophisticated, for now just take the maximum slice
-        peak_idx = np.argmax(H)
-        # get the corresponding spectrum
-        W_image = self.data_2d[..., peak_idx]
+        if self.full_W_seed:
+            logger.info('full_W_seed=True: using full W seed mode (constant, >= eps).')
+            avg_int = np.mean(image_data, axis=None)
+            W_image = np.full_like(image_data[:, 0], max(avg_int, eps), dtype=image_data.dtype)
+            return W_image
+
+        # ------------------------------------------------------------------
+        # 3) Fallback: maximum-intensity slice at peak of H (clamped to eps)
+        # ------------------------------------------------------------------
+        logger.warning('No W seed mode selected, using maximum-intensity slice at H peak (clamped to eps).')
+        peak_idx = int(np.argmax(H))
+        W_image = self.data_2d[:, peak_idx]
+        W_image = np.maximum(W_image, eps)
         return W_image
 
     @staticmethod
@@ -463,6 +613,18 @@ class MultivariateAnalyzer(object):
         return max_val / cur_max
 
     def set_up_random_W_seed(self, overwrite=True):
+        """
+        Set up random W seed matrix for all components that are not yet set up.
+
+        Parameters
+        ----------
+        overwrite : bool
+            If True, all components are overwritten. If False, only components that are not yet set up are filled.
+
+        Returns
+        -------
+
+        """
         logger.info('Setting up random W seed')
         if self.seed_W is None:
             self.seed_W = np.zeros((self.data_2d.shape[0], self._n_components))
@@ -500,8 +662,10 @@ class MultivariateAnalyzer(object):
         Function that executes the NNMF with the seeds provided by the user.
         Seeds must be set before calling this function.
         Returns:
-
         """
+        # this function expects the W seed already be set up, for instance from spectral info inside the analysis
+        # manager.
+        # W seeds that are not fully prepared are calculated from H seeds
         if not skip_seed_fining:
             """ Really basic seed estimation. Only takes H into account and makes W from H"""
             # H must be set outside of the analyzer manually
@@ -524,7 +688,10 @@ class MultivariateAnalyzer(object):
         nnmf_model = NMF(n_components=self._n_components, init='custom', random_state=0, max_iter=1000, solver='mu')
         logger.info(f'{self.data_2d.shape =}')
         # copy the seeds because otherwise the model will overwrite the seed values
-        self.fixed_W = nnmf_model.fit_transform(self.data_2d, H=self.seed_H.copy(), W=self.seed_W.copy())
+
+        # check the dtype of the data and seeds to be all float32
+
+        self.fixed_W = nnmf_model.fit_transform(self.data_2d, H=self.seed_H.astype(np.float32), W=self.seed_W.astype(np.float32))
         self.fixed_H = nnmf_model.components_
         normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
         # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
@@ -534,7 +701,6 @@ class MultivariateAnalyzer(object):
         logger.info("Custom NNMF outcome: #Iter: {}".format(nnmf_model.n_iter_))
         logger.info("Parameter: \n {}".format(nnmf_model.get_params))
         return True
-        ...
 
     def reset_results(self):
         self.fixed_H = None

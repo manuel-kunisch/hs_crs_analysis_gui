@@ -1,4 +1,5 @@
 import logging
+import sys
 
 import numpy as np
 import pyqtgraph as pg
@@ -29,6 +30,7 @@ class ROIManager(QtCore.QObject):
         super().__init__()
         self.image_view = image_view
         self.rois = []  # list that stores each roi object sorted by index
+        self.gaussian_specs_by_component: dict[int, list[tuple[float, float, float]]] = {}
         self.roi_region_change_signals = {}
         self.active_roi = None
         self.fill_roi = None
@@ -75,7 +77,13 @@ class ROIManager(QtCore.QObject):
         # bind shortcut on del press to remove the selected row / ROI
         del_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Del"), self.roi_table)
         del_shortcut.activated.connect(lambda: self.remove_roi(self.rois[self.roi_table.currentRow()]))
-        # self.roi_table.resizeColumnsToContents()
+        self.roi_table.resizeColumnsToContents()
+        # add extra space to the resonance column
+        self.roi_table.setColumnWidth(self.widget_columns['Resonance'], 120)
+        self.roi_table.setColumnWidth(self.widget_columns['Name'], 100)
+        self.roi_table.setColumnWidth(self.widget_columns['ROI Shape'], 70)
+        self.roi_table.setColumnWidth(self.widget_columns['Scale'], 70)
+        self.roi_table.setColumnWidth(self.widget_columns['Offset'], 70)
 
         # %% ROI plot
         self.roi_plot_dock= Dock("ROI Average Plot", size=(400, 300), closable=False)
@@ -94,21 +102,50 @@ class ROIManager(QtCore.QObject):
             for row in range(self.roi_table.rowCount()):
                 if self.roi_table.cellWidget(row, self.widget_columns['Subtract']).isChecked():
                     self.subtract_background(self.rois[row], refill=False)
-                    self.replot_all_rois()
-                    return True
-            self.replot_all_rois()
-            return False
+                    # break the for loop, only one roi can be used for background subtraction
+                    break
+
+        logger.info("Updating gaussian models")
+        # check for gaussian model rois and replot them
+        self.update_gaussian_models_from_spectral_info(self.gaussian_specs_by_component)
+
+        # remove all fixed W from the rois (when new data is loaded, or after binning)
+        c = 0
+        for roi in self.rois:
+            if hasattr(roi, 'fixed_W'):
+                del roi.fixed_W
+                c += 1
+                logger.info(f"Removed fixed W from {c} ROIs after data update")
+        # prompt a warning to the user if any fixed W were removed
+        if c > 0:
+            QtWidgets.QMessageBox.warning(None, "Fixed W removed",
+                                          f"{c} ROIs had fixed W values assigned which were removed after data update.")
         self.replot_all_rois()
 
     def update_wavenumbers(self, wavenumbers):
         self.wavenumbers = wavenumbers
         # update the loaded spectra to the new wavenumbers
-        for roi_id, spec in self.spectrum_loaders.items():
+        for roi_id, (spec, index) in self.spectrum_loaders.items():
             dummy_roi = self.rois[self.roi_id_idx[roi_id]]
+
+            # Update the target wavenumbers on the shared loader object
             spec.update_wavenumbers(wavenumbers)
-            spectrum = spec.prepare_spectrum()
-            dummy_roi.spectrum_data = spectrum
-        self.replot_all_rois()
+
+            # Prepare spectrum for ALL components in this file (populates spec.target_spectra)
+            spec.prepare_spectrum()
+
+            # 2. Get the correct spectrum data for this specific ROI
+            # spectrum is the list of arrays (spec.target_spectra)
+            # We use the stored 'index' to get the correct component's array
+            spectrum_data = spec.target_spectra[index]
+
+            # 3. Update the DummyROI with its specific data
+            dummy_roi.update_spectrum(spectrum_data)
+
+        try:
+            self.replot_all_rois()
+        except Exception as e:
+            logger.error(f"Error while replotting ROIs after wavenumber update: {e}. Data must still be updated")
 
     def component_prompt(self) -> int:
         roi_number = len(self.rois)
@@ -141,16 +178,19 @@ class ROIManager(QtCore.QObject):
         # Generate a unique ID to identify the ROI
         roi_id = str(roi)
         self.roi_id_idx[roi_id] = len(self.rois) - 1
-        cur_index = self.add_roi_to_table(new_roi_id=roi_id, component_number=component_number - 1)  # Update the table view
+        cur_index = self.add_last_roi_to_table(new_roi_id=roi_id,
+                                               component_number=component_number - 1)  # Update the table view
         self.connect_signals_to_roi(roi,
                                     on_region_change=self.roi_table.cellWidget(cur_index, self.widget_columns['Live Update']).isChecked())
         self.request_plot_avg_intensity(roi_id)
         self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
 
-    def add_roi_to_table(self, new_roi_id=None, component_number=None, dummy: bool = False,
-                         roi_name: str or None = None):
+
+    def add_last_roi_to_table(self, new_roi_id=None, component_number=None, dummy: bool = False,
+                              roi_name: str or None = None,
+                              is_background: bool = False) -> int:
         """
-        Main function to update the ROI table with the current ROIs and add the cell widgets
+        Loads the last added ROI from self.rois list and adds it to the table.
         Args:
             new_roi_id:
 
@@ -213,6 +253,7 @@ class ROIManager(QtCore.QObject):
 
         background_checkbox = QtWidgets.QCheckBox()
         background_checkbox.stateChanged.connect(lambda state: self.sync_components(roi, state))
+        background_checkbox.setChecked(is_background)
 
         scale_spinbox = QtWidgets.QDoubleSpinBox()
         scale_spinbox.setValue(1)
@@ -248,61 +289,306 @@ class ROIManager(QtCore.QObject):
 
         return new_row_idx
 
+    from contents.spectrum_loader import SpectrumLoader
+    # make sure DummyROI is imported as well
+    # from contents.some_module import DummyROI
+
+    def _build_gaussian_model_spectrum(
+        self,
+        peaks: list[tuple[float, float, float]],
+    ) -> np.ndarray:
+        """
+        Sum of all Gaussian peaks in 'peaks' on self.wavenumbers.
+        peaks: list of (center, hwhm, amp).
+        """
+        if self.wavenumbers is None:
+            return np.zeros(1, dtype=float)
+
+        model = np.zeros_like(self.wavenumbers, dtype=float)
+        for center, hwhm, amp in peaks:
+            model += self._gaussian_curve(center, hwhm, amp)
+        return model
+
+    def _gaussian_curve(self, center: float, hwhm: float, amp: float, remove_zeros=True) -> np.ndarray:
+        """
+        Half-width-at-half-max Gaussian.
+        """
+        sigma = hwhm / np.sqrt(2 * np.log(2.0))
+        g = np.exp(-((self.wavenumbers - center) ** 2) / (2.0 * sigma ** 2))
+        curve = amp * g
+        if remove_zeros:
+            curve[curve == 0] += np.finfo(float).eps
+        return amp * g
+
+    def update_gaussian_models_from_spectral_info(
+            self, gaussian_specs: dict[int, list[tuple[float, float, float]]]
+    ):
+        """
+        Main entry point called by AnalysisManager.
+
+        - Parses spectral_info_list from the resonance table.
+        - Extracts Gaussian settings (Use Gaussian == True).
+        - For each component:
+            * computes the model spectrum (sum of Gaussians),
+            * creates/updates a Gaussian dummy ROI row,
+            * makes sure the curves are plotted.
+
+        Parameters
+        ----------
+        gaussian_specs : dict[int, list[tuple[float, float, float]]]
+            Pre-parsed Gaussian specs by component.
+        """
+        self.gaussian_specs_by_component = gaussian_specs
+
+        comps_updated = set(gaussian_specs.keys())
+        # 2) For each component: compute model spectrum & create/update dummy ROI
+        for comp_idx, peaks in gaussian_specs.items():
+            logger.info(f"Building Gaussian model for component {comp_idx} with {len(peaks)} peaks")
+            model_spectrum = self._build_gaussian_model_spectrum(peaks)
+            self._create_or_update_gaussian_dummy_roi(comp_idx, model_spectrum)
+
+        # 3) Remove any Gaussian dummy ROIs for components no longer using Gaussian models
+        existing_dummy_comps = self._existing_dummy_gaussian_rois()
+        for comp_idx in existing_dummy_comps:
+            if comp_idx not in comps_updated:
+                self._remove_gaussian_dummy_roi(comp_idx)
+
+    def _remove_gaussian_dummy_roi(self, component: int):
+        """
+        Remove the Gaussian dummy ROI for 'component', if it exists.
+        """
+        row = self.find_gaussian_dummy_row_for_component(component)
+        if row is not None:
+            logger.info(f"Removing Gaussian dummy ROI for component {component}")
+            roi = self.rois[row]
+            self.remove_roi(roi)
+
+    def _existing_dummy_gaussian_rois(self) -> list[int]:
+        """
+        Return a list of component indices that have Gaussian dummy ROIs.
+        """
+        components = []
+        for row in range(self.roi_table.rowCount()):
+            if self.is_gaussian_dummy_row(row):
+                comp_idx = self.component_number_from_table_index(row)
+                if comp_idx is not None:
+                    components.append(comp_idx)
+        return components
+
+    def _create_or_update_gaussian_dummy_roi(self, component: int, spectrum: np.ndarray):
+        """
+        Ensure there is exactly one Gaussian dummy ROI for 'component'.
+
+        - If it already exists, update its spectrum.
+        - If not, create it, add full table row + widgets (like other ROIs),
+          but only name and color remain editable.
+        """
+        # 1) Update existing Gaussian dummy ROI if present
+        row = self.find_gaussian_dummy_row_for_component(component)
+        if row is not None:
+            logger.info(f"Dummy ROI for component {component} exists, updating spectrum")
+            roi: DummyROI = self.rois[row]
+            # get the roi
+            roi.update_spectrum(spectrum)
+            self.update_roi_plot(roi)
+            logger.info(f"Updated Gaussian dummy ROI for component {component} with new spectrum length {len(spectrum)}")
+            return
+
+        logger.info(f"Creating new Gaussian dummy ROI for component {component}")
+        # 2) Create a new DummyROI, similar to prepare_roi_from_external_spectrum
+        roi = DummyROI('', spectrum)
+        roi.pen = pg.mkPen(self.default_colors[component % len(self.default_colors)])
+        roi.is_gaussian_model = True
+
+        self.rois.append(roi)
+        roi_id = str(roi)
+        self.roi_id_idx[roi_id] = len(self.rois) - 1
+
+        row = self.add_last_roi_to_table(new_roi_id=roi_id, component_number=component, dummy=True,
+                                         roi_name=f"Component {component + 1} (Gaussian model)")
+
+        self.request_plot_avg_intensity(roi_id)
+        self.new_roi_signal.emit(self.component_number_from_table_index(row))
+
+        # 3) Lock everything except name + color
+        self._lock_gaussian_row_widgets(row)
+
+    def is_gaussian_dummy_row(self, row: int) -> bool:
+        """
+        Returns True if this row corresponds to a Gaussian dummy ROI.
+        """
+        if row >= len(self.rois):
+            return False
+        roi = self.rois[row]
+        return getattr(roi, "is_gaussian_model", False)
+
+    def find_gaussian_dummy_row_for_component(self, component: int) -> int | None:
+        """
+        Return the row index of the Gaussian dummy ROI for this component,
+        or None if none exists. Ignores normal/user ROIs.
+        """
+        for row in range(self.roi_table.rowCount()):
+            comp_idx = self.component_number_from_table_index(row)
+            if comp_idx != component:
+                continue
+            if self.is_gaussian_dummy_row(row):
+                return row
+        return None
+
+    def _lock_gaussian_row_widgets(self, row: int):
+        """
+        For the Gaussian dummy row:
+        - Only allow editing the name and color.
+        - Disable all other widgets (component selector, background, etc.).
+        """
+        name_col = self.widget_columns.get('Name', None)
+        color_col = self.widget_columns.get('Color', None)
+        plot_col = self.widget_columns.get('Plot', None)
+
+        for col in range(self.roi_table.columnCount()):
+            keep_editable = (col == name_col or col == color_col or col == plot_col)
+            if keep_editable:
+                continue
+
+            w = self.roi_table.cellWidget(row, col)
+            if w is not None:
+                w.setEnabled(False)
+
+            item = self.roi_table.item(row, col)
+            if item is not None:
+                item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+
     def load_spectra(self):
-        file_name, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Load spectrum", "", "Spectrum Files (*.txt *.asc *.csv)")
+        file_name, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Load spectrum", "",
+                                                             "Spectrum Files (*.txt *.asc *.csv)")
         if not file_name:
             return  # Cancelled
+
+        # Initialize loader and load all spectra
         spec_loader = SpectrumLoader(target_wavenumbers=self.wavenumbers)
         spec_loader.load_spectrum(file_name)
         spec_loader.prepare_spectrum()
-        component_number = self.component_prompt()
-        self.prepare_roi_from_external_spectrum(spec_loader, component_number)
 
-    def prepare_roi_from_external_spectrum(self, spec_loader: SpectrumLoader, component_number: int):
-        roi = DummyROI('', spec_loader.target_spectrum)
-        roi.pen = pg.mkPen(self.default_colors[component_number - 1 % len(self.default_colors)])
-        self.rois.append(roi)  # Add the ROI to the list
+        # check if more than one spectrum is loaded
+        if len(spec_loader.target_spectra) == 0:
+            logger.warning("No spectra loaded from file.")
+            return
+        elif len(spec_loader.target_spectra) > 1:
+            # inform user in dialog
+            QtWidgets.QMessageBox.information(None, "Multiple Spectra Loaded",
+                                                f"{len(spec_loader.target_spectra)} spectra loaded from file.\n"
+                                                f"Please define the component number for each spectrum.")
+
+        # Iterate over the loaded spectra and create an ROI for each one
+        for i in range(len(spec_loader.target_spectra)):
+            component_number = self.component_prompt()
+
+            # Call the preparation function, passing the specific index 'i'
+            self.prepare_roi_from_external_spectrum(spec_loader, component_number, index=i)
+
+    def prepare_roi_from_external_spectrum(self, spec_loader: SpectrumLoader, component_number: int, index: int):
+        spectrum_data = spec_loader.target_spectra[index]
+        spectrum_name = spec_loader.names[index]
+
+        roi_id = self.add_dummy_roi(spectrum_data, component_number, spectrum_name)
+        # This line stores the loader object. Since the loader now contains ALL spectra,
+        # this mapping is technically complex, but follows your original intent to store the loader object.
+        self.spectrum_loaders[roi_id] = (spec_loader, index)
+
+    def add_dummy_roi(self, spectrum_data: np.ndarray, component_number: int, spectrum_name: str = "",
+                      is_background:bool = False,
+                      fixed_W: np.ndarray = None) -> str:
+        """
+        Add a DummyROI with the given spectrum data and properties. Pretends to be a loaded ROI with a spectrum.
+        Parameters
+        ----------
+        spectrum_data: np.ndarray
+            The spectrum data to associate with the DummyROI.
+        component_number: int
+            The component number in 1-based indexing for color selection and table entry.
+        spectrum_name: str
+            The name to assign to the DummyROI.
+        is_background:
+            Whether this ROI is marked as background in the table.
+        fixed_W: np.ndarray, optional
+            If provided, assigns fixed W values to the DummyROI. These will be passed with the ROI.
+        Returns
+        -------
+        str
+            The unique ID of the created DummyROI object.
+        """
+        roi = DummyROI(spectrum_name, spectrum_data)
+
+        # Calculate pen color (component_number - 1 converts 1-based index to 0-based for color list)
+        comp_idx = component_number - 1
+        roi.pen = pg.mkPen(self.default_colors[comp_idx % len(self.default_colors)])
+
+        self.rois.append(roi)
         # Generate a unique ID to identify the ROI
         roi_id = str(roi)
         self.roi_id_idx[roi_id] = len(self.rois) - 1
-        cur_index = self.add_roi_to_table(new_roi_id=roi_id,
-                                          component_number=component_number - 1,
-                                          dummy=True,
-                                          roi_name=spec_loader.name if not None else 'Loaded spec_loader')  # Update the table view
+
+        if fixed_W is not None:
+            # W components directly assigned to the DummyROI, will be removed when the ROI is deleted
+            self.add_W_to_roi(roi, fixed_W)
+
+        cur_index = self.add_last_roi_to_table(new_roi_id=roi_id, component_number=comp_idx, dummy=True,
+                                               roi_name=spectrum_name,
+                                               is_background=is_background)  # Use the loaded name
         self.request_plot_avg_intensity(roi_id)
         self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
-        self.spectrum_loaders[roi_id] = spec_loader
+        return roi_id
 
     def load_presets(self):
         fpath, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Load presets", "", "Preset Files (*.preset)")
+        if not fpath:
+            return
+
         colormap_colors, vmin_vmax, wavenumbers, seeds = ci.load_from_presets(fpath)
 
         fname = fpath.split('/')[-1].split('.')[0]
 
-        # check if rois exist
+        # Check if ROIs exist and ask user to delete them
         if len(self.rois) > 0:
-            # ask user to delete all previous ROIs
             reply = QtWidgets.QMessageBox.question(None, 'Delete all ROIs?',
                                                    'Do you want to delete all previous ROIs?',
                                                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                                                    QtWidgets.QMessageBox.No)
             if reply == QtWidgets.QMessageBox.Yes:
-                for roi in self.rois:
+                # We must iterate over a copy of the list because remove_roi modifies self.rois
+                for roi in self.rois.copy():
                     self.remove_roi(roi)
 
+        # 1. Initialize the SpectrumLoader ONCE
+        spectrum_loader = SpectrumLoader(self.wavenumbers)
+        spectrum_loader.wavenumbers = np.array(wavenumbers)
+
+        # 2. Populate the SpectrumLoader's internal lists (spectra and names)
         for idx, seed in enumerate(seeds):
-            # initialize the spectrum loader with the current wavenumbers as interpolation target
-            spectrum_loader = SpectrumLoader(self.wavenumbers)
-            # assign the loaded values to the spectrum loader
-            spectrum_loader.wavenumbers = np.array(wavenumbers)
-            # iterate over the seeds and load them into the spectrum loader and in/extropolate them to the target wavenumbers
-            spectrum_loader.spectrum = np.array(seed)
-            spectrum_loader.name = f"{fname} H{idx}"
-            spectrum_loader.interpolate_and_cut_spectrum()
-            # add the spectrum loader to the dictionary and other bookkeeping
-            self.prepare_roi_from_external_spectrum(spectrum_loader, idx + 1)
-            # load the colormap color from the preset
-            self.update_roi_color(idx, QColor(*colormap_colors[idx]))
+            # Add the seed array to the list of spectra
+            spectrum_loader.spectra.append(np.array(seed))
+
+            # Add a name to the list of names
+            name = f"{fname} H{idx}"
+            spectrum_loader.names.append(name)
+
+        # 3. Process all spectra (interpolation/cutting) simultaneously
+        # This populates spectrum_loader.target_spectra
+        spectrum_loader.prepare_spectrum()
+
+        # 4. Loop through the resulting target spectra and create ROIs
+        for idx in range(len(spectrum_loader.target_spectra)):
+            # Component number for the ROI table (starts at 1)
+            component_number = idx + 1
+
+            # FIX: Call the updated prepare_roi function with the required index
+            self.prepare_roi_from_external_spectrum(spectrum_loader, component_number, index=idx)
+
+            # Load the colormap color from the preset.
+            # Use idx (0-based) for the colormap_colors list, but component_number (1-based) for the lookup.
+            self.update_roi_color(component_number - 1, QColor(*colormap_colors[idx]))
+
+        self.preset_load_signal.emit(len(seeds), vmin_vmax, colormap_colors)
 
         self.preset_load_signal.emit(len(seeds), vmin_vmax, colormap_colors)
 
@@ -316,13 +602,28 @@ class ROIManager(QtCore.QObject):
                 return self.roi_table.cellWidget(idx, self.widget_columns['Color']).color.getRgb()
         return self.default_colors[component_number % len(self.default_colors)] + (255,)
 
-    def component_number_from_table_index(self, idx) -> int:
-        """
-        Returns the component number. The first component is 0, the second 1, etc.
-        """
-        return int(self.roi_table.cellWidget(idx, self.widget_columns['Resonance']).currentText().split(' ')[-1]) - 1
+    def component_number_from_table_index(self, idx: int) -> int | None:
+        col = self.widget_columns['Resonance']
 
+        # Try as a widget (QComboBox)
+        widget = self.roi_table.cellWidget(idx, col)
+        if widget is not None:
+            text = widget.currentText()
+        else:
+            # Fallback: maybe there is a plain QTableWidgetItem
+            item = self.roi_table.item(idx, col)
+            if item is None:
+                return None
+            text = item.text()
 
+        # Expect something like "Component 3" or just "3"
+        parts = text.split()
+        if not parts:
+            return None
+        try:
+            return int(parts[-1]) - 1
+        except ValueError:
+            return None
 
     def plot_roi(self, roi: pg.ROI, signal=None, label=''):
         roi_id = str(roi)
@@ -355,6 +656,9 @@ class ROIManager(QtCore.QObject):
         if self.fill_roi is not None:
             if self.roi_table.cellWidget(self.roi_id_idx[str(roi)], self.widget_columns['Subtract']).isChecked():
                 self.subtract_background(roi, refill=False)
+
+    def add_W_to_roi(self, roi: pg.ROI, W: np.ndarray):
+        roi.fixed_W = W
 
     def set_roi_properties(self, roi, color, label, replot=False):
         roi.setPen(pg.mkPen(color))
@@ -531,6 +835,8 @@ class ROIManager(QtCore.QObject):
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component:
                 self.roi_table.cellWidget(idx, self.widget_columns['Background']).setChecked(state)
+        # replot is needed as the background selection requires unsubtracted data for the roi
+        self.replot_all_rois()
 
     def is_component_defined(self, component, return_index=False):
         for idx in range(self.roi_table.rowCount()):
@@ -540,6 +846,30 @@ class ROIManager(QtCore.QObject):
                 return True
         if return_index:
             return False, None
+        return False
+
+    def component_has_plotted_roi(self, component: int) -> bool:
+        """
+        Returns True if there is at least one ROI assigned to *component*
+        whose 'Plot' checkbox is currently checked.
+        """
+        for idx in range(self.roi_table.rowCount()):
+            if self.component_number_from_table_index(idx) == component:
+                plot_chk = self.roi_table.cellWidget(idx, self.widget_columns['Plot'])
+                if plot_chk is not None and plot_chk.isChecked():
+                    return True
+        return False
+
+    def component_has_fixed_W(self, component: int) -> bool:
+        """
+        Returns True if there is at least one ROI assigned to *component*
+        that has fixed_W defined.
+        """
+        for idx in range(self.roi_table.rowCount()):
+            if self.component_number_from_table_index(idx) == component:
+                roi = self.rois[idx]
+                if hasattr(roi, 'fixed_W'):
+                    return True
         return False
 
     def set_roi_highlight(self, roi, highlighted=True):
@@ -585,6 +915,7 @@ class ROIManager(QtCore.QObject):
                     curves.append(xy_avg)
                     res_index = idx
             # average the curves and add them to the list of dictionaries where 'H' stores the mean curve, 'resonance' the resonance and 'label' the user defined label
+            logger.info(f"Averaging {len(curves)} curves for  H[{resonance}]]")
             mean_curves.append({'H': np.mean(curves, axis=0), 'resonance': resonance, 'label': self.roi_table.cellWidget(res_index, self.widget_columns['Name']).text()})
         return mean_curves
 
@@ -623,7 +954,7 @@ class ROIManager(QtCore.QObject):
         tiled_background = spectral_background[:, np.newaxis, np.newaxis]
         # subtract the average background for each Raman shift from the image stack
         self.subtracted_data = self.raw_data - tiled_background
-        self.subtracted_data[self.subtracted_data <= 0] = 1e-6
+        self.subtracted_data[self.subtracted_data <= 0] = sys.float_info.epsilon
         """
         # debug: show the subtracted data in a pg imageview
         self.debug_image_view = pg.ImageView()
@@ -632,7 +963,11 @@ class ROIManager(QtCore.QObject):
         # compare with the initial data to see the difference
         """
         # request to replot all rois
-        self.replot_all_rois()
+        try:
+            self.replot_all_rois()
+        except Exception as e:
+            logger.error(f'Error replotting ROIs after background subtraction: {e}. Data not fully updated.')
+            logger.error(f"Raw data shape: {self.raw_data.shape}, Subtracted data shape: {self.subtracted_data.shape}")
         self.processed_data_signal.emit(self.subtracted_data)
 
     def get_background_components(self) -> list:
@@ -719,7 +1054,7 @@ class ROIManager(QtCore.QObject):
             self.plot_roi(self.rois[self.roi_id_idx.get(roi_id)], np.array([]), '')
 
     def highlight_component_region(self, spectral_range, component_number: int):
-        rois = self.get_rois_from_component_number(component_number)
+        rois = self.get_rois_from_component_indices(component_number)
         for roi in rois:
             self.roi_plotter.highlight_region(spectral_range, str(roi), overwrite=False)
 
@@ -729,19 +1064,48 @@ class ROIManager(QtCore.QObject):
                 return key
         return None  # Return None if the target value is not found in the dictionary
 
-    def get_component_seed(self, component) -> np.ndarray or None:
+    def get_component_seed(self, component: int) -> np.ndarray | None:
+        """
+        Priority:
+        1) If a spatial ROI exists for this component -> mean spectrum of ROI.
+        2) Else if Gaussian specs exist for this component -> summed Gaussian model.
+        3) Else -> None.
+        """
+        # 1) real ROIs
         for idx in range(self.roi_table.rowCount()):
-            if self.component_number_from_table_index(idx) == component:
-                return self.get_roi_average(self.rois[idx])
+            if self.component_number_from_table_index(idx) != component:
+                continue
+            roi = self.rois[idx] if idx < len(self.rois) else None
+            if roi is not None and not getattr(roi, "is_gaussian_model", False):
+                return self.get_roi_average(roi)
+
+        # 2) Gaussian dummy ROI
+        row = self.find_gaussian_dummy_row_for_component(component)
+        if row is not None:
+            roi = self.rois[row]
+            return self.get_roi_average(roi)
+
+        # 3) nothing
         return None
 
-    def get_roi_from_component_number(self, component_number: int) -> pg.ROI or None:
+    def get_roi_from_component_index(self, component_number: int) -> pg.ROI or None:
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component_number:
                 return self.rois[idx]
         return None
 
-    def get_rois_from_component_number(self, component_number: int) -> list[pg.ROI]:
+    def get_rois_from_component_indices(self, component_number: int) -> list[pg.ROI]:
+        """
+        Returns all ROIs assigned to the given component number.
+
+        Parameters
+        ----------
+        component_number: int
+            The component number to search for (in 0-based indexing).
+        Returns
+        -------
+
+        """
         rois = []
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component_number:
@@ -762,7 +1126,7 @@ class ROIManager(QtCore.QObject):
         """
         Returns the pixel indices inside the ROIs of a given component in the format (y, x) -> usable for indexing
         """
-        rois = self.get_rois_from_component_number(component)
+        rois = self.get_rois_from_component_indices(component)
         if not rois:
             return None
         y_indices = np.array([])
@@ -880,6 +1244,10 @@ class ROIPlotter(pg.PlotWidget):
         self.roi_avg_lines = dict()
         self.roi_highlights = dict()
         self.spectral_range = dict()
+        # Fallback model spectra (e.g. Gaussian fits or seed spectra)
+        # keyed by component index (0, 1, 2, ...)
+        self.component_gaussians: dict[int, dict] = {}
+        self.component_gaussian_lines: dict[int, pg.PlotDataItem] = {}
 
     def plot_roi_average(self, roi_id, z_data, label):
         roi_index = self.roi_manager.roi_id_idx.get(roi_id)
@@ -896,6 +1264,162 @@ class ROIPlotter(pg.PlotWidget):
         # Add any additional configurations you need
         # ...
 
+    # ------------------------------------------------------------------
+    #  Fallback model curves (Gaussian / seed spectra per component)
+    # ------------------------------------------------------------------
+
+    def update_component_gaussians(
+        self,
+        wavenumbers: np.ndarray,
+        gaussian_specs: dict[int, list[tuple[float, float, float]]],
+    ):
+        """
+        Rebuild all model Gaussian curves from per-component peak definitions.
+
+        Parameters
+        ----------
+        wavenumbers : 1D array
+            Spectral axis in cm^-1.
+        gaussian_specs : dict
+            {component_index: [(center, hwhm, amp), ...], ...}
+        """
+        # Remove old model curves from the plot
+        self.clear_component_gaussians()
+
+        # Build and add new curves
+        for comp_idx, peaks in gaussian_specs.items():
+            if not peaks:
+                continue
+
+            logger.info(f"Building Gaussian model for component {comp_idx} with peaks: {peaks}")
+            # Either sum up all peaks into one curve per component...
+            curve = np.zeros_like(wavenumbers, dtype=float)
+            for center, hwhm, amp in peaks:
+                curve += self._generate_gaussian(wavenumbers, center, hwhm, amp)
+
+            label = f"Component {comp_idx + 1} (model)"
+            self.request_gaussian_component_plot(comp_idx, curve, label)
+
+            # ...or, if you prefer one curve per peak, you'd call
+            # request_gaussian_component_plot once per (center, hwhm, amp).
+
+    def set_component_gaussian(self, component_number: int, z_data: np.ndarray, label: str | None = None):
+        """
+        Register / update the model spectrum (e.g. Gaussian fit) for one
+        component. The curve is only shown if no ROI for this component
+        is currently being plotted.
+
+        component_number: 0-based component index
+        z_data: 1D array matching roi_manager.wavenumbers
+        """
+        if label is None:
+            label = f"Component {component_number + 1} (model)"
+
+        # Keep room for a future 'seed' spectrum
+        old = self.component_gaussians.get(component_number, {})
+        self.component_gaussians[component_number] = {
+            "gaussian": z_data,
+            "seed": old.get("seed"),  # future WIP: you can fill this later
+            "label": label,
+        }
+        logger.info(f"Set Gaussian/model spectrum for component {component_number}")
+        self.update_component_fallback(component_number)
+
+    def clear_component_gaussians(self):
+        """Remove all stored model spectra and their plot items."""
+        for comp in list(self.component_gaussian_lines.keys()):
+            self.remove_component_fallback(comp)
+        self.component_gaussians.clear()
+
+    def plot_component_gaussian(self, component_number: int, z_data: np.ndarray, label: str):
+        """
+        Draw or update the fallback curve for one component.
+        """
+        if self.roi_manager.wavenumbers is None or z_data is None:
+            return
+
+        # Update existing line
+        if component_number in self.component_gaussian_lines:
+            line = self.component_gaussian_lines[component_number]
+            line.setData(self.roi_manager.wavenumbers, z_data)
+            line.setName(label)
+            return
+
+        # New line
+        color_rgba = self.roi_manager.get_color(component_number)
+        pen = pg.mkPen(color_rgba)
+        line = self.plot(self.roi_manager.wavenumbers, z_data, pen=pen, name=label)
+        self.component_gaussian_lines[component_number] = line
+        logger.info(f"Plotted fallback model for component {component_number}")
+
+    def remove_component_fallback(self, component_number: int):
+        """
+        Remove the fallback curve for one component from the plot
+        (if present).
+        """
+        line = self.component_gaussian_lines.pop(component_number, None)
+        if line is not None:
+            self.removeItem(line)
+
+    def update_component_fallback(self, component_number: int):
+        """
+        Ensure that for this component either an ROI-based mean curve
+        (if any ROI is plotted) **or** the Gaussian / seed model curve
+        is shown – but never both.
+        """
+        # ROI present & plotted? → hide fallback
+        if self.roi_manager.component_has_plotted_roi(component_number):
+            self.remove_component_fallback(component_number)
+            logger.info(f"Hiding fallback model for component {component_number} due to plotted ROI")
+            return
+
+        info = self.component_gaussians.get(component_number)
+        if info is None:
+            # no model available
+            logger.info(f"No fallback model defined for component {component_number}")
+            self.remove_component_fallback(component_number)
+            return
+
+        # Prefer seed spectrum (future WIP) if available, otherwise Gaussian
+        z_data = info.get("seed")
+        if z_data is None:
+            z_data = info.get("gaussian")
+
+        if z_data is None:
+            self.remove_component_fallback(component_number)
+            return
+
+        logger.info(f"Showing fallback model for component {component_number}")
+        self.plot_component_gaussian(component_number, z_data, info["label"])
+
+    def refresh_all_component_fallbacks(self):
+        """
+        Re-evaluate all components: for each one, either show the ROI
+        curve or the Gaussian / seed model curve.
+        """
+        for comp in list(self.component_gaussians.keys()):
+            self.update_component_fallback(comp)
+
+    def request_gaussian_component_plot(
+            self,
+            component_number: int,
+            z_data: np.ndarray | None = None,
+            label: str | None = None,
+    ):
+        """
+        Public entry point to be called.
+
+        - If `z_data` is given, it is stored as the Gaussian / model
+          spectrum for this component.
+        - In any case, the plot is updated such that **either**
+          ROI mean curves (if present & plotted) **or** this model
+          curve is visible.
+        """
+        if z_data is not None:
+            self.set_component_gaussian(component_number, z_data, label)
+        else:
+            self.update_component_fallback(component_number)
+
     def roi_component_changed(self, roi_id, component_number):
         # remove the old highlight
         self.remove_highlight(roi_id)
@@ -908,6 +1432,8 @@ class ROIPlotter(pg.PlotWidget):
             for area in spectral_range:
                 self.highlight_region(area, roi_id, overwrite=False, append_to_spectral_dict=False)
 
+        # NEW: ROI → component mapping changed; recompute fallbacks
+        self.refresh_all_component_fallbacks()
 
     def highlight_region(self, spectral_range: np.array, roi_id, overwrite=True, append_to_spectral_dict=True):
         if roi_id in self.roi_highlights:
@@ -954,6 +1480,9 @@ class ROIPlotter(pg.PlotWidget):
                 curve_masked, curve_zero = fill.curves  # Get the highlight curves
                 # Retrieve the x data from curve_masked
                 x_range = curve_masked.xData
+                if x_range is None:
+                    logger.warning('Curve {roi_id} has no x data for highlight update and seems not to be highlighted anymore.')
+                    continue
                 # Extract updated y-values based on x_range
                 x_mask = np.isin(self.roi_manager.wavenumbers, x_range)
                 y_fill = y[x_mask]
@@ -986,7 +1515,33 @@ class ROIPlotter(pg.PlotWidget):
         if roi_id in self.roi_highlights:
             self.remove_highlight(roi_id)
 
+    @staticmethod
+    def _generate_gaussian(wavenumbers: np.ndarray, center_wavenumber: float, hwhm: float, amp: float = 1.0, eliminate_zeros=True) -> np.ndarray:
+        """
+        Generates a Gaussian curve centered at center_wavenumber with the specified FWHM.
 
+        Args:
+            wavenumbers (np.ndarray): The array of wavenumber values.
+            center_wavenumber (float): The center of the Gaussian curve.
+            hwhm (float): The Half Width at Half Maximum of the Gaussian curve.
+            amp (float): Amplitude of the Gaussian curve.
+            eliminate_zeros (bool): If True, replaces zeros with a small epsilon value. Note: the dtype of the returned array will be float.
+        Returns:
+            np.ndarray: A numpy array representing the Gaussian curve.
+        """
+
+        # FWHM = 2 * sqrt(2 * ln(2)) * sigma
+        # sigma = FWHM / (2 * sqrt(2 * ln(2)))
+        sigma = hwhm / (np.sqrt(2 * np.log(2)))
+
+        # Gaussian formula: exp(- (x - mu)^2 / (2 * sigma^2))
+        gaussian = np.exp(-((wavenumbers - center_wavenumber) ** 2) / (2 * sigma ** 2))
+        gaussian *= amp
+
+        if eliminate_zeros:
+            # add float info eps to avoid errors with zeros for NNMF
+            gaussian[gaussian == 0] += np.finfo(float).eps
+        return gaussian
 
 
 class DummyROI(pg.ROI):
@@ -996,13 +1551,15 @@ class DummyROI(pg.ROI):
         # make roi invisible
         self.setPen(pg.mkPen(None))
         self.spectrum_name = spectrum_name
-        self.spectrum_data = spectrum_data  # Store the spectral data
+        self.spectrum_data = np.asarray(spectrum_data).copy()  # Store the spectral data
         self.label = spectrum_name
 
     def getArrayRegion(self, *args, **kwargs):
         spectrum_3d = self.spectrum_data[:, np.newaxis, np.newaxis]
         return spectrum_3d # Return the stored spectral data as 3d image data to immiate the behavior of the pg.ROI class
 
+    def update_spectrum(self, new_spectrum_data: list or np.ndarray):
+        self.spectrum_data = np.asarray(new_spectrum_data).copy()
 
 if __name__ == '__main__':
     print('Please run the main.py file to start the application')

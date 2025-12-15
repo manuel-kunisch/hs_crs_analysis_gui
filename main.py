@@ -2,6 +2,7 @@ import json
 import logging
 import sys
 
+import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore, Qt  # Import the necessary modules
 from PyQt5 import QtWidgets
@@ -82,7 +83,7 @@ class MainApplication(QtWidgets.QMainWindow):
 
         # bind functionality to the load and save preset buttons
         self.data_handler.loader_widget.save_preset_button.clicked.connect(lambda boo: self.save_state())
-        self.data_handler.loader_widget.load_preset_button.clicked.connect(lambda: print('Load preset'))
+        self.data_handler.loader_widget.load_preset_button.clicked.connect(lambda boo: self.load_state())
 
         # %% Initialization of objects done, now create the GUI
 
@@ -264,8 +265,8 @@ class MainApplication(QtWidgets.QMainWindow):
 
     def save_state(self):
         preset = {
-            "image_path": self.data_handler.loader_widget.drag_label.text(),
-            "image": self.data_handler.loader_widget.image.tolist() if self.data_handler.loader_widget.image is not None else None,
+            "image_path": self.data_handler.loader_widget.current_path,
+            # "image": self.data_handler.loader_widget.image.tolist() if self.data_handler.loader_widget.image is not None else None,
             "binning_factor": self.data_handler.get_current_binning(),
             "fov": self.data_handler.loader_widget.physical_units_manager.get_fov(),
             "unit": self.data_handler.loader_widget.physical_units_manager.unit,
@@ -279,19 +280,14 @@ class MainApplication(QtWidgets.QMainWindow):
             "num_components": self.analysis_manager.num_components_spinbox.value(),
             "analysis_method": self.analysis_manager.mv_analyzer.analysis_method,
             "custom_model": self.analysis_manager.mv_analyzer.custom_nnmf_init,
-            "spectral_preset": self.analysis_manager.get_all_spectral_info(),
             "w_seed_settings": [self.analysis_manager.mv_analyzer.full_W_seed, self.analysis_manager.mv_analyzer.avg_W_seed,
                                 self.analysis_manager.mv_analyzer.H_weighted_W_seed],
 
-            # rois save all rois and their table entries
-            """
-            "roi_manager": {
-                "rois": self.data_widget.roi_manager.get_all_rois(),
-                "roi_table": self.data_widget.roi_manager.get_roi_table_data(),
-                "roi_labels": self.data_widget.roi_manager.get_roi_labels(),
-                "roi_colors": self.data_widget.roi_manager.get_roi_colors()
-            },
-            """
+            # export resonance table state
+            "spectral_preset": self.analysis_manager.export_resonance_table_state(),
+
+            # export roi manager state
+            "roi_manager": self.data_widget.roi_manager.export_state(),
             
             "histogram_states": {
                 k: {
@@ -308,9 +304,94 @@ class MainApplication(QtWidgets.QMainWindow):
 
         # open a file dialog to save the preset
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Preset", "", "JSON Files (*.json)")
+        if not path:
+            return  # user cancelled
         with open(path, 'w') as f:
             json.dump(preset, f, indent=4)
         logger.info(f"Saved preset to {path}")
+
+    def load_state(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load Preset", "", "JSON Files (*.json)")
+        if not path:
+            return
+        with open(path, "r") as f:
+            preset = json.load(f)
+
+        # ---- ORDER MATTERS ----
+        # 1) load image (so n_frames/shape exist)
+        img_path = preset.get("image_path", None)
+        if img_path and isinstance(img_path, str):
+            try:
+                self.data_handler.loader_widget.load_tiff(img_path)
+            except Exception:
+                pass
+        elif preset.get("image", None) is not None:
+            self.data_handler.loader_widget.image = np.asarray(preset["image"])
+
+        # 2) binning (BEFORE ROIs)
+        try:
+            self.update_binning(int(preset.get("binning_factor", self.data_handler.get_current_binning())))
+        except Exception:
+            pass
+
+        # 3) physical units
+        try:
+            pum = self.data_handler.loader_widget.physical_units_manager
+            if "unit" in preset:
+                pum.unit = preset["unit"]
+            if "fov" in preset and hasattr(pum, "set_fov"):
+                pum.set_fov(tuple(preset["fov"]))
+        except Exception:
+            pass
+
+        # 4) wavenumbers (this updates data_widget + analysis_manager + result viewer)
+        # only matters when no image is loaded yet
+        if preset.get("wavenumbers", None) is not None:
+            wav = np.asarray(preset["wavenumbers"], dtype=float)
+            self.data_handler.wavenumber_widget.wavenumbers = wav
+            self.update_wavenum_changed(wav)
+
+        # set the correct wavelength range in the wavenumber widget
+        if preset.get("lambda_min", None) is not None:
+            self.data_handler.wavenumber_widget.min_wavelength_entry.setText(str(preset["lambda_min"]))
+        if preset.get("lambda_max", None) is not None:
+            self.data_handler.wavenumber_widget.max_wavelength_entry.setText(str(preset["lambda_max"]))
+        if preset.get("mode", None) is not None:
+            self.data_handler.wavenumber_widget.beam_mode = preset["mode"]
+
+        # 5) ROIs (after image+binning+wavenumbers exist)
+        roi_state = preset.get("roi_manager", None)
+        if roi_state and hasattr(self.data_widget.roi_manager, "import_state"):
+            self.data_widget.roi_manager.import_state(roi_state)
+
+        # 6) analysis settings + resonance table
+        self.analysis_manager.num_components_spinbox.setValue(int(preset.get("num_components", 3)))
+        self.analysis_manager.mv_analyzer.set_custom_nnmf_init(bool(preset.get("custom_model", True)))
+
+        rows = preset.get("spectral_preset", None)
+        if rows is not None and hasattr(self.analysis_manager, "import_resonance_table_state"):
+            self.analysis_manager.import_resonance_table_state(rows)
+
+
+        # 7) result-viewer histograms + labels (your existing structure)
+        labels = preset.get("labels", None)
+        if labels is not None:
+            self.result_viewer_widget.custom_labels = labels
+            for k, v in labels.items():
+                try:
+                    self.result_viewer_widget.update_label(int(k), v)
+                except Exception:
+                    pass
+
+        hist = preset.get("histogram_states", None)
+        if isinstance(hist, dict):
+            # best-effort: recreate color states immediately
+            for k, st in hist.items():
+                try:
+                    idx = int(k)
+                    self.result_viewer_widget.make_color_state(idx, st["levels"], st["top_color"])
+                except Exception:
+                    pass
 
     def switch_section(self, index):
         self.stack_widget.setCurrentIndex(index)

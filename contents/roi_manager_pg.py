@@ -1160,6 +1160,198 @@ class ROIManager(QtCore.QObject):
 
         return np.array([xx, yy])  # These are the pixel coordinates inside the ROI
 
+
+    # ------------
+    # import and export of ROIs
+
+    # --- ROI preset I/O ---------------------------------------------------------
+
+    def clear_all_rois(self):
+        # remove from end to avoid index shifts
+        for roi in list(self.rois)[::-1]:
+            try:
+                self.remove_roi(roi)
+            except Exception:
+                pass
+
+    def export_state(self) -> dict:
+        rois_out = []
+        for row, roi in enumerate(self.rois):
+            # skip gaussian model dummy rows (they are regenerated from resonance table)
+            if getattr(roi, "is_gaussian_model", False):
+                continue
+
+            row_state = {
+                "name": self.roi_table.cellWidget(row, self.widget_columns["Name"]).text(),
+                "color": list(roi.pen.color().getRgb()),  # [r,g,b,a]
+                "component": int(self.component_number_from_table_index(row) or 0),
+                "resonance_index": int(self.roi_table.cellWidget(row, self.widget_columns["Resonance"]).currentIndex()),
+                "background": bool(self.roi_table.cellWidget(row, self.widget_columns["Background"]).isChecked()),
+                "subtract": bool(self.roi_table.cellWidget(row, self.widget_columns["Subtract"]).isChecked()),
+                "scale": float(self.roi_table.cellWidget(row, self.widget_columns["Scale"]).value()),
+                "offset": float(self.roi_table.cellWidget(row, self.widget_columns["Offset"]).value()),
+                "smooth_sigma": float(self.roi_table.cellWidget(row, self.widget_columns["Gaussian σ"]).value()),
+                "roi_shape": str(self.roi_table.cellWidget(row, self.widget_columns["ROI Shape"]).currentText()),
+                "live_update": bool(self.roi_table.cellWidget(row, self.widget_columns["Live Update"]).isChecked()),
+                "plot": bool(self.roi_table.cellWidget(row, self.widget_columns["Plot"]).isChecked()),
+            }
+
+            is_dummy = isinstance(roi, DummyROI)
+            row_state["dummy"] = bool(is_dummy)
+
+            if is_dummy:
+                row_state["spectrum_name"] = getattr(roi, "spectrum_name", row_state["name"])
+                row_state["spectrum_data"] = roi.spectrum_data.tolist()
+            else:
+                row_state["pos"] = [float(roi.pos()[0]), float(roi.pos()[1])]
+                row_state["size"] = [float(roi.size()[0]), float(roi.size()[1])]
+                if hasattr(roi, "angle"):
+                    try:
+                        row_state["angle"] = float(roi.angle())
+                    except Exception:
+                        pass
+
+            if hasattr(roi, "fixed_W"):
+                row_state["fixed_W"] = roi.fixed_W.tolist()
+
+            rois_out.append(row_state)
+
+        return {"rois": rois_out}
+
+    def import_state(self, state: dict):
+        """
+        Rebuild ROIs + table entries so the GUI looks identical after load.
+        Assumes image + binning are already applied.
+        """
+        self.clear_all_rois()
+
+        rois = state.get("rois", []) if isinstance(state, dict) else []
+        subtract_row_to_apply = None
+
+        for entry in rois:
+            dummy = bool(entry.get("dummy", False))
+            roi_obj = None
+
+            if dummy:
+                # component_number is 1-based for add_dummy_roi()
+                comp_1based = int(entry.get("resonance_index", 0)) + 1
+                roi_id = self.add_dummy_roi(
+                    spectrum_data=np.asarray(entry["spectrum_data"], dtype=float),
+                    component_number=comp_1based,
+                    spectrum_name=str(entry.get("spectrum_name", "")),
+                    is_background=bool(entry.get("background", False)),
+                    fixed_W=np.asarray(entry["fixed_W"], dtype=float) if entry.get("fixed_W") is not None else None,
+                )
+                roi_obj = self.rois[self.roi_id_idx[roi_id]]
+                row = self.roi_id_idx[roi_id]
+            else:
+                # create a base RectROI, then set shape via combobox (reuses your own change_roi_type())
+                pos = entry.get("pos", [0, 0])
+                size = entry.get("size", [10, 10])
+                roi_obj = pg.RectROI(pos, size, pen=(0, 9))
+                self.image_view.getView().addItem(roi_obj)
+                self.rois.append(roi_obj)
+                roi_id = str(roi_obj)
+                self.roi_id_idx[roi_id] = len(self.rois) - 1
+
+                comp0 = int(entry.get("resonance_index", 0))
+                row = self.add_last_roi_to_table(new_roi_id=roi_id, component_number=comp0, dummy=False,
+                                                 roi_name=entry.get("name", None))
+                self.connect_signals_to_roi(roi_obj, on_region_change=True)
+                self.request_plot_avg_intensity(roi_id)
+
+            # --- Apply table/widget states (block signals to avoid cascades) ---
+            name_w = self.roi_table.cellWidget(row, self.widget_columns["Name"])
+            color_w = self.roi_table.cellWidget(row, self.widget_columns["Color"])
+            res_cb = self.roi_table.cellWidget(row, self.widget_columns["Resonance"])
+            bg_cb = self.roi_table.cellWidget(row, self.widget_columns["Background"])
+            sub_cb = self.roi_table.cellWidget(row, self.widget_columns["Subtract"])
+            sc_sb = self.roi_table.cellWidget(row, self.widget_columns["Scale"])
+            off_sb = self.roi_table.cellWidget(row, self.widget_columns["Offset"])
+            sm_sb = self.roi_table.cellWidget(row, self.widget_columns["Gaussian σ"])
+            shape_cb = self.roi_table.cellWidget(row, self.widget_columns["ROI Shape"])
+            live_cb = self.roi_table.cellWidget(row, self.widget_columns["Live Update"])
+            plot_cb = self.roi_table.cellWidget(row, self.widget_columns["Plot"])
+
+            # add signal blockers
+            blockers = [QtCore.QSignalBlocker(w) for w in
+                        [name_w, res_cb, bg_cb, sub_cb, sc_sb, off_sb, sm_sb, shape_cb, live_cb, plot_cb] if
+                        w is not None]
+
+            if name_w is not None:
+                name_w.setText(str(entry.get("name", "")))
+
+            if color_w is not None:
+                color = entry.get("color", [255, 0, 0, 255])
+                qcolor = QtGui.QColor(color[0], color[1], color[2], color[3])
+                color_w.setColor(qcolor)
+                roi_obj.setPen(pg.mkPen(qcolor))
+
+            if res_cb is not None:
+                res_cb.setCurrentIndex(int(entry.get("resonance_index", 0)))
+
+            if bg_cb is not None:
+                bg_cb.setChecked(bool(entry.get("background", False)))
+
+            if sc_sb is not None:
+                sc_sb.setValue(float(entry.get("scale", 1.0)))
+
+            if off_sb is not None:
+                off_sb.setValue(float(entry.get("offset", 0.0)))
+
+            if sm_sb is not None:
+                sm_sb.setValue(float(entry.get("smooth_sigma", 0.0)))
+
+            if live_cb is not None:
+                live_cb.setChecked(bool(entry.get("live_update", True)))
+                # rewire ROI signals according to live_update
+                try:
+                    self.connect_signals_to_roi(self.rois[row], on_region_change=live_cb.isChecked())
+                except Exception:
+                    pass
+
+            if plot_cb is not None:
+                plot_cb.setChecked(bool(entry.get("plot", True)))
+
+            if shape_cb is not None:
+                shape_cb.setCurrentText(str(entry.get("roi_shape", "RectROI")))
+                # this triggers change_roi_type via your existing signal
+
+            # store subtract to apply AFTER everything exists
+            if sub_cb is not None and bool(entry.get("subtract", False)):
+                sub_cb.setChecked(True)
+                subtract_row_to_apply = row
+
+            del blockers  # release blockers
+
+            # angle (only if the ROI supports it)
+            ang = entry.get("angle", None)
+            if ang is not None:
+                try:
+                    self.rois[row].setAngle(float(ang))
+                except Exception:
+                    pass
+
+            # ensure plots reflect imported settings
+            try:
+                self.update_roi(self.rois[row])
+                self.update_roi_plot(self.rois[row])
+            except Exception:
+                pass
+
+        # Apply subtraction once at the end (avoids repeated re-subtractions while building)
+        if subtract_row_to_apply is not None:
+            try:
+                self.subtract_background(self.rois[subtract_row_to_apply], refill=True)
+            except Exception:
+                pass
+
+        try:
+            self.replot_all_rois()
+        except Exception:
+            pass
+
+
 class FillROI(QtCore.QObject):
     def __init__(self, roi: pg.ROI):
         super().__init__()

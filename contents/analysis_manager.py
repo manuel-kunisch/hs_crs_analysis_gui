@@ -1442,6 +1442,72 @@ class AnalysisManager(QtCore.QObject):
         self.mv_analyzer.update_wavenumbers(wavenumbers)
         self.roi_manager.update_wavenumbers(wavenumbers)
 
+    # ---- import and export
+    def export_resonance_table_state(self) -> list[dict]:
+        out = []
+        for row in range(self.resonance_table.rowCount()):
+            comp_cb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Component"])
+            wn_sb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Wavenumber"])
+            wd_sb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Width"])
+            np_sb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["# Seed Pixels"])
+            sub_cb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Use subtracted data"])
+            ga_cb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Use Gaussian"])
+            amp_sb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Amplitude"])
+
+            out.append({
+                "Component": int(comp_cb.currentIndex()) if comp_cb is not None else 0,
+                "Wavenumber": float(wn_sb.value()) if wn_sb is not None else 0.0,
+                "Width": float(wd_sb.value()) if wd_sb is not None else 0.0,
+                "# Seed Pixels": int(np_sb.value()) if np_sb is not None else 0,
+                "Use subtracted data": bool(sub_cb.isChecked()) if sub_cb is not None else True,
+                "Use Gaussian": bool(ga_cb.isChecked()) if ga_cb is not None else False,
+                "Amplitude": float(amp_sb.value()) if amp_sb is not None else 65535.0,
+            })
+        return out
+
+    def import_resonance_table_state(self, rows: list[dict]):
+        # clear table
+        while self.resonance_table.rowCount() > 0:
+            self.resonance_table.removeRow(0)
+
+        for r in rows:
+            self.add_resonance_settings()
+            row = self.resonance_table.rowCount() - 1
+
+            blockers = []
+            for key in ["Component", "Wavenumber", "Width", "# Seed Pixels", "Use subtracted data", "Use Gaussian",
+                        "Amplitude"]:
+                w = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[key])
+                if w is not None:
+                    blockers.append(QtCore.QSignalBlocker(w))
+
+            comp_cb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Component"])
+            if comp_cb is not None:
+                comp_cb.setCurrentIndex(int(r.get("Component", 0)))
+
+            self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Wavenumber"]).setValue(
+                float(r.get("Wavenumber", 0.0)))
+            self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Width"]).setValue(
+                float(r.get("Width", 0.0)))
+            self.resonance_table.cellWidget(row, self.res_settings_widget_columns["# Seed Pixels"]).setValue(
+                int(r.get("# Seed Pixels", 150)))
+
+            sub_cb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Use subtracted data"])
+            if sub_cb is not None:
+                sub_cb.setChecked(bool(r.get("Use subtracted data", True)))
+
+            ga_cb = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Use Gaussian"])
+            if ga_cb is not None:
+                ga_cb.setChecked(bool(r.get("Use Gaussian", False)))
+
+            self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Amplitude"]).setValue(
+                float(r.get("Amplitude", 65535)))
+
+            del blockers
+
+        # now propagate to analyzer + gaussian dummy ROIs + highlights
+        self.update_spectral_info()
+        self.highlight_all_resonances()
 
 
 class SeedWidget(QtWidgets.QWidget):

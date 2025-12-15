@@ -24,6 +24,7 @@ class ImageLoader(QtWidgets.QWidget):
             parent:
         """
         super().__init__(parent)
+        self.current_path = None
         self._raw_image = None  # store the raw image for reprocessing, e.g., rolling ball. None if not applicable
         self.wavelength_meta = None
         self.update_img_callback = update_img_callback
@@ -181,6 +182,8 @@ class ImageLoader(QtWidgets.QWidget):
         image = imread(fpath).astype(np.uint16)     # assume 16 bit image and read in as such
         self.drag_label.setText(f"✔ Loaded: {fpath.split('/')[-1]}")
         logger.info(f"Loaded image from {fpath}")
+
+        self.current_path = fpath
 
         self._raw_image = image
 

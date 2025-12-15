@@ -321,8 +321,11 @@ class AnalysisManager(QtCore.QObject):
         )
 
         actions_layout.addWidget(add_button)
-        actions_layout.addWidget(check_W_seeds_button)
-        actions_layout.addWidget(test_seeds_button)
+        check_layout = QtWidgets.QHBoxLayout()
+        check_layout.setSpacing(8)
+        check_layout.addWidget(check_W_seeds_button)
+        check_layout.addWidget(test_seeds_button)
+        actions_layout.addLayout(check_layout)
 
         right_layout.addWidget(actions_gb)
 
@@ -342,6 +345,13 @@ class AnalysisManager(QtCore.QObject):
         self.rolling_ball_radius.setSingleStep(2)
         self.rolling_ball_radius.setFixedWidth(90)
         bg_form.addRow("Rolling ball radius (px):", self.rolling_ball_radius)
+        # add rolling ball sigma for gaussian smoothing
+        self.rolling_ball_sigma = QtWidgets.QDoubleSpinBox()
+        self.rolling_ball_sigma.setRange(0.1, 100.0)
+        self.rolling_ball_sigma.setValue(3.0)
+        self.rolling_ball_sigma.setSingleStep(0.1)
+        self.rolling_ball_sigma.setFixedWidth(90)
+        bg_form.addRow("Gaussian smoothing (px):", self.rolling_ball_sigma)
 
         bg_btn_row = QtWidgets.QHBoxLayout()
         bg_btn_row.setSpacing(8)
@@ -1147,10 +1157,12 @@ class AnalysisManager(QtCore.QObject):
             bg_comp = new_n - 1
 
         radius = int(self.rolling_ball_radius.value())
+        sigma = float(self.rolling_ball_sigma.value())
 
         W_bg, H_bg = self.mv_analyzer.create_background_component_from_reference(img_2d,
                                                                                  background_component=int(bg_comp),
                                                                                  radius_px=radius,
+                                                                                 smooth_sigma=sigma,
                                                                                  write_into_seeds=False)
 
         # make a new window and show the W_bg in a pyqtgraph image view

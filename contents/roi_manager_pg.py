@@ -102,6 +102,18 @@ class ROIManager(QtCore.QObject):
         logger.info("Updating gaussian models")
         # check for gaussian model rois and replot them
         self.update_gaussian_models_from_spectral_info(self.gaussian_specs_by_component)
+
+        # remove all fixed W from the rois (when new data is loaded, or after binning)
+        c = 0
+        for roi in self.rois:
+            if hasattr(roi, 'fixed_W'):
+                del roi.fixed_W
+                c += 1
+                logger.info(f"Removed fixed W from {c} ROIs after data update")
+        # prompt a warning to the user if any fixed W were removed
+        if c > 0:
+            QtWidgets.QMessageBox.warning(None, "Fixed W removed",
+                                          f"{c} ROIs had fixed W values assigned which were removed after data update.")
         self.replot_all_rois()
 
     def update_wavenumbers(self, wavenumbers):
@@ -169,8 +181,8 @@ class ROIManager(QtCore.QObject):
 
 
     def add_last_roi_to_table(self, new_roi_id=None, component_number=None, dummy: bool = False,
-                         roi_name: str or None = None,
-                         is_background: bool = False) -> int:
+                              roi_name: str or None = None,
+                              is_background: bool = False) -> int:
         """
         Loads the last added ROI from self.rois list and adds it to the table.
         Args:
@@ -478,7 +490,8 @@ class ROIManager(QtCore.QObject):
         self.spectrum_loaders[roi_id] = (spec_loader, index)
 
     def add_dummy_roi(self, spectrum_data: np.ndarray, component_number: int, spectrum_name: str = "",
-                      is_background:bool = False) -> str:
+                      is_background:bool = False,
+                      fixed_W: np.ndarray = None) -> str:
         """
         Add a DummyROI with the given spectrum data and properties. Pretends to be a loaded ROI with a spectrum.
         Parameters
@@ -491,7 +504,8 @@ class ROIManager(QtCore.QObject):
             The name to assign to the DummyROI.
         is_background:
             Whether this ROI is marked as background in the table.
-
+        fixed_W: np.ndarray, optional
+            If provided, assigns fixed W values to the DummyROI. These will be passed with the ROI.
         Returns
         -------
         str
@@ -507,6 +521,11 @@ class ROIManager(QtCore.QObject):
         # Generate a unique ID to identify the ROI
         roi_id = str(roi)
         self.roi_id_idx[roi_id] = len(self.rois) - 1
+
+        if fixed_W is not None:
+            # W components directly assigned to the DummyROI, will be removed when the ROI is deleted
+            self.add_W_to_roi(roi, fixed_W)
+
         cur_index = self.add_last_roi_to_table(new_roi_id=roi_id, component_number=comp_idx, dummy=True,
                                                roi_name=spectrum_name,
                                                is_background=is_background)  # Use the loaded name
@@ -631,6 +650,9 @@ class ROIManager(QtCore.QObject):
         if self.fill_roi is not None:
             if self.roi_table.cellWidget(self.roi_id_idx[str(roi)], self.widget_columns['Subtract']).isChecked():
                 self.subtract_background(roi, refill=False)
+
+    def add_W_to_roi(self, roi: pg.ROI, W: np.ndarray):
+        roi.fixed_W = W
 
     def set_roi_properties(self, roi, color, label, replot=False):
         roi.setPen(pg.mkPen(color))
@@ -832,6 +854,18 @@ class ROIManager(QtCore.QObject):
                     return True
         return False
 
+    def component_has_fixed_W(self, component: int) -> bool:
+        """
+        Returns True if there is at least one ROI assigned to *component*
+        that has fixed_W defined.
+        """
+        for idx in range(self.roi_table.rowCount()):
+            if self.component_number_from_table_index(idx) == component:
+                roi = self.rois[idx]
+                if hasattr(roi, 'fixed_W'):
+                    return True
+        return False
+
     def set_roi_highlight(self, roi, highlighted=True):
         """
         Change the color of the ROI to highlight it
@@ -1014,7 +1048,7 @@ class ROIManager(QtCore.QObject):
             self.plot_roi(self.rois[self.roi_id_idx.get(roi_id)], np.array([]), '')
 
     def highlight_component_region(self, spectral_range, component_number: int):
-        rois = self.get_rois_from_component_number(component_number)
+        rois = self.get_rois_from_component_indices(component_number)
         for roi in rois:
             self.roi_plotter.highlight_region(spectral_range, str(roi), overwrite=False)
 
@@ -1048,13 +1082,24 @@ class ROIManager(QtCore.QObject):
         # 3) nothing
         return None
 
-    def get_roi_from_component_number(self, component_number: int) -> pg.ROI or None:
+    def get_roi_from_component_index(self, component_number: int) -> pg.ROI or None:
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component_number:
                 return self.rois[idx]
         return None
 
-    def get_rois_from_component_number(self, component_number: int) -> list[pg.ROI]:
+    def get_rois_from_component_indices(self, component_number: int) -> list[pg.ROI]:
+        """
+        Returns all ROIs assigned to the given component number.
+
+        Parameters
+        ----------
+        component_number: int
+            The component number to search for (in 0-based indexing).
+        Returns
+        -------
+
+        """
         rois = []
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component_number:
@@ -1075,7 +1120,7 @@ class ROIManager(QtCore.QObject):
         """
         Returns the pixel indices inside the ROIs of a given component in the format (y, x) -> usable for indexing
         """
-        rois = self.get_rois_from_component_number(component)
+        rois = self.get_rois_from_component_indices(component)
         if not rois:
             return None
         y_indices = np.array([])

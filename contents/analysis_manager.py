@@ -60,6 +60,8 @@ class AnalysisManager(QtCore.QObject):
         super().__init__()
         self.seed_window: QtWidgets.QMainWindow or None = None
         self.z3D_data = None
+        # add an attribute to store fixed W components for NNMF
+        self._fixed_seed_W: dict[int, np.ndarray] = {}  # component -> (n_pixels,) float32
         self.wavenumbers = None
         self.roi_manager:ROIManager|None = roi_manager
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
@@ -243,13 +245,17 @@ class AnalysisManager(QtCore.QObject):
         rb_layout.addWidget(QtWidgets.QLabel("Rolling Ball radius (px):"))
         self.rolling_ball_radius = QtWidgets.QSpinBox()
         self.rolling_ball_radius.setRange(1, 5000)
-        self.rolling_ball_radius.setValue(25)
+        self.rolling_ball_radius.setValue(11)
         self.rolling_ball_radius.setSingleStep(2)
         rb_layout.addWidget(self.rolling_ball_radius)
 
         rb_button = QtWidgets.QPushButton("Add BG component from selected resonance")
-        rb_button.clicked.connect(self.add_background_component_from_selected_resonance)
+        rb_button.clicked.connect(self.rolling_background_component_from_selected_resonance)
         rb_layout.addWidget(rb_button)
+
+        rb_avg_button = QtWidgets.QPushButton("Add BG component from average image")
+        rb_avg_button.clicked.connect(self.rolling_background_component_from_average_image)
+        rb_layout.addWidget(rb_avg_button)
 
         spectral_button_layout.addWidget(rb_widget)
 
@@ -362,8 +368,13 @@ class AnalysisManager(QtCore.QObject):
         -------
 
         """
+        self._fixed_seed_W = {}  # reset fixed W seeds
+
         self.reload_H_seeds_from_rois()     # reset all existing seeds and reload ROIs
         # make seeds from user inputs inside the roi manager (highest priority for H, and user inputs for W from the table)
+
+
+
         logger.info("Processing user inputs for W seeds and H from ROIs")
         seed_W, seed_H, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True,
                                                                             debug_mode=False)  # create W seeds from spectral info and pass to analyzer
@@ -413,6 +424,15 @@ class AnalysisManager(QtCore.QObject):
             self.seed_window.activateWindow()
         logger.info("Updated existing seed window")
 
+    def _reload_seeds_from_rois(self):
+        """
+        Reload H seeds from ROIs in the ROI manager and set them in the MV analyzer.
+        Also, load possible fixed W seeds from the ROIs and check for compatibility.
+        Returns
+        -------
+        """
+        self.reload_H_seeds_from_rois()
+        # check if any fixed W seeds present in the ROIs may be incompatible with the image possibly due to binning
 
 
     def reload_H_seeds_from_rois(self) -> None:
@@ -420,17 +440,39 @@ class AnalysisManager(QtCore.QObject):
         # TODO: Pass the seeds to the analyzer
         self.mv_analyzer.reset_seeds()
         for i, seed_dict in enumerate(seeds_list):
-            component_number = int(seed_dict['resonance'].strip('Component ')) - 1
+            component_number = int(seed_dict['resonance'].strip('Component '))
+            component_index =  component_number - 1
+
+            # check for existing fixed_W seeds coming with the roi
+            rois = self.roi_manager.get_rois_from_component_indices(component_index)
+
+            for roi in rois:
+                if hasattr(roi, "fixed_W"):
+                    fixed_W = roi.fixed_W
+                    # fixed_W shape is checked always in the roi manager in update_data
+                    self.set_fixed_W_seed(component_index, fixed_W)
+                    logger.info(f'Setting fixed W seed for component {component_index} from ROI')
+
             flag_bgd = self.roi_manager.roi_table.cellWidget(i, self.roi_manager.widget_columns['Background']).checkState()
-            if component_number >= self.mv_analyzer.get_n_components():
+            if component_index >= self.mv_analyzer.get_n_components():
                 logger.error(
-                    f'Component number {component_number} is out of bounds for {self.mv_analyzer.get_n_components()} components and is ignored.')
+                    f'Component number {component_index} is out of bounds for {self.mv_analyzer.get_n_components()} components and is ignored.')
                 # pop up warning box
                 QtWidgets.QMessageBox.warning(self.analysis_widget, 'Warning',
-                                              f'Component number {component_number} is out of bounds for'
+                                              f'Component number {component_index} is out of bounds for'
                                               f' {self.mv_analyzer.get_n_components()} components and is ignored.')
                 continue
-            self.mv_analyzer.set_H_seed(component_number, seed_dict['H'], flag_background=flag_bgd)
+            self.mv_analyzer.set_H_seed(component_index, seed_dict['H'], flag_background=flag_bgd)
+
+    def set_fixed_W_seed(self, component: int, fixed_W: np.ndarray):
+        """
+        Store a fixed W seed for a specific component.
+
+        Args:
+            component (int): The component index.
+            fixed_W (np.ndarray): The fixed W seed array of shape (n_pixels,).
+        """
+        self._fixed_seed_W[component] = fixed_W
 
     def analysis_completed(self, analysis_method):
         logger.info(f"{datetime.now()}: {analysis_method} finished ")
@@ -554,7 +596,7 @@ class AnalysisManager(QtCore.QObject):
 
     def highlight_resonance_component(self, component: int):
         logger.info('Checking if resonance info exists')
-        row = self.get_row_number(component)
+        row = self.get_row_index(component)
         if row is None:
             logger.info(f'No resonance info found for component {component}')
             return
@@ -566,7 +608,7 @@ class AnalysisManager(QtCore.QObject):
         if not info:
             return
         spectral_range = np.array([info['Wavenumber'] - info['Width'], info['Wavenumber'] + info['Width']])
-        self.roi_manager.highlight_component_region(spectral_range, self.get_component_number(row_table))
+        self.roi_manager.highlight_component_region(spectral_range, self.get_component_index(row_table))
 
     def show_W_seeds(self):
         """ debug function to check the W seeds from the spectral data"""
@@ -649,7 +691,7 @@ class AnalysisManager(QtCore.QObject):
 
         Returns a dictionary with the spectral information for the selected row. If the row is incomplete, an empty dictionary is returned.
         """
-        cnumber = self.get_component_number(row)
+        cnumber = self.get_component_index(row)
 
         def get_value(column_name: str, cast_type: type, default=None):
             """Helper function to extract and convert a cell value."""
@@ -706,7 +748,7 @@ class AnalysisManager(QtCore.QObject):
             # find the correct row index
             current_component: str = self.resonance_table.cellWidget(row, self.res_settings_widget_columns['Component']).currentText()
             # remove everything left from the last space to receive the component number
-            current_component = self.get_component_number(row)
+            current_component = self.get_component_index(row)
             if int(current_component) == component:
                 info = self.get_spectral_info_row(row)
         return info
@@ -719,7 +761,7 @@ class AnalysisManager(QtCore.QObject):
         """
         infos = []
         for row in range(self.resonance_table.rowCount()):
-            if self.get_component_number(row) == component:
+            if self.get_component_index(row) == component:
                 infos.append(self.get_spectral_info_row(row))
         return infos
 
@@ -764,8 +806,9 @@ class AnalysisManager(QtCore.QObject):
 
         return gaussians
 
-    def get_component_number(self, row: int):
+    def get_component_index(self, row: int):
         """
+        Returns the component number (0-based) for the given row in the resonance table.
         Note: Displayed component 1 is internally represented as 0 etc.
         """
         component_combobox: QtWidgets.QComboBox = self.resonance_table.cellWidget(row, self.res_settings_widget_columns['Component'])
@@ -774,7 +817,7 @@ class AnalysisManager(QtCore.QObject):
         # get only text after the last space
         return int(component_combobox.currentText().split(' ')[-1]) - 1
 
-    def get_row_number(self, component: int) -> int | None:
+    def get_row_index(self, component: int) -> int | None:
         """
         Returns the row number of the component in the table. If multiple components are found, the first one is returned.
         If no component is found, None is returned.
@@ -788,14 +831,14 @@ class AnalysisManager(QtCore.QObject):
         """
         # find the row number of the component in the table
         for row in range(self.resonance_table.rowCount()):
-            if self.get_component_number(row) == component:
+            if self.get_component_index(row) == component:
                 return row
         return None
 
-    def get_row_numbers(self, component: int) -> list[int] | None:
+    def get_row_indices(self, component: int) -> list[int] | None:
         rows = []
         for row in range(self.resonance_table.rowCount()):
-            if self.get_component_number(row) == component:
+            if self.get_component_index(row) == component:
                 rows.append(row)
         return rows if rows else None
 
@@ -819,6 +862,15 @@ class AnalysisManager(QtCore.QObject):
         # get the spectral information from the table
         # convert the wavenumber to indices
         seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()))
+
+        if self._fixed_seed_W:
+            for comp, fixed_W in self._fixed_seed_W.items():
+                if comp < seed_W.shape[1] and fixed_W.shape[0] == seed_W.shape[0]:
+                    seed_W[:, comp] = fixed_W
+                    logger.info(f'Setting fixed W seed for component {comp} from ROI')
+                else:
+                    logger.warning(f'Fixed W seed for component {comp} has incompatible shape and is ignored.')
+
         # iterate over all components and create the W seeds
         for i in range(self.mv_analyzer.get_n_components()):
             # check if any spectral info exists for this component
@@ -837,7 +889,7 @@ class AnalysisManager(QtCore.QObject):
             weights = np.ones(res_indices.size)
             # Shortened for brevity: insert your existing W seed averaging code here
             data = self.mv_analyzer.data_2d
-            if self.resonance_table.cellWidget(self.get_row_number(i),
+            if self.resonance_table.cellWidget(self.get_row_index(i),
                                                self.res_settings_widget_columns['Use subtracted data']).isChecked():
                 data = self.mv_analyzer.resonance_data_2d
 
@@ -900,7 +952,7 @@ class AnalysisManager(QtCore.QObject):
                 if i in seed_pixel_dict:
                     pixels = seed_pixel_dict[i]
                     use_subtracted = False
-                    row = self.get_row_number(i)
+                    row = self.get_row_index(i)
                     if row is not None:
                         use_subtracted = self.resonance_table.cellWidget(row, self.res_settings_widget_columns[
                             'Use subtracted data']).isChecked()
@@ -934,7 +986,7 @@ class AnalysisManager(QtCore.QObject):
 
         # used by resonance table
         for r in range(self.resonance_table.rowCount()):
-            c = self.get_component_number(r)
+            c = self.get_component_index(r)
             if c is not None:
                 used.add(int(c))
 
@@ -951,21 +1003,40 @@ class AnalysisManager(QtCore.QObject):
                 return c
         return None
 
-    def add_background_component_from_selected_resonance(self):
+    def rolling_background_component_from_average_image(self):
+        # get the average image over all wavenumbers
+        avg_image = np.mean(self.mv_analyzer.raw_data_3d, axis=0)
+        self._rolling_ball_background(avg_image)
+
+
+    def rolling_background_component_from_selected_resonance(self):
+        """
+        Create a background component using rolling ball algorithm based on the currently selected resonance row.
+        Estimates a background W component and H component.
+        The background component can be added as a dummy ROI with fixed W seed.
+
+        Returns
+        -------
+
+        """
+        # make sure W seeds exist for the signal component
+        self.reload_H_seeds_from_rois()
+        W, H, _ = self._make_W_seeds_from_spectral_info(make_H_seeds=False, debug_mode=False)
+
+        # get the W seed from the current user selection for W and H
         row = self.resonance_table.currentRow()
         if row is None or row < 0:
             QtWidgets.QMessageBox.information(self.analysis_widget, "Info", "Select a resonance row first.")
             return
-
-        signal_comp = self.get_component_number(row)
+        signal_comp = self.get_component_index(row)
         if signal_comp is None:
             QtWidgets.QMessageBox.warning(self.analysis_widget, "Warning", "Could not determine component from row.")
             return
+        img_1d = W[:, signal_comp]
+        img_2d = img_1d.reshape(self.mv_analyzer.raw_data_3d.shape[1], self.mv_analyzer.raw_data_3d.shape[2])
+        self._rolling_ball_background(img_2d)
 
-        # make sure W seeds exist for the signal component
-        self.reload_H_seeds_from_rois()
-        self._make_W_seeds_from_spectral_info(make_H_seeds=False, debug_mode=False)
-
+    def _rolling_ball_background(self, img_2d: np.ndarray):
         bg_comp = self._find_free_component_index()
         if bg_comp is None:
             # simplest behavior: grow by one
@@ -975,20 +1046,37 @@ class AnalysisManager(QtCore.QObject):
 
         radius = int(self.rolling_ball_radius.value())
 
-        W_bg, H_bg = self.mv_analyzer.create_background_component_from_reference_W(
-            signal_component=int(signal_comp),
-            background_component=int(bg_comp),
-            radius_px=radius,
-        )
+        W_bg, H_bg = self.mv_analyzer.create_background_component_from_reference(img_2d,
+                                                                                 background_component=int(bg_comp),
+                                                                                 radius_px=radius)
 
         # make a new window and show the W_bg in a pyqtgraph image view
         bg_W_view = self.make_W_seed_view(W_bg.reshape(self.mv_analyzer.raw_data_3d.shape[1],
-                                                            self.mv_analyzer.raw_data_3d.shape[2], -1))
-        bg_W_view.setWindowTitle(f"Background W Component {bg_comp+1}")
+                                                       self.mv_analyzer.raw_data_3d.shape[2], -1))
+        bg_W_view.setWindowTitle(f"Background W Component {bg_comp + 1}")
         bg_W_view.show()
 
-        self.roi_manager.add_dummy_roi(H_bg, component_number=int(bg_comp+1), is_background=True,
-                                       spectrum_name="RollingBall BG")
+        # add user prompt if he/she want to add the W as seed as well (saved in the roi)
+        reply = QtWidgets.QMessageBox.question(self.analysis_widget, 'Add Background ROI',
+                                               f'Do you want to add the background component {bg_comp + 1} as a'
+                                               f' dummy ROI with fixed W seed?'
+                                               f'\n\n'
+                                               f'Note: W will be saved in the ROI and used as fixed W seed for future analysis runs until removed.',
+                                               QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                                               QtWidgets.QMessageBox.Yes)
+
+        # kill the bg_W_view if it is still open
+        if bg_W_view is not None:
+            bg_W_view.close()
+
+        if reply == QtWidgets.QMessageBox.No:
+            return
+
+        self.roi_manager.add_dummy_roi(H_bg, component_number=int(bg_comp + 1), is_background=True,
+                                       spectrum_name="RollingBall BG",
+                                       fixed_W=W_bg
+                                       # pass fixed W to the roi so it gets loaded on seed creation
+                                       )
 
         # Optional: immediately show/update seed window
         self.make_all_seeds_from_inputs(show_seeds=True)
@@ -1009,7 +1097,7 @@ class AnalysisManager(QtCore.QObject):
         seed_pixel_dict = {}
         # Check the source priority (ROI -> Gaussian -> Pixel) for all components
         for i in range(n_components):
-            row = self.get_row_number(i)
+            row = self.get_row_index(i)
             has_roi = self.roi_manager.is_component_defined(i)
 
             # Check if we are forced to use Gaussian for this component

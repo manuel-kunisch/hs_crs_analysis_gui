@@ -4,6 +4,7 @@ from datetime import datetime
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter1d
+from skimage.restoration import rolling_ball
 from sklearn.decomposition import PCA, NMF
 
 from contents.custom_pyqt_objects import ImageViewYX
@@ -251,17 +252,17 @@ class MultivariateAnalyzer(object):
         self._W_prepared =  np.all(self.seed_W)
         logger.info(f'Set W seed matrix, prepared={self._W_prepared}')
 
-    def create_background_component_from_reference_W(
+    def create_background_component_from_reference(
             self,
-            signal_component: int,
+            ref_2d: np.ndarray,
             background_component: int,
             radius_px: int,
-            smooth_sigma: float = 1.0,
+            smooth_sigma: float = 2.0,
             downsample: int = 1,
             eps: float = 1e-6,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Create a *new* background component from an already-defined W seed of a signal component.
+        Create a *new* background component from a reference image
 
         W_bg = rolling_ball(W_signal_image)
         H_bg = weighted mean spectrum (raw data) with weights=W_bg
@@ -271,30 +272,21 @@ class MultivariateAnalyzer(object):
         W_bg : (n_pixels,) float32
         H_bg : (n_bands,) float32
         """
-        try:
-            from skimage.restoration import rolling_ball
-        except Exception as e:
-            raise RuntimeError("scikit-image rolling_ball not available") from e
-
-        if self.seed_W is None or not np.any(self.seed_W[:, signal_component]):
-            raise RuntimeError(f"W seed for component {signal_component} is not defined yet.")
-
-        ny, nx = self.raw_data_3d.shape[1], self.raw_data_3d.shape[2]
-
-        # --- reference image from existing W seed ---
-        ref = self.seed_W[:, signal_component].reshape(ny, nx).astype(np.float32)
 
         # optional downsample for speed
         ds = max(int(downsample), 1)
         if ds > 1:
-            ref_ds = ref[::ds, ::ds]
+            ref_ds = ref_2d[::ds, ::ds]
             rad_ds = max(int(radius_px // ds), 1)
             bg_ds = rolling_ball(ref_ds, radius=rad_ds).astype(np.float32)
             bg = np.repeat(np.repeat(bg_ds, ds, axis=0), ds, axis=1)[:ny, :nx]
         else:
-            bg = rolling_ball(ref, radius=int(radius_px)).astype(np.float32)
+            bg = rolling_ball(ref_2d, radius=int(radius_px)).astype(np.float32)
 
         W_bg = np.maximum(bg.reshape(-1), eps).astype(np.float32)
+
+        # smoothen the W_bg spatially
+        W_bg = gaussian_filter1d(W_bg, sigma=smooth_sigma, axis=0).astype(np.float32)
 
         # --- background spectrum from RAW data (more stable than subtracted) ---
         H_bg = np.average(self.data_2d.astype(np.float32), axis=0, weights=W_bg)

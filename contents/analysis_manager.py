@@ -118,215 +118,317 @@ class AnalysisManager(QtCore.QObject):
         return gaussian
 
     def init_ui(self):
-        """
-        Returns
-        -------
+        # -----------------------------
+        # Helpers
+        # -----------------------------
+        def _icon(theme_name: str, fallback_sp):
+            ico = QtGui.QIcon.fromTheme(theme_name)
+            if not ico.isNull():
+                return ico
 
-        """
-        # Create the main widget
+            app = QtWidgets.QApplication.instance()
+            if hasattr(self, "analysis_widget") and self.analysis_widget is not None:
+                style = self.analysis_widget.style()  # QWidget style
+            elif app is not None:
+                style = app.style()  # QApplication style
+            else:
+                style = None
+
+            return style.standardIcon(fallback_sp) if style is not None else QtGui.QIcon()
+
+        def _make_btn(text, theme_icon, fallback_sp, slot=None, tooltip=None, checkable=False):
+            b = QtWidgets.QPushButton(text)
+            b.setIcon(_icon(theme_icon, fallback_sp))
+            if tooltip:
+                b.setToolTip(tooltip)
+            if slot is not None:
+                b.clicked.connect(slot)
+            b.setCheckable(checkable)
+            b.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+            return b
+
+        # -----------------------------
+        # Root widget + global styling
+        # -----------------------------
         self.analysis_widget = QtWidgets.QWidget()
-        master_ui_layout = QtWidgets.QGridLayout(self.analysis_widget)
+        root = QtWidgets.QVBoxLayout(self.analysis_widget)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(10)
 
-        # Create a group box for radio buttons
-        analysis_group_box = QtWidgets.QGroupBox("Analysis Method")
-        analysis_grid = QtWidgets.QGridLayout()
-        analysis_group_box.setLayout(analysis_grid)
+        self.analysis_widget.setStyleSheet("""
+        QGroupBox {
+            font-weight: 600;
+            border: 1px solid rgba(180,180,180,0.35);
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 6px;
+        }
+        QPushButton, QToolButton {
+            padding: 6px 10px;
+        }
+        QToolButton#AnalyzeTool {
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-weight: 700;
+        }
+        QHeaderView::section {
+            padding: 6px;
+        }
+        """)
 
-        # Add Radio Buttons for choosing between PCA and NNMF
+        # -----------------------------
+        # Top row: Analysis settings + big Analyze button
+        # -----------------------------
+        top_row = QtWidgets.QHBoxLayout()
+        top_row.setSpacing(10)
+        root.addLayout(top_row)
+
+        analysis_group_box = QtWidgets.QGroupBox("Analysis")
+        analysis_group_box.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        analysis_layout = QtWidgets.QGridLayout(analysis_group_box)
+        analysis_layout.setHorizontalSpacing(10)
+        analysis_layout.setVerticalSpacing(6)
+
+        # Method radio buttons
         self.pca_radio = QtWidgets.QRadioButton("PCA")
         self.nnmf_radio = QtWidgets.QRadioButton("NNMF")
         self.pca_radio.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
-        # Connect radio button signals to update analysis method
+        self.nnmf_radio.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         self.pca_radio.clicked.connect(lambda: self.update_analysis_method("PCA"))
         self.nnmf_radio.clicked.connect(lambda: self.update_analysis_method("NNMF"))
-        self.nnmf_radio.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
-        self.nnmf_radio.setChecked(True)  # Default to PCA
+        self.nnmf_radio.setChecked(True)  # Default
 
-        # Add SpinBox for number of components
-        spin_box_label = QtWidgets.QLabel("# Components:")
-        self.num_components_spinbox = QtWidgets.QSpinBox(minimum=1, maximum=100, value=self.mv_analyzer.get_n_components(), singleStep=1)
-        self.num_components_spinbox.setToolTip("Set the number of components for PCA/NNMF analysis")
-        self.num_components_spinbox.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        self.num_components_spinbox.valueChanged.connect(
-            lambda n: self.mv_analyzer.update_components(n)
+        analysis_layout.addWidget(self.pca_radio, 0, 0, 1, 1)
+        analysis_layout.addWidget(self.nnmf_radio, 1, 0, 1, 1)
+
+        # Components
+        comp_label = QtWidgets.QLabel("# Components:")
+        comp_label.setToolTip("Set the number of components for PCA/NNMF analysis")
+        self.num_components_spinbox = QtWidgets.QSpinBox(
+            minimum=1, maximum=100,
+            value=self.mv_analyzer.get_n_components(),
+            singleStep=1
         )
-        spin_box_label.setToolTip("Set the number of components for PCA/NNMF analysis")
-        spin_box_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        components_hbox = QtWidgets.QHBoxLayout()
-        components_hbox.addWidget(spin_box_label)
-        components_hbox.addWidget(self.num_components_spinbox, alignment=QtCore.Qt.AlignLeft)
+        self.num_components_spinbox.setToolTip(comp_label.toolTip())
+        self.num_components_spinbox.setFixedWidth(80)
+        self.num_components_spinbox.valueChanged.connect(lambda n: self.mv_analyzer.update_components(n))
 
-        custom_init_hbox = QtWidgets.QHBoxLayout()
-        custom_init_check = QtWidgets.QCheckBox()
+        analysis_layout.addWidget(comp_label, 0, 1, 1, 1)
+        analysis_layout.addWidget(self.num_components_spinbox, 0, 2, 1, 1)
+
+        # Custom init
+        custom_init_check = QtWidgets.QCheckBox("Custom initialization (NNMF)")
+        custom_init_check.setToolTip(
+            "Use custom initialization for NNMF based on spectral and spatial seed information")
         custom_init_check.setChecked(True)
-        custom_init_label = QtWidgets.QLabel("Custom Initialization")
-        custom_init_label.setToolTip("Use custom initialization for NNMF based on spectral and spatial seed information")
-        custom_init_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        custom_init_check.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        custom_init_hbox.addWidget(custom_init_label)
-        custom_init_hbox.addWidget(custom_init_check, alignment=QtCore.Qt.AlignLeft)
-        # pass the current state of the checkbox to the analyzer object
         custom_init_check.stateChanged.connect(self.mv_analyzer.set_custom_nnmf_init)
         self.mv_analyzer.set_custom_nnmf_init(custom_init_check.isChecked())
 
+        analysis_layout.addWidget(custom_init_check, 1, 1, 1, 2)
 
-        analysis_grid.addWidget(self.pca_radio, 0, 0, 2, 1)
-        analysis_grid.addWidget(self.nnmf_radio, 2, 0, 2, 1)
-        components_widget = QtWidgets.QWidget()
-        components_widget.setLayout(components_hbox)
-        components_widget.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
-        custom_init_widget = QtWidgets.QWidget()
-        custom_init_widget.setLayout(custom_init_hbox)
-        analysis_grid.addWidget(components_widget, 0, 2, 2, 1)
-        analysis_grid.addWidget(custom_init_widget, 2, 2, 2, 1)
-        # Add the group box to the vertical layout
-        master_ui_layout.addWidget(analysis_group_box, 0, 0)
+        top_row.addWidget(analysis_group_box)
 
-        # Create a horizontal layout for table and analyze button
-        table_and_button_layout = QtWidgets.QGridLayout()
+        # Big Analyze button (toolbutton looks nicer than pushbutton here)
+        self.analyze_button = QtWidgets.QToolButton()
+        self.analyze_button.setObjectName("AnalyzeTool")
+        self.analyze_button.setText("Analyze")
+        self.analyze_button.setIcon(_icon("media-playback-start", QtWidgets.QStyle.SP_MediaPlay))
+        self.analyze_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
+        self.analyze_button.setIconSize(QtCore.QSize(32, 32))
+        self.analyze_button.setMinimumWidth(130)
+        self.analyze_button.clicked.connect(self.analyze_data)
+        top_row.addStretch(1)
+        top_row.addWidget(self.analyze_button)
 
-        # Create a table to show files
+        # -----------------------------
+        # Main area: table (left) + control panel (right)
+        # -----------------------------
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        root.addWidget(splitter, 1)
+
+        # --- Left: table container ---
+        left = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+
         self.resonance_table = QtWidgets.QTableWidget()
-        res_settings_options = ["Component", "Wavenumber", "Width",
-                                # "Pixel Threshold",
-                                "# Seed Pixels", "Use subtracted data",
-                                "Use Gaussian", "Amplitude", "Remove"]
+        res_settings_options = [
+            "Component", "Wavenumber", "Width",
+            "# Seed Pixels", "Use subtracted data",
+            "Use Gaussian", "Amplitude", "Remove"
+        ]
         self.res_settings_widget_columns = {option: i for i, option in enumerate(res_settings_options)}
-        self.resonance_table.setColumnCount(len(res_settings_options))  # Assuming one column for file paths
+        self.resonance_table.setColumnCount(len(res_settings_options))
         self.resonance_table.setHorizontalHeaderLabels(res_settings_options)
         self.resonance_table.setAcceptDrops(True)
+        self.resonance_table.setAlternatingRowColors(True)
+        self.resonance_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        # restrict to single row selection
+        self.resonance_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.resonance_table.horizontalHeader().setStretchLastSection(True)
+        self.resonance_table.resizeColumnsToContents()
 
-        # bind shortcut on del press to remove the selected row
+        # Keep your widths where you really want them
+        self.resonance_table.setColumnWidth(self.res_settings_widget_columns["Component"], 110)
+        self.resonance_table.setColumnWidth(self.res_settings_widget_columns["Width"], 50)
+
+        left_layout.addWidget(self.resonance_table, 1)
+
+        # Shortcut + hint (cleaner + readable)
         del_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+D"), self.resonance_table)
         del_shortcut.activated.connect(lambda: self.remove_res_settings(self.resonance_table.currentRow()))
-        # add hint that pressing "Ctrl+D" will delete the selected row with small font
-        del_hint_label = QLabel('Press "Ctrl+D" to delete selected row/setting')
-        del_hint_label.setStyleSheet("font-size: 4pt")
-        del_hint_label.setWordWrap(True)
-        del_hint_label.setMaximumWidth(70)
-        table_and_button_layout.addWidget(del_hint_label, 5, 4, alignment=QtCore.Qt.AlignRight)
 
-        spectral_button_widget = QtWidgets.QWidget()
-        spectral_button_layout = QtWidgets.QVBoxLayout()
-        spectral_button_widget.setLayout(spectral_button_layout)
-        spectral_button_widget.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        hint = QtWidgets.QLabel('Tip: Press <b>Ctrl+D</b> to delete the selected resonance row.')
+        hint.setStyleSheet("opacity: 0.75;")
+        hint.setAlignment(QtCore.Qt.AlignRight)
+        left_layout.addWidget(hint)
 
-        # Add the table to the horizontal layout
-        table_and_button_layout.addWidget(self.resonance_table, 0, 0, 5, 5, alignment=QtCore.Qt.AlignTop)
-        # Add button to add resonance settings
-        add_button = QtWidgets.QPushButton("Add Resonance Settings")
-        add_button.clicked.connect(self.add_resonance_settings)
-        spectral_button_layout.addWidget(add_button)
-        # table_and_button_layout.addWidget(spectral_button_widget, 0, 5, alignment=QtCore.Qt.AlignTop )
+        splitter.addWidget(left)
 
+        # --- Right: control panel ---
+        right = QtWidgets.QWidget()
+        right.setMinimumWidth(360)
+        right_layout = QtWidgets.QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
 
-        # Add Analyze button
-        self.analyze_button = QtWidgets.QPushButton("Analyze")
-        self.analyze_button.clicked.connect(self.analyze_data)
-        # table_and_button_layout.addWidget(self.analyze_button, 2, 5, alignment=QtCore.Qt.AlignVCenter)
-        analysis_grid.addWidget(self.analyze_button, 1, 1, 2, 1)
+        # (1) Resonance / actions
+        actions_gb = QtWidgets.QGroupBox("Actions")
+        actions_layout = QtWidgets.QVBoxLayout(actions_gb)
+        actions_layout.setSpacing(8)
 
-        # highlight the analyze button
-        self.analyze_button.setStyleSheet("background-color: darkkhaki")
-        self.analyze_button.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
-        # W seed handling
-        w_seed_label = QLabel('W Seed Settings:')
-        table_and_button_layout.addWidget(w_seed_label, 5, 0, alignment=QtCore.Qt.AlignRight)
-        # Add button to check W seeds
-        check_W_seeds_button = QtWidgets.QPushButton("Check W Seeds (from H only)")
-        check_W_seeds_button.clicked.connect(self.show_W_seeds)
-        spectral_button_layout.addWidget(check_W_seeds_button)
+        add_button = _make_btn(
+            "Add resonance settings",
+            "list-add", QtWidgets.QStyle.SP_FileDialogNewFolder,
+            slot=self.add_resonance_settings
+        )
+        check_W_seeds_button = _make_btn(
+            "Check W seeds (from H only)",
+            "dialog-ok-apply", QtWidgets.QStyle.SP_DialogApplyButton,
+            slot=self.show_W_seeds
+        )
+        test_seeds_button = _make_btn(
+            "Test seeds",
+            "system-run", QtWidgets.QStyle.SP_BrowserReload,
+            slot=lambda: self.make_all_seeds_from_inputs(show_seeds=True),
+            tooltip="Runs your seed generation and opens the seed preview window."
+        )
 
-        # --- Rolling Ball BG widget ---
-        rb_widget = QtWidgets.QWidget()
-        rb_layout = QtWidgets.QHBoxLayout(rb_widget)
-        rb_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.addWidget(add_button)
+        actions_layout.addWidget(check_W_seeds_button)
+        actions_layout.addWidget(test_seeds_button)
 
-        rb_layout.addWidget(QtWidgets.QLabel("Rolling Ball radius (px):"))
+        right_layout.addWidget(actions_gb)
+
+        # (2) Background (rolling ball)
+        bg_gb = QtWidgets.QGroupBox("Background")
+        bg_gb_layout = QtWidgets.QVBoxLayout(bg_gb)
+        bg_form = QtWidgets.QFormLayout()
+        bg_gb_layout.addLayout(bg_form)
+        bg_form.setLabelAlignment(QtCore.Qt.AlignRight)
+        bg_form.setFormAlignment(QtCore.Qt.AlignTop)
+        bg_form.setHorizontalSpacing(10)
+        bg_form.setVerticalSpacing(8)
+
         self.rolling_ball_radius = QtWidgets.QSpinBox()
         self.rolling_ball_radius.setRange(1, 5000)
         self.rolling_ball_radius.setValue(11)
         self.rolling_ball_radius.setSingleStep(2)
-        rb_layout.addWidget(self.rolling_ball_radius)
+        self.rolling_ball_radius.setFixedWidth(90)
+        bg_form.addRow("Rolling ball radius (px):", self.rolling_ball_radius)
 
-        rb_button = QtWidgets.QPushButton("Add BG component from selected resonance")
-        rb_button.clicked.connect(self.rolling_background_component_from_selected_resonance)
-        rb_layout.addWidget(rb_button)
+        bg_btn_row = QtWidgets.QHBoxLayout()
+        bg_btn_row.setSpacing(8)
+        rb_button = _make_btn(
+            "From selected resonance",
+            "image-filter", QtWidgets.QStyle.SP_FileDialogContentsView,
+            slot=self.rolling_background_component_from_selected_resonance
+        )
+        rb_avg_button = _make_btn(
+            "From average image",
+            "insert-image", QtWidgets.QStyle.SP_FileIcon,
+            slot=self.rolling_background_component_from_average_image
+        )
+        bg_btn_row.addWidget(rb_button)
+        bg_btn_row.addWidget(rb_avg_button)
+        bg_gb_layout.addLayout(bg_btn_row)
+        right_layout.addWidget(bg_gb)
 
-        rb_avg_button = QtWidgets.QPushButton("Add BG component from average image")
-        rb_avg_button.clicked.connect(self.rolling_background_component_from_average_image)
-        rb_layout.addWidget(rb_avg_button)
+        # (3) W seed init settings
+        wseed_gb = QtWidgets.QGroupBox("W seed initialization")
+        wseed_layout = QtWidgets.QVBoxLayout(wseed_gb)
+        wseed_layout.setSpacing(8)
 
-        spectral_button_layout.addWidget(rb_widget)
-
-
-        # add button to test the spectral info handling
-        test_spectral_info_button = QtWidgets.QPushButton('Test seeds')
-        # table_and_button_layout.addWidget(test_spectral_info_button, 4, 5, alignment=QtCore.Qt.AlignVCenter)
-        test_spectral_info_button.clicked.connect(lambda: self.make_all_seeds_from_inputs(show_seeds=True))
-        test_spectral_info_button.setStyleSheet("background-color: gray")
-        spectral_button_layout.addWidget(test_spectral_info_button)
-
-        test_seed_setup_button = QtWidgets.QPushButton('Test seed setup')
-        # table_and_button_layout.addWidget(test_seed_setup_button, 3, 5, alignment=QtCore.Qt.AlignVCenter)
-        test_seed_setup_button.clicked.connect(lambda state: self.make_all_seeds_from_inputs(show_seeds=True))
-        test_seed_setup_button.setStyleSheet("background-color: gray")
-        spectral_button_layout.addWidget(test_spectral_info_button)
-
-        analysis_grid.addWidget(spectral_button_widget, 0, 3, 4, 1)
-
-        # Create a QButtonGroup for exclusivity
-        W_seed_group = QtWidgets.QButtonGroup(self)  # Set 'self' as parent to keep group linked to UI
-        W_seed_group.setExclusive(True)  # Ensures only one can be selected
-
-        # Create radio buttons
-        h_weight_seed_check = QtWidgets.QCheckBox("H Weighted")
+        h_weight_seed_check = QtWidgets.QCheckBox("H weighted")
         h_weight_seed_check.setChecked(True)
         h_weight_seed_check.stateChanged.connect(
-            lambda checked: setattr(self.mv_analyzer, 'H_weighted_W_seed', checked))
+            lambda state: setattr(self.mv_analyzer, "H_weighted_W_seed", bool(state))
+        )
         self.mv_analyzer.H_weighted_W_seed = h_weight_seed_check.isChecked()
-        avg_w_seed_radio = QtWidgets.QRadioButton("Average Image")
-        empty_w_seed_radio = QtWidgets.QRadioButton("Empty")
 
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.setSpacing(10)
+        avg_w_seed_radio = QtWidgets.QRadioButton("Average image")
+        empty_w_seed_radio = QtWidgets.QRadioButton("Homogeneous (empty)")
+        # disable the radios when H weighted is checked
+        h_weight_seed_check.stateChanged.connect(
+            lambda state: avg_w_seed_radio.setDisabled(bool(state))
+        )
+        h_weight_seed_check.stateChanged.connect(
+            lambda state: empty_w_seed_radio.setDisabled(bool(state))
+        )
+        # set correct initial state
+        if h_weight_seed_check.isChecked():
+            avg_w_seed_radio.setDisabled(True)
+            empty_w_seed_radio.setDisabled(True)
 
-        # Add to the button group
-        # W_seed_group.addButton(h_weight_seed_check)
+        # Button group to make the radios exclusive
+        W_seed_group = QtWidgets.QButtonGroup(self)
+        W_seed_group.setExclusive(True)
         W_seed_group.addButton(avg_w_seed_radio)
         W_seed_group.addButton(empty_w_seed_radio)
 
-        # find seed pixel widget
-        seed_pixel_wid = QtWidgets.QWidget()
-        seed_pixel_layout = QtWidgets.QHBoxLayout()
-        seed_pixel_wid.setLayout(seed_pixel_layout)
-        seed_pixel_label = QtWidgets.QLabel("Seed Pixel Metric:")
-        seed_pixel_layout.addWidget(seed_pixel_label)
-        seed_pixel_mode_dropdown = QtWidgets.QComboBox()
-        seed_pixel_mode_dropdown.addItems(["Max Intensity", "Score"])
-        seed_pixel_layout.addWidget(seed_pixel_mode_dropdown)
-        seed_pixel_mode_dropdown.currentTextChanged.connect(
-            lambda text: setattr(self, '_seed_pixel_mode', text)
-        )
-        seed_pixel_mode_dropdown.setCurrentIndex(0)
-        table_and_button_layout.addWidget(seed_pixel_wid, 6, 0, 1, 2, alignment=QtCore.Qt.AlignLeft)
-
-        h_weight_seed_check.setChecked(True)
-        table_and_button_layout.addWidget(h_weight_seed_check, 5, 1, alignment=QtCore.Qt.AlignLeft)
-        table_and_button_layout.addWidget(avg_w_seed_radio, 5, 2, alignment=QtCore.Qt.AlignLeft)
-        table_and_button_layout.addWidget(empty_w_seed_radio, 5, 3, alignment=QtCore.Qt.AlignLeft)
-        # Connect radio button state changes to the set_W_seed_mode method
-        avg_w_seed_radio.toggled.connect(
-            lambda checked: self.mv_analyzer.set_W_seed_mode("None") if checked else None)
-        # h_weight_seed_check.toggled.connect(
-        #    lambda checked: self.mv_analyzer.set_W_seed_mode("H weights") if checked else None)
+        avg_w_seed_radio.toggled.connect(lambda checked: self.mv_analyzer.set_W_seed_mode("None") if checked else None)
         empty_w_seed_radio.toggled.connect(
             lambda checked: self.mv_analyzer.set_W_seed_mode("Empty") if checked else None)
-        self.mv_analyzer.set_W_seed_mode("None")
-        avg_w_seed_radio.setChecked(True)
-        # Add the horizontal layout to the vertical layout
-        master_ui_layout.addLayout(table_and_button_layout, 1, 0)
 
-        # Set the main layout of the widget
-        self.analysis_widget.setLayout(master_ui_layout)
+        avg_w_seed_radio.setChecked(True)
+        self.mv_analyzer.set_W_seed_mode("None")
+
+        mode_row.addWidget(avg_w_seed_radio)
+        mode_row.addWidget(empty_w_seed_radio)
+        mode_row.addStretch(1)
+
+        wseed_layout.addWidget(h_weight_seed_check)
+        wseed_layout.addLayout(mode_row)
+
+        # Seed pixel metric
+        metric_row = QtWidgets.QHBoxLayout()
+        metric_row.setSpacing(10)
+        metric_row.addWidget(QtWidgets.QLabel("Seed pixel metric:"))
+        seed_pixel_mode_dropdown = QtWidgets.QComboBox()
+        seed_pixel_mode_dropdown.addItems(["Max Intensity", "Score"])
+        seed_pixel_mode_dropdown.setCurrentIndex(0)
+        seed_pixel_mode_dropdown.currentTextChanged.connect(lambda text: setattr(self, "_seed_pixel_mode", text))
+        metric_row.addWidget(seed_pixel_mode_dropdown, 1)
+        wseed_layout.addLayout(metric_row)
+
+        right_layout.addWidget(wseed_gb)
+
+        right_layout.addStretch(1)
+        splitter.addWidget(right)
+
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+
+        # Done
+        self.analysis_widget.setLayout(root)
 
     """
     def analyze_data(self):
@@ -1048,7 +1150,8 @@ class AnalysisManager(QtCore.QObject):
 
         W_bg, H_bg = self.mv_analyzer.create_background_component_from_reference(img_2d,
                                                                                  background_component=int(bg_comp),
-                                                                                 radius_px=radius)
+                                                                                 radius_px=radius,
+                                                                                 write_into_seeds=False)
 
         # make a new window and show the W_bg in a pyqtgraph image view
         bg_W_view = self.make_W_seed_view(W_bg.reshape(self.mv_analyzer.raw_data_3d.shape[1],

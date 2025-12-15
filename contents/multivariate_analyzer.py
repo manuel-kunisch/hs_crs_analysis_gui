@@ -3,7 +3,7 @@ from datetime import datetime
 
 import numpy as np
 from matplotlib import pyplot as plt
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, gaussian_filter
 from skimage.restoration import rolling_ball
 from sklearn.decomposition import PCA, NMF
 
@@ -257,9 +257,10 @@ class MultivariateAnalyzer(object):
             ref_2d: np.ndarray,
             background_component: int,
             radius_px: int,
-            smooth_sigma: float = 2.0,
+            smooth_sigma: float = 10.0,
             downsample: int = 1,
             eps: float = 1e-6,
+            write_into_seeds: bool = True
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Create a *new* background component from a reference image
@@ -286,7 +287,9 @@ class MultivariateAnalyzer(object):
         W_bg = np.maximum(bg.reshape(-1), eps).astype(np.float32)
 
         # smoothen the W_bg spatially
-        W_bg = gaussian_filter1d(W_bg, sigma=smooth_sigma, axis=0).astype(np.float32)
+        W_bg_3d = W_bg.reshape(self.raw_data_3d.shape[1], self.raw_data_3d.shape[2])
+        W_bg_3d = gaussian_filter(W_bg_3d, sigma=smooth_sigma).astype(np.float32)
+        W_bg = W_bg_3d.reshape(-1)
 
         # --- background spectrum from RAW data (more stable than subtracted) ---
         H_bg = np.average(self.data_2d.astype(np.float32), axis=0, weights=W_bg)
@@ -296,12 +299,13 @@ class MultivariateAnalyzer(object):
         # add small epsilon to avoid zeros
         H_bg = np.maximum(H_bg, eps).astype(np.float32)
 
-        # write into seeds (+ mark background)
-        if self.seed_H is None or self.seed_W is None:
-            self.reset_seeds()
+        if write_into_seeds:
+            # write into seeds (+ mark background)
+            if self.seed_H is None or self.seed_W is None:
+                self.reset_seeds()
 
-        self.seed_W[:, background_component] = W_bg
-        self.set_H_seed(background_component, H_bg, flag_background=True)
+            self.seed_W[:, background_component] = W_bg
+            self.set_H_seed(background_component, H_bg, flag_background=True)
 
         return W_bg, H_bg
 

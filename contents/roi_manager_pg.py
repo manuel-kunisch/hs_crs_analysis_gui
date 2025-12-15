@@ -77,7 +77,13 @@ class ROIManager(QtCore.QObject):
         # bind shortcut on del press to remove the selected row / ROI
         del_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Del"), self.roi_table)
         del_shortcut.activated.connect(lambda: self.remove_roi(self.rois[self.roi_table.currentRow()]))
-        # self.roi_table.resizeColumnsToContents()
+        self.roi_table.resizeColumnsToContents()
+        # add extra space to the resonance column
+        self.roi_table.setColumnWidth(self.widget_columns['Resonance'], 120)
+        self.roi_table.setColumnWidth(self.widget_columns['Name'], 100)
+        self.roi_table.setColumnWidth(self.widget_columns['ROI Shape'], 70)
+        self.roi_table.setColumnWidth(self.widget_columns['Scale'], 70)
+        self.roi_table.setColumnWidth(self.widget_columns['Offset'], 70)
 
         # %% ROI plot
         self.roi_plot_dock= Dock("ROI Average Plot", size=(400, 300), closable=False)

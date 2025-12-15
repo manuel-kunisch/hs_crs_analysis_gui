@@ -460,257 +460,306 @@ class DataWidget(QtWidgets.QWidget):
             self.roi_avg_plot_wid.removeItem(line_item)
 
 
+class _NumericEntry(QtWidgets.QDoubleSpinBox):
+    """
+    QDoubleSpinBox with a QLineEdit-like API:
+      - .text() returns a plain numeric string (no suffix)
+      - .setText("800.0") works
+    """
+    def __init__(self, value=0.0, decimals=2, minimum=200.0, maximum=5000.0, step=1.0, width=70):
+        super().__init__()
+        self.setRange(minimum, maximum)
+        self.setDecimals(decimals)
+        self.setSingleStep(step)
+        self.setValue(float(value))
+        self.setKeyboardTracking(False)
+        self.setAlignment(QtCore.Qt.AlignRight)
+        # self.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+        self.setFixedWidth(width)
+
+    def text(self) -> str:  # keep compatibility with old QLineEdit usage
+        v = float(self.value())
+        s = f"{v:.{self.decimals()}f}"
+        s = s.rstrip("0").rstrip(".")
+        return s
+
+    def setText(self, s: str):  # keep compatibility with old QLineEdit usage
+        try:
+            self.setValue(float(s))
+        except Exception:
+            # ignore bad input instead of crashing
+            pass
+
+
 class WavenumberWidget(QtWidgets.QWidget):
-    # Custom signal to notify about wavenumber changes
     wavenumbers_changed = QtCore.pyqtSignal(np.ndarray)
+
     def __init__(self, n_frames=100, **kwargs):
         super().__init__()
-        self.n_frames = n_frames
+        self.n_frames = int(n_frames)
         self.wavenumbers = None
-        self.beam_mode = 0  # beam mode 0 is pump beam
+        self.beam_mode = 0  # 0: pump is variable, 1: stokes is variable
         self.init_ui(**kwargs)
+        self.update_wavenums()
 
-    def init_ui(self, max_width=50):
-        main_layout = QtWidgets.QHBoxLayout()
-        self.setLayout(main_layout)
+    def init_ui(self, max_width=70):
+        main_layout = QtWidgets.QHBoxLayout(self)
+        main_layout.setContentsMargins(10, 8, 10, 8)
+        main_layout.setSpacing(10)
 
-        # Pump Beam Group
+        self.setStyleSheet("""
+        QGroupBox {
+            font-weight: 600;
+            border: 1px solid rgba(180,180,180,0.35);
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 6px;
+        }
+        QLabel.unit { opacity: 0.75; }
+        QAbstractSpinBox:disabled { color: #808080; }
+        QCheckBox { padding: 2px 4px; }
+        QToolButton { padding: 8px; border-radius: 10px; }
+        """)
+
+        # ---------------- Pump (variable) group ----------------
         self.pump_beam_group = QtWidgets.QGroupBox("Pump Beam")
         var_beam_layout = QtWidgets.QGridLayout(self.pump_beam_group)
+        var_beam_layout.setHorizontalSpacing(10)
+        var_beam_layout.setVerticalSpacing(6)
 
-        # Checkbox for min/max
         self.min_max_checkbox = QtWidgets.QCheckBox("Min/Max")
-        self.min_max_checkbox.setChecked(True)  # Set initial state to checked
-        var_beam_layout.addWidget(self.min_max_checkbox, 0, 0)
+        self.stepsize_checkbox = QtWidgets.QCheckBox("Stepsize")
 
-        # Min Wavelength Entry
-        self.min_wavelength_entry = QtWidgets.QLineEdit()
-        self.min_wavelength_entry.setMaximumWidth(max_width)
-        self.min_wavelength_entry.setText("800")  # Default value
-        var_beam_layout.addWidget(self.min_wavelength_entry, 0, 1, alignment=QtCore.Qt.AlignLeft)
-        nm_label = QtWidgets.QLabel("nm")
-        nm_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        var_beam_layout.addWidget(nm_label, 0, 2)
-        self.min_wavelength_entry.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        # Make them exclusive (like a mode selector)
+        button_group = QtWidgets.QButtonGroup(self)
+        button_group.setExclusive(True)
+        button_group.addButton(self.min_max_checkbox)
+        button_group.addButton(self.stepsize_checkbox)
 
-        # Max Wavelength Entry
-        self.max_wavelength_entry = QtWidgets.QLineEdit()
-        self.max_wavelength_entry.setMaximumWidth(max_width)
-        self.max_wavelength_entry.setText("830")  # Default value
-        var_beam_layout.addWidget(self.max_wavelength_entry, 0, 3, alignment=QtCore.Qt.AlignLeft)
-        nm_label = QtWidgets.QLabel("nm")
-        nm_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        var_beam_layout.addWidget(nm_label, 0, 4)
-        self.max_wavelength_entry.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        self.min_max_checkbox.setChecked(True)
 
-        # Checkbox for step size
-        stepsize_checkbox = QtWidgets.QCheckBox("Stepsize")
-        var_beam_layout.addWidget(stepsize_checkbox, 1, 0)
+        var_beam_layout.addWidget(self.min_max_checkbox, 0, 0, 1, 2)
+        var_beam_layout.addWidget(self.stepsize_checkbox, 1, 0, 1, 2)
 
-        # Stepsize Entry
-        self.stepsize_entry = QtWidgets.QLineEdit()
-        self.stepsize_entry.setMaximumWidth(max_width)
-        self.stepsize_entry.setEnabled(False)  # Initially disabled
-        var_beam_layout.addWidget(self.stepsize_entry, 1, 1, alignment=QtCore.Qt.AlignLeft)
-        var_beam_layout.addWidget(QtWidgets.QLabel("nm"), 1, 2, alignment=QtCore.Qt.AlignLeft)
+        # entries (keep names for compatibility)
+        self.min_wavelength_entry = _NumericEntry(value=800.0, decimals=2, width=max_width)
+        self.max_wavelength_entry = _NumericEntry(value=830.0, decimals=2, width=max_width)
+        self.stepsize_entry = _NumericEntry(value=30.0, decimals=3, minimum=0.001, maximum=5000.0, step=0.5, width=max_width)
+        self.stepsize_entry.setEnabled(False)  # default: min/max mode
+
+        # layout rows
+        var_beam_layout.addWidget(QtWidgets.QLabel("Min:"), 0, 2)
+        var_beam_layout.addWidget(self.min_wavelength_entry, 0, 3, alignment=QtCore.Qt.AlignLeft)
+        nm1 = QtWidgets.QLabel("nm"); nm1.setProperty("class", "unit"); nm1.setObjectName("unit1")
+        nm1.setStyleSheet("QLabel { opacity: 0.75; }")
+        var_beam_layout.addWidget(nm1, 0, 4)
+
+        var_beam_layout.addWidget(QtWidgets.QLabel("Max:"), 0, 5)
+        var_beam_layout.addWidget(self.max_wavelength_entry, 0, 6, alignment=QtCore.Qt.AlignLeft)
+        nm2 = QtWidgets.QLabel("nm"); nm2.setStyleSheet("QLabel { opacity: 0.75; }")
+        var_beam_layout.addWidget(nm2, 0, 7)
+
+        var_beam_layout.addWidget(QtWidgets.QLabel("Step:"), 1, 2)
+        var_beam_layout.addWidget(self.stepsize_entry, 1, 3, alignment=QtCore.Qt.AlignLeft)
+        nm3 = QtWidgets.QLabel("nm"); nm3.setStyleSheet("QLabel { opacity: 0.75; }")
+        var_beam_layout.addWidget(nm3, 1, 4)
 
         main_layout.addWidget(self.pump_beam_group)
 
-        # Button to swap pump and stokes beams
-        swap_button = QtWidgets.QPushButton("↔")
+        # ---------------- Swap button ----------------
+        swap_button = QtWidgets.QToolButton()
+        swap_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
+        swap_button.setToolTip("Swap which beam is tuned (Pump ↔ Stokes)")
         main_layout.addWidget(swap_button)
 
-        # Stokes Beam Group
+        # ---------------- Stokes (fixed) group ----------------
         self.stokes_beam_group = QtWidgets.QGroupBox("Stokes Beam")
-        self.stokes_beam_group.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
         fixed_beam_layout = QtWidgets.QGridLayout(self.stokes_beam_group)
+        fixed_beam_layout.setHorizontalSpacing(10)
+        fixed_beam_layout.setVerticalSpacing(6)
 
-        fixed_beam_layout.setContentsMargins(0, 0, 0, 0)
-        fixed_label = QtWidgets.QLabel("λ<sub>fixed</sub> = ")
-        fixed_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        fixed_label = QtWidgets.QLabel("λ<sub>fixed</sub> =")
+        fixed_label.setTextFormat(QtCore.Qt.RichText)
         fixed_beam_layout.addWidget(fixed_label, 0, 0)
-        self.fixed_entry = QtWidgets.QLineEdit()
-        self.fixed_entry.setMaximumWidth(max_width)
-        self.fixed_entry.setText("1064")  # Default value
+
+        self.fixed_entry = _NumericEntry(value=1064.0, decimals=2, width=max_width)
         fixed_beam_layout.addWidget(self.fixed_entry, 0, 1, alignment=QtCore.Qt.AlignLeft)
-        nm_label = QtWidgets.QLabel("nm")
-        nm_label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        fixed_beam_layout.addWidget(nm_label, 0, 2, alignment=QtCore.Qt.AlignLeft)
-        self.fixed_entry.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
+
+        nm4 = QtWidgets.QLabel("nm"); nm4.setStyleSheet("QLabel { opacity: 0.75; }")
+        fixed_beam_layout.addWidget(nm4, 0, 2)
 
         main_layout.addWidget(self.stokes_beam_group)
 
-        # Info Box
-        info_box = QtWidgets.QGroupBox("ℹ️ Info")
+        # ---------------- Info group ----------------
+        info_box = QtWidgets.QGroupBox("Info")
         info_layout = QtWidgets.QVBoxLayout(info_box)
-        self.min_label = QtWidgets.QLabel("Min: ")
-        self.max_label = QtWidgets.QLabel("Max: ")
-        self.num_label = QtWidgets.QLabel("Frames: ")
+        info_layout.setSpacing(4)
+
+        self.min_label = QtWidgets.QLabel("Min: — cm⁻¹")
+        self.max_label = QtWidgets.QLabel("Max: — cm⁻¹")
+        self.num_label = QtWidgets.QLabel(f"Frames: {self.n_frames}")
+
         info_layout.addWidget(self.min_label)
         info_layout.addWidget(self.max_label)
+        info_layout.addSpacing(6)
         info_layout.addWidget(self.num_label)
+        info_layout.addStretch(1)
+
         main_layout.addWidget(info_box)
 
-        # Button group to ensure only one checkbox is selected
-        button_group = QtWidgets.QButtonGroup(self)
-        button_group.addButton(self.min_max_checkbox)
-        button_group.addButton(stepsize_checkbox)
-
-        # Set a custom style for disabled widgets
-        self.setStyleSheet("QLineEdit:disabled { color: #808080; }")
-
-        # Connect signals
         self.min_max_checkbox.stateChanged.connect(self.on_min_max_checked)
-        stepsize_checkbox.stateChanged.connect(self.on_stepsize_checked)
+        self.stepsize_checkbox.stateChanged.connect(self.on_stepsize_checked)
         swap_button.clicked.connect(self.swap_beams)
-        self.update_wavenums()
 
-        # Connect the entries to the update_wavenums method
         self.min_wavelength_entry.textChanged.connect(self.update_wavenums)
         self.max_wavelength_entry.textChanged.connect(self.update_wavenums)
         self.stepsize_entry.textChanged.connect(self.update_wavenums)
         self.fixed_entry.textChanged.connect(self.update_wavenums)
 
-
-
     def on_min_max_checked(self, state):
         if state == QtCore.Qt.Checked:
+            with QtCore.QSignalBlocker(self.stepsize_checkbox):
+                self.stepsize_checkbox.setChecked(False)
+            self.min_wavelength_entry.setEnabled(True)
+            self.max_wavelength_entry.setEnabled(True)
             self.stepsize_entry.setEnabled(False)
-        else:
-            self.stepsize_entry.setEnabled(True)
+            self.update_wavenums()
 
     def on_stepsize_checked(self, state):
         if state == QtCore.Qt.Checked:
-            self.min_wavelength_entry.setEnabled(False)
-            self.max_wavelength_entry.setEnabled(False)
-        else:
+            with QtCore.QSignalBlocker(self.min_max_checkbox):
+                self.min_max_checkbox.setChecked(False)
             self.min_wavelength_entry.setEnabled(True)
-            self.max_wavelength_entry.setEnabled(True)
+            self.max_wavelength_entry.setEnabled(False)  # derived from min + step
+            self.stepsize_entry.setEnabled(True)
+            self.update_wavenums()
 
     def swap_beams(self):
-        # Swap labels and group box titles
         pump_label = self.pump_beam_group.title()
         stokes_label = self.stokes_beam_group.title()
-
         self.pump_beam_group.setTitle(stokes_label)
         self.stokes_beam_group.setTitle(pump_label)
 
         self.beam_mode = (self.beam_mode + 1) % 2
         self.update_wavenums()
-        logger.debug(self.beam_mode)
-
+        # logger.debug(self.beam_mode)
 
     def set_nframes(self, n_frames):
-        self.n_frames = n_frames
+        self.n_frames = int(n_frames)
         self.update_wavenums()
 
     def update_wavenums(self):
-         # Get values from QLineEdit widgets
-        minimum = float(self.min_wavelength_entry.text())
-        fixed_wavelength = float(self.fixed_entry.text())
-        channels = self.n_frames
+        # robust against weird intermediate states
+        channels = max(1, int(self.n_frames))
 
-        # Calculate fixed k
-        fixed_k = 1 / (fixed_wavelength * 1e-7)
-        k_fix = np.full(channels, fixed_k)
+        minimum = float(self.min_wavelength_entry.value())
+        fixed_wavelength = float(self.fixed_entry.value())
 
-        # Check if max or stepsize mode
+        fixed_k = 1.0 / (fixed_wavelength * 1e-7)
+        k_fix = np.full(channels, fixed_k, dtype=np.float64)
+
         if self.min_max_checkbox.isChecked():
-            maximum = float(self.max_wavelength_entry.text())
-            stepsize = (maximum - minimum) / channels
-            self.stepsize_entry.setText(str(round(stepsize, 2)))
-        else:
-            stepsize = float(self.stepsize_entry.text())
-            maximum = minimum + stepsize * (channels - 1)
-            self.max_wavelength_entry.setText(str(round(maximum, 2)))
+            maximum = float(self.max_wavelength_entry.value())
+            # ensure ordering
+            if maximum < minimum:
+                minimum, maximum = maximum, minimum
+                with QtCore.QSignalBlocker(self.min_wavelength_entry), QtCore.QSignalBlocker(self.max_wavelength_entry):
+                    self.min_wavelength_entry.setValue(minimum)
+                    self.max_wavelength_entry.setValue(maximum)
 
-        # Generate wavenumbers
-        lambdas = np.linspace(minimum * 1e-7, maximum * 1e-7, channels)
+            # true step for linspace endpoints
+            if channels > 1:
+                stepsize = (maximum - minimum) / (channels - 1)
+            else:
+                stepsize = 0.0
+
+            # write derived stepsize without feedback loops
+            with QtCore.QSignalBlocker(self.stepsize_entry):
+                self.stepsize_entry.setValue(stepsize)
+
+        else:
+            stepsize = float(self.stepsize_entry.value())
+            maximum = minimum + stepsize * (channels - 1)
+
+            # write derived max without feedback loops
+            with QtCore.QSignalBlocker(self.max_wavelength_entry):
+                self.max_wavelength_entry.setValue(maximum)
+
+        lambdas = np.linspace(minimum * 1e-7, maximum * 1e-7, channels, dtype=np.float64)
         k_var = np.reciprocal(lambdas)
 
-        if not self.beam_mode:
+        if not self.beam_mode:   # 0: pump variable
             k_pump = k_var
             k_stokes = k_fix
-        else:
+        else:                    # 1: stokes variable
             k_pump = k_fix
             k_stokes = k_var
 
-        self.wavenumbers = np.subtract(k_pump, k_stokes)
-        self.min_label.setText(f"Min: {round(min(self.wavenumbers), 2)} cm⁻¹")
-        self.max_label.setText(f"Max: {round(max(self.wavenumbers), 2)} cm⁻¹")
+        self.wavenumbers = (k_pump - k_stokes).astype(np.float32, copy=False)
+
+        self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} cm⁻¹")
+        self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} cm⁻¹")
         self.num_label.setText(f"Frames: {len(self.wavenumbers)}")
+
         self.wavenumbers_changed.emit(self.wavenumbers)
 
     def apply_wavelength_meta(self, meta: dict, n_frames: int):
-        """
-        Fill the GUI from a wavelength_meta dict.
-
-        Expected keys:
-            tuned_beam      : 'pump' or 'stokes'
-            fixed_beam_nm   : float
-            tuned_min_nm    : float or None
-            tuned_max_nm    : float or None
-            tuned_step_nm   : float or None
-        """
         tuned_beam = meta.get("tuned_beam", "pump").lower()
         tuned_min = meta.get("tuned_min_nm")
         tuned_max = meta.get("tuned_max_nm")
         tuned_step = meta.get("tuned_step_nm")
         fixed_nm = meta.get("fixed_beam_nm")
 
-        # --- 1) Make sure the correct beam is the variable (tuned) beam ---
-        # beam_mode = 0 -> pump variable (default)
-        # beam_mode = 1 -> stokes variable
         desired_mode = 0 if tuned_beam == "pump" else 1
         if self.beam_mode != desired_mode:
-            # swap_beams toggles beam_mode and calls update_wavenums()
             self.swap_beams()
 
-        # --- 2) set frame count for the current dataset ---
-        self.n_frames = n_frames  # avoid set_nframes here (we want to control when we update)
+        self.n_frames = int(n_frames)
 
-        # --- 3) temporarily block signals while we fill widgets ---
         widgets = [
             self.min_wavelength_entry,
             self.max_wavelength_entry,
             self.stepsize_entry,
             self.fixed_entry,
             self.min_max_checkbox,
+            self.stepsize_checkbox,
         ]
         for w in widgets:
             w.blockSignals(True)
 
-        # --- 4) fill fixed wavelength ---
         if fixed_nm is not None:
-            self.fixed_entry.setText(f"{fixed_nm:.2f}")
+            self.fixed_entry.setValue(float(fixed_nm))
 
-        # --- 5) fill tuned beam infos (min/max or stepsize) ---
         if tuned_min is not None:
-            self.min_wavelength_entry.setText(f"{tuned_min:.2f}")
+            self.min_wavelength_entry.setValue(float(tuned_min))
         if tuned_max is not None:
-            self.max_wavelength_entry.setText(f"{tuned_max:.2f}")
+            self.max_wavelength_entry.setValue(float(tuned_max))
 
-        # Decide which mode to use:
-        #  - if we have both min & max -> Min/Max mode
-        #  - otherwise -> Stepsize mode (use tuned_step_nm if given)
+        # choose mode
         if tuned_min is not None and tuned_max is not None:
-            # Min/Max mode
             self.min_max_checkbox.setChecked(True)
-            # ensure entries enabled/disabled correctly
-            self.on_min_max_checked(QtCore.Qt.Checked)
+            self.stepsize_checkbox.setChecked(False)
+            self.min_wavelength_entry.setEnabled(True)
+            self.max_wavelength_entry.setEnabled(True)
+            self.stepsize_entry.setEnabled(False)
         else:
-            # Stepsize mode
             self.min_max_checkbox.setChecked(False)
+            self.stepsize_checkbox.setChecked(True)
             if tuned_step is not None:
-                self.stepsize_entry.setText(f"{tuned_step:.2f}")
-            self.on_stepsize_checked(QtCore.Qt.Checked)
+                self.stepsize_entry.setValue(float(tuned_step))
+            self.min_wavelength_entry.setEnabled(True)
+            self.max_wavelength_entry.setEnabled(False)
+            self.stepsize_entry.setEnabled(True)
 
-        # re-enable signals
         for w in widgets:
             w.blockSignals(False)
 
-        # --- 6) finally recalc wavenumbers (emits wavenumbers_changed) ---
         self.update_wavenums()
+
 
 class DataHandler(QtWidgets.QWidget):
     """

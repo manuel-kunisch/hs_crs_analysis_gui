@@ -127,7 +127,7 @@ class MultivariateAnalyzer(object):
         # are ordered. For that reasons we must first move the axes and then reshape the array
         raw_data_reordered = np.moveaxis(self.raw_data_3d, 0, -1)
         # Now we can reshape, where we leave the last axis untouched and only concatenate the fist two dimensions
-        self.data_2d = raw_data_reordered.reshape(-1, self.raw_data_3d.shape[0])
+        self.data_2d = raw_data_reordered.reshape(-1, self.raw_data_3d.shape[0]).astype(np.float32)
         self.resonance_data_2d = self.data_2d
         logger.info(f'{self.data_2d.shape = }')
         n_frames = self.data_2d.shape[1]

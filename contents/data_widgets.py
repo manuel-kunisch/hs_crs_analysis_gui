@@ -530,6 +530,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         var_beam_layout = QtWidgets.QGridLayout(self.pump_beam_group)
         var_beam_layout.setHorizontalSpacing(10)
         var_beam_layout.setVerticalSpacing(6)
+        self.pump_beam_group.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
 
         self.min_max_checkbox = QtWidgets.QCheckBox("Min/Max")
         self.stepsize_checkbox = QtWidgets.QCheckBox("Stepsize")
@@ -581,6 +582,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         fixed_beam_layout = QtWidgets.QGridLayout(self.stokes_beam_group)
         fixed_beam_layout.setHorizontalSpacing(10)
         fixed_beam_layout.setVerticalSpacing(6)
+        self.stokes_beam_group.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
 
         fixed_label = QtWidgets.QLabel("λ<sub>fixed</sub> =")
         fixed_label.setTextFormat(QtCore.Qt.RichText)
@@ -598,6 +600,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         info_box = QtWidgets.QGroupBox("Info")
         info_layout = QtWidgets.QVBoxLayout(info_box)
         info_layout.setSpacing(4)
+        info_box.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
 
         self.min_label = QtWidgets.QLabel("Min: — cm⁻¹")
         self.max_label = QtWidgets.QLabel("Max: — cm⁻¹")

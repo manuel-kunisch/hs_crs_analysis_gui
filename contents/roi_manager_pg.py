@@ -91,10 +91,18 @@ class ROIManager(QtCore.QObject):
         self.roi_plot_dock.addWidget(self.roi_plotter)
 
     def update_data(self, data_cyx: np.ndarray = None):
-        if data_cyx is None:
-            self.raw_data = self.image_view.getImageItem().image
-        else:
-            self.raw_data = data_cyx
+        """
+        Callback when new data is loaded into the image view.
+
+        Parameters
+        ----------
+        data_cyx : np.ndarray, optional
+            New data to use. If None, uses the current image data.
+        Returns
+        -------
+        """
+        logger.info(f"Updating raw data in ROI Manager")
+        self.raw_data = data_cyx
         # check if there is a roi that is used for background subtraction
         if self.fill_roi is not None:
             # find the index of this roi and subtract it
@@ -937,7 +945,6 @@ class ROIManager(QtCore.QObject):
                 # uncheck all subtract checkboxes except for the current roi
                 for idx in range(self.roi_table.rowCount()):
                     if idx != roi_idx:
-                        print('Unchecking', idx)
                         self.roi_table.cellWidget(idx, self.widget_columns['Subtract']).setChecked(False)
 
         # set the background checkbox to checked
@@ -1618,7 +1625,7 @@ class ROIPlotter(pg.PlotWidget):
 
         # find the new spectral range
         spectral_range: list[np.array] = self.spectral_range.get(component_number)
-        print(f"Component {component_number} has spectral range {spectral_range}")
+        logger.info(f"Component {component_number} has spectral range {spectral_range}")
 
         if spectral_range is not None:
             for area in spectral_range:

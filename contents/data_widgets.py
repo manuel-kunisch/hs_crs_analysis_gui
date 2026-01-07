@@ -20,7 +20,7 @@ class DataWidget(QtWidgets.QWidget):
     Main class to manage raw data handling
     """
     request_binning_signal = QtCore.pyqtSignal(int)
-    def __init__(self, img=None, init_roi_plot_widget=False):
+    def __init__(self, img=None, init_roi_plot_widget=False, color_manager=None):
         super().__init__()
         # widgets initialized in other methods 
         self.show_processed_image_check = None
@@ -41,6 +41,7 @@ class DataWidget(QtWidgets.QWidget):
         self.layout = QtWidgets.QVBoxLayout(self)
         self.setLayout(self.layout)
 
+        self.color_manager = color_manager
         # Initialize the widgets
         self.init_dock_area()
 
@@ -114,7 +115,7 @@ class DataWidget(QtWidgets.QWidget):
         self.image_view_dock.addWidget(self.raman_raw_image_view, 0, 0, 16, 16)
 
         # Initialize the ROI manager and give it access to the image view
-        self.roi_manager = ROIManager(self.raman_raw_image_view)
+        self.roi_manager = ROIManager(self.raman_raw_image_view, color_manager=self.color_manager)
         # add the ROI manager widgets to the dock area
         self.dock_area.addDock(self.roi_manager.roi_table_dock, "bottom")
         self.dock_area.addDock(self.roi_manager.roi_plot_dock, "left", self.roi_manager.roi_table_dock)

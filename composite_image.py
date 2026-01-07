@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QColorDialog, QSizePolicy, QGridLayout, QSpacerItem, QSplitter, QSlider, QCheckBox, QFileDialog)
 from pyqtgraph import PlotItem
 
+from contents.color_manager import ComponentColorManager
 from contents.custom_pyqt_objects import ImageViewYXC, ImageViewLineRoiYXZ
 from contents.fiji_saver import FIJISaver
 from contents.scalebar import ScaleBar
@@ -41,9 +42,13 @@ class CompositeImageViewWidget(QMainWindow):
     ]
     color_changed_signal = pyqtSignal(int, QColor)
     def __init__(self, img:np.ndarray = None, spectral_cmps: np.ndarray|None = None,
-                 spectral_cmps_seed: np.ndarray|None = None):
+                 color_manager: ComponentColorManager=None):
         super().__init__()
         self.img = img
+        self.color_manager = color_manager
+        # sync the colormap colors with the color manager if provided
+        if self.color_manager is not None:
+            self.colormap_colors = self.color_manager.get_all_colors_rgb()
         self.spectral_cmps = spectral_cmps
         self.spectral_cmps_seed = None
         self.wavenumbers = None
@@ -52,6 +57,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.custom_model = False
         self.update_thread = QThread()
         self.timeout_callbacks = False
+
 
         # %% GUI setup
         self.setWindowTitle("ImageViewer with Composite Image and Channels")
@@ -434,7 +440,8 @@ class CompositeImageViewWidget(QMainWindow):
             histogram_state = self.histogram_states[channel]
             colormap_color = histogram_state['gradient']['ticks'][1][1][:3]
         else:
-            colormap_color = self.colormap_colors[channel % len(self.colormap_colors)]
+            colormap_color = self.colormap_colors[channel % len(self.colormap_colors)] if self.color_manager is None \
+                else self.color_manager.get_color_rgb(channel)
         return colormap_color
 
     def update_channel_view(self, channel_index):
@@ -462,7 +469,8 @@ class CompositeImageViewWidget(QMainWindow):
             # set default levels and histogram state
             # Choose a predefined colormap color for the first view of each channel from the
             # config file
-            colormap_color = self.colormap_colors[channel_index % len(self.colormap_colors)]
+            colormap_color = self.color_manager.get_color_rgb(channel_index) if self.color_manager is not None\
+                else self.colormap_colors[channel_index % len(self.colormap_colors)]
             self.channel_view.autoLevels()
             # self.channel_view.setLevels(0, max_dtype_val)
             # self.channel_view.setLevels(np.amin(selected_im), np.amax(selected_im))
@@ -532,11 +540,15 @@ class CompositeImageViewWidget(QMainWindow):
             histogram_state['gradient']['ticks'][1] = (colormax_pos, self.colormap_colors[i] + (old_opacity_max,))
             print(f'Updated color positions for channel {i} to {colormin_pos}, {colormax_pos}')
 
-
-
-    def set_colormap(self, index: int, color: tuple[int, int, int]):
+    def set_colormap(self, index: int, color: tuple[int, int, int], change_color_manager=True):
         # Set the colormap color for the specified index
+
         self.colormap_colors[index % len(self.colormap_colors)] = color
+
+        if self.color_manager:
+            if change_color_manager:
+                # emits a signal as well
+                self.color_manager.set_color_rgb(index, color)
 
         if index == self.channel_slider.value():
             print('Updating color in result viewer')
@@ -584,6 +596,7 @@ class CompositeImageViewWidget(QMainWindow):
         ranges_nbit = [self.histogram_states[i]['levels'] for i in range(image_3d.shape[0])]
         # ranges_8bit = [(int(min_ * scale_factor_8bit_nbit), int(max_ * scale_factor_8bit_nbit)) for min_, max_ in ranges_nbit]
         self.fiji_saver.ranges = ranges_nbit
+        self.fiji_saver.colormaps = self.color_manager.get_all_colors_rgb() if self.color_manager is not None else self.colormap_colors
         self.fiji_saver.save_composite_image()
     
     def save_preset(self, mode='seeds'):
@@ -614,7 +627,7 @@ class CompositeImageViewWidget(QMainWindow):
         if not file_path:
             return
 
-        self.save_to_presets(file_path, seeds_H, self.wavenumbers, self.colormap_colors, self.histogram_states)
+        self.save_to_presets(file_path, seeds_H, self.wavenumbers, self.color_manager.get_all_colors_rgb(), self.histogram_states)
 
     def save_components(self):
         # Open a file dialog to select where to save the CSV file
@@ -708,6 +721,10 @@ class CompositeImageViewWidget(QMainWindow):
             self.spectrum_lines[index].setPen(pg.mkPen(color))
         if self.seed_lines:
             self.seed_lines[index].setPen(pg.mkPen(color))
+
+    def reload_colors(self):
+        cur_channel = self.channel_slider.value()
+        self.set_colormap(cur_channel, self.get_color(cur_channel), change_color_manager=False)
 
     def make_color_state(self, index: int, vmin_max: tuple, color: tuple[int, int, int], colorpos='default'):
         vmin, vmax = vmin_max

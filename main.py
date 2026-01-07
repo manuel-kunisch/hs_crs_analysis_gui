@@ -11,6 +11,7 @@ from pyqtgraph.dockarea.DockArea import DockArea
 
 from composite_image import CompositeImageViewWidget
 from contents import analysis_manager, data_widgets
+from contents.color_manager import ComponentColorManager
 from contents.data_widgets import DataWidget
 from contents.scalebar import ScaleBar
 
@@ -36,18 +37,19 @@ class MainApplication(QtWidgets.QMainWindow):
         # setGeometry(left, top, width, height)
         self.setGeometry(0, 0, 1600, 900)
 
+        # color manager for all components
+        self.color_manager = ComponentColorManager()
+        self.color_manager.sigColorChanged.connect(self.updated_widget_component_colors)
+
         # widget to visualize the data loaded in the data_handler widget
-        self.data_widget = DataWidget()  # raw data handling
-        self.data_widget.roi_manager.color_change_signal.connect(self.update_luts_result)
-        self.analysis_manager = analysis_manager.AnalysisManager(roi_manager=self.data_widget.roi_manager)
+        self.data_widget = DataWidget(color_manager=self.color_manager)  # raw data handling
+        self.analysis_manager = analysis_manager.AnalysisManager(roi_manager=self.data_widget.roi_manager)  # multivariate analysis manager
         self.data_widget.roi_manager.processed_data_signal.connect(self.analysis_manager.update_modified_data)
         self.data_widget.roi_manager.preset_load_signal.connect(self.preset_loaded)
         self.analysis_manager.worker.finished.connect(lambda: self.tab_widget.setCurrentIndex(1))
 
         # Create a CompositeImageViewWidget widget to showcase the results
-        self.result_viewer_widget = CompositeImageViewWidget()  # Create CompositeImageViewWidget widget
-        # move the widget to the main thread
-        self.result_viewer_widget.color_changed_signal.connect(self.update_luts_roi)
+        self.result_viewer_widget = CompositeImageViewWidget(color_manager=self.color_manager)  # Create CompositeImageViewWidget widget
         # pass the label names to the result viewer
         self.data_widget.roi_manager.label_change_signal.connect(self.result_viewer_widget.update_label)
         # on macos the widget has to be moved to the main thread to be able to open file dialogs etc.
@@ -219,15 +221,12 @@ class MainApplication(QtWidgets.QMainWindow):
         self.scale_bar_channels.update_scale_bar_len(len)
         self.scale_bar_composite.update_scale_bar_len(len)
 
-    def update_luts_result(self, lut_index: int, color: tuple):
-        # pass the current selected color scheme to the result viewer colormaps
-        self.result_viewer_widget.set_colormap(lut_index, color)
-        logger.info(f'Updated color scheme {lut_index = } {color = }')
-
-    def update_luts_roi(self, lut_index: int, color: tuple):
-        # update the color scheme of the roi manager
-        self.data_widget.roi_manager.update_roi_color_component(lut_index, color)
-        ...
+    def updated_widget_component_colors(self, lut_index: int, color: tuple):
+        # update the color scheme of all components in the data widget
+        logger.info(f'Updating component colors: {lut_index = }, {color = }')
+        self.data_widget.roi_manager.reload_colors()
+        self.analysis_manager.reload_colors()
+        self.result_viewer_widget.reload_colors()
 
     def update_binning(self, binning_factor: int):
         old_binning = self.data_handler.get_current_binning()

@@ -14,6 +14,8 @@ from composite_image import CompositeImageViewWidget
 from contents.custom_pyqt_objects import ImageViewYX
 from contents.multivariate_analyzer import MultivariateAnalyzer
 from contents.roi_manager_pg import ROIManager
+from contents.color_manager import ComponentColorManager
+from contents.hs_image_view import ColorButton
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('Hyperspectral Analysis')
@@ -56,14 +58,16 @@ class AnalysisManager(QtCore.QObject):
     resonance_settings_changed = QtCore.pyqtSignal(np.ndarray)
     # default raman resonances
     default_resonances = [[2850, 20], [2930, 15], [3000, 15], [3060, 15], [3120, 15], [3180, 15]]
-    def __init__(self, init_widgets=True, data=None, roi_manager:ROIManager|None=None):
+    def __init__(self, roi_manager, init_widgets=True, data=None):
         super().__init__()
+        self.roi_manager: ROIManager | None = roi_manager
+        self.color_manager:ComponentColorManager|None = self.roi_manager.color_manager
         self.seed_window: QtWidgets.QMainWindow or None = None
         self.z3D_data = None
         # add an attribute to store fixed W components for NNMF
         self._fixed_seed_W: dict[int, np.ndarray] = {}  # component -> (n_pixels,) float32
         self.wavenumbers = None
-        self.roi_manager:ROIManager|None = roi_manager
+
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
         # Main widget instantiated in the init_ui method
         self.analysis_widget = None
@@ -259,10 +263,16 @@ class AnalysisManager(QtCore.QObject):
 
         self.resonance_table = QtWidgets.QTableWidget()
         res_settings_options = [
-            "Component", "Wavenumber", "Width",
+            "Component",
+            "Color",
+            "Wavenumber", "Width",
             "# Seed Pixels", "Use subtracted data",
             "Use Gaussian", "Amplitude", "Remove"
         ]
+
+        if self.color_manager is None:
+            res_settings_options.remove("Color")
+
         self.res_settings_widget_columns = {option: i for i, option in enumerate(res_settings_options)}
         self.resonance_table.setColumnCount(len(res_settings_options))
         self.resonance_table.setHorizontalHeaderLabels(res_settings_options)
@@ -520,7 +530,7 @@ class AnalysisManager(QtCore.QObject):
                 seed_H,
                 self.wavenumbers,
                 seed_pixels,
-                self.roi_manager.get_color
+                self.roi_manager.get_color_rgba
             )
             logger.info("Created new seed window")
         else:
@@ -608,19 +618,52 @@ class AnalysisManager(QtCore.QObject):
         row_position = self.resonance_table.rowCount()
         self.resonance_table.insertRow(row_position)
 
-        # Set the number in column 1
-        item = QtWidgets.QComboBox()
-        item.addItems([f"Component {i+1}" for i in range(9)])
-        item.setCurrentIndex(row_position%9)
-        self.resonance_table.setCellWidget(row_position, 0, item)
-        item.currentIndexChanged.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
+        # 1. Component Selection
+        item_comp = QtWidgets.QComboBox()
+        item_comp.addItems([f"Component {i + 1}" for i in range(9)])
+        item_comp.setCurrentIndex(row_position % 9)
+        # Determine the initial component index
+        comp_idx = row_position % 9
 
+        if self.color_manager:
+            # Color Button
+            # Get color from manager
+            initial_color = self.color_manager.get_qcolor(comp_idx)
+            btn_color = ColorButton(initial_color)
+
+            # Define a closure to capture the row and component correctly
+            # We need to know which component is currently selected in this row
+            def on_color_picked(new_color):
+                current_comp_idx = self.get_component_index(row_position)
+                if current_comp_idx is not None:
+                    self.color_manager.set_color(current_comp_idx, new_color)
+
+            btn_color.color_changed.connect(on_color_picked)
+
+            # Also, if the user changes the "Component" Combobox, we must update the button color
+            def on_component_changed(index):
+                # The combo box changed, so fetch the color for the NEW component ID
+                new_c_idx = self.get_component_index(row_position)
+                c = self.color_manager.get_qcolor(new_c_idx)
+                btn_color.setColor(c)
+                self.callback_res_settings(row_position)
+
+            item_comp.currentIndexChanged.connect(on_component_changed)
+            # Set widgets in table
+            self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Color"], btn_color)
+
+        self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Component"], item_comp)
+
+        # 3. Remove button
         widget_remove = QtWidgets.QPushButton("Remove")
         widget_remove.clicked.connect(lambda: self.remove_res_settings(row_position))
         self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Remove"], widget_remove)
 
         # Add text fields from column 2 to 4
-        for column in [1, 2, 3, 6]: # Columns 1, 2, 3, 4 are SpinBoxes
+        spinbox_columns = [1, 2, 3, 6]
+        if self.color_manager is not None:
+            spinbox_columns = [col + 1 for col in spinbox_columns]
+        for column in spinbox_columns: # Columns 1, 2, 3, 4 are SpinBoxes
             item = QtWidgets.QDoubleSpinBox()
             item.setMaximum(1e7)
             self.resonance_table.setCellWidget(row_position, column, item)
@@ -661,6 +704,15 @@ class AnalysisManager(QtCore.QObject):
         self.callback_res_settings(row_position)
         # if not row_position:
         #     self.resonance_table.resizeColumnsToContents()
+
+    def reload_colors(self):
+        if self.color_manager is None:
+            return
+        for row in range(self.resonance_table.rowCount()):
+            comp_idx = self.get_component_index(row)
+            color = self.color_manager.get_qcolor(comp_idx)
+            btn_color: ColorButton = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Color"])
+            btn_color.setColor(color)
 
     def remove_res_settings(self, row):
         self.resonance_table.removeRow(row)
@@ -738,7 +790,7 @@ class AnalysisManager(QtCore.QObject):
         seed_W_view.setImage(W_seed_3d)
 
         def update_color_channel(cmp: int):
-            pen_color = self.roi_manager.get_color(cmp)
+            pen_color = self.roi_manager.get_color_rgba(cmp)
             cmap = pg.ColorMap(pos=np.linspace(0.0, 1.0, 2), color=np.array([[0, 0, 0, 255], pen_color]))
             seed_W_view.setColorMap(cmap)
 
@@ -769,9 +821,9 @@ class AnalysisManager(QtCore.QObject):
             scatter = pg.ScatterPlotItem(
                 pos=positions,
                 size=8,
-                brush=pg.mkBrush(self.roi_manager.get_color(component)),
+                brush=pg.mkBrush(self.roi_manager.get_color_rgba(component)),
                 symbol='+',
-                pen=pg.mkPen(self.roi_manager.get_color(component), width=1)
+                pen=pg.mkPen(self.roi_manager.get_color_rgba(component), width=1)
             )
             seed_W_view.addItem(scatter)
             current_scatter[0] = scatter  # Update reference to new scatter
@@ -920,7 +972,7 @@ class AnalysisManager(QtCore.QObject):
 
     def get_component_index(self, row: int):
         """
-        Returns the component number (0-based) for the given row in the resonance table.
+        Returns the component index (0-based) for the given row in the resonance table.
         Note: Displayed component 1 is internally represented as 0 etc.
         """
         component_combobox: QtWidgets.QComboBox = self.resonance_table.cellWidget(row, self.res_settings_widget_columns['Component'])
@@ -1513,7 +1565,7 @@ class AnalysisManager(QtCore.QObject):
 class SeedWidget(QtWidgets.QWidget):
     default_colors = CompositeImageViewWidget.colormap_colors
     def __init__(self, seed_W_3d: np.ndarray, seed_H: np.ndarray, wavenumbers,
-                 seed_pixels: dict or None = None, color_getter: Callable = None):
+                 seed_pixels: dict or None = None, color_getter = None,):
         super(SeedWidget, self).__init__()
         self.seed_W_3d = seed_W_3d
         self.seed_H = seed_H

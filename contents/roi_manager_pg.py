@@ -26,7 +26,7 @@ class ROIManager(QtCore.QObject):
     label_change_signal = QtCore.pyqtSignal(int, str)  # Signal when label is changed in the ROI table
     preset_load_signal = QtCore.pyqtSignal(int, list, list)  # Signal to load a preset
 
-    def __init__(self, image_view: pg.ImageView):
+    def __init__(self, image_view: pg.ImageView, color_manager=None):
         super().__init__()
         self.image_view = image_view
         self.rois = []  # list that stores each roi object sorted by index
@@ -49,6 +49,8 @@ class ROIManager(QtCore.QObject):
         self.widget_columns = dict(**{col: idx for idx, col in enumerate(cols)})
         self.roi_table.setColumnCount(len(cols))
         self.roi_table.setHorizontalHeaderLabels(cols)
+
+        self.color_manager = color_manager
 
         # Connect the selection changed signal of the table to a slot
         self.roi_table.itemSelectionChanged.connect(self.update_selected_roi)
@@ -178,7 +180,8 @@ class ROIManager(QtCore.QObject):
         roi = pg.RectROI(center - np.array(roi_size) / 2, roi_size, pen=(0, 9))
         roi_number = len(self.rois)
         component_number = self.component_prompt() if user_prompt else roi_number
-        color = self.default_colors[component_number - 1 % len(self.default_colors)]
+        color = self.color_manager.get_color_rgb(component_number-1) if self.color_manager else self.default_colors[
+            roi_number % len(self.default_colors)]
         label = "ROI {}".format(roi_number + 1)
         self.set_roi_properties(roi, color, label)
         self.image_view.getView().addItem(roi)
@@ -219,6 +222,7 @@ class ROIManager(QtCore.QObject):
         # check for label item text changes
         # label_item.cellChanged.connect(lambda text, roi_item=roi: self.update_roi_plot(roi_item))
         color_button = ColorButton(roi.pen.color())
+        color_button.color_changed.connect(lambda col: self.color_manager.set_color_rgb(self.component_number_from_table_index(new_row_idx), col))
 
         max_cmp_number = 9
         resonance_combobox = QtWidgets.QComboBox()
@@ -405,7 +409,8 @@ class ROIManager(QtCore.QObject):
         logger.info(f"Creating new Gaussian dummy ROI for component {component}")
         # 2) Create a new DummyROI, similar to prepare_roi_from_external_spectrum
         roi = DummyROI('', spectrum)
-        roi.pen = pg.mkPen(self.default_colors[component % len(self.default_colors)])
+        roi.pen = pg.mkPen(self.color_manager.get_color_rgb(component) if self.color_manager else self.default_colors[
+                           component % len(self.default_colors)])
         roi.is_gaussian_model = True
 
         self.rois.append(roi)
@@ -529,7 +534,8 @@ class ROIManager(QtCore.QObject):
 
         # Calculate pen color (component_number - 1 converts 1-based index to 0-based for color list)
         comp_idx = component_number - 1
-        roi.pen = pg.mkPen(self.default_colors[comp_idx % len(self.default_colors)])
+        roi.pen = pg.mkPen(self.color_manager.get_color_rgb(comp_idx) if self.color_manager else self.default_colors[
+                           comp_idx % len(self.default_colors)])
 
         self.rois.append(roi)
         # Generate a unique ID to identify the ROI
@@ -600,7 +606,7 @@ class ROIManager(QtCore.QObject):
 
         self.preset_load_signal.emit(len(seeds), vmin_vmax, colormap_colors)
 
-    def get_color(self, component_number):
+    def get_color_rgba(self, component_number):
         # find the desired row of the component in the table
         for idx in range(self.roi_table.rowCount()):
             # extract the number of the component from the combobox
@@ -608,7 +614,9 @@ class ROIManager(QtCore.QObject):
             # if the component number is the same as the desired component, return the color
             if component == component_number:
                 return self.roi_table.cellWidget(idx, self.widget_columns['Color']).color.getRgb()
-        return self.default_colors[component_number % len(self.default_colors)] + (255,)
+        # if not found, return the default color
+        return self.color_manager.get_color_rgb(component_number) + (255,) if self.color_manager else self.default_colors[
+            component_number % len(self.default_colors)] + (255,)
 
     def component_number_from_table_index(self, idx: int) -> int | None:
         col = self.widget_columns['Resonance']
@@ -746,13 +754,14 @@ class ROIManager(QtCore.QObject):
 
     def update_roi_color_component(self, component_number, color: QtGui.QColor):
         """
-        Updates the color of a given component in the table and the corresponding ROI
+        Updates the color of a given component in the table and the corresponding ROI. Is called externally.
         """
         logger.debug(f'Updating color of component {component_number} to {color}')
         # finding the component in the table
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component_number:
-                self.default_colors[component_number] = color.getRgb()
+                self.color_manager.set_color_rgb(component_number, color.getRgb())
+                self.default_colors[component_number % len(self.default_colors)] = color.getRgb()
                 logger.debug(f'Updating color of component {component_number} at index {idx} to {color.getRgb()}')
                 self.update_roi_color(idx, color, emit_signal=False)  # do not emit the signal to avoid infinite loop
 
@@ -768,6 +777,12 @@ class ROIManager(QtCore.QObject):
         color_widget: pg.ColorButton = self.roi_table.cellWidget(roi_idx, self.widget_columns['Color'])
         color_widget.setColor(qcolor)
 
+    def reload_colors(self):
+        if self.color_manager:
+            for idx in range(self.roi_table.rowCount()):
+                component_number = self.component_number_from_table_index(idx)
+                qcolor = self.color_manager.get_qcolor(component_number)
+                self.update_roi_color(idx, qcolor, emit_signal=False)
 
     def update_selected_roi(self):
         selected_items = self.roi_table.selectedItems()
@@ -1545,7 +1560,7 @@ class ROIPlotter(pg.PlotWidget):
             return
 
         # New line
-        color_rgba = self.roi_manager.get_color(component_number)
+        color_rgba = self.roi_manager.get_color_rgba(component_number)
         pen = pg.mkPen(color_rgba)
         line = self.plot(self.roi_manager.wavenumbers, z_data, pen=pen, name=label)
         self.component_gaussian_lines[component_number] = line

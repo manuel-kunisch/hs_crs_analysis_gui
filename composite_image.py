@@ -709,7 +709,7 @@ class CompositeImageViewWidget(QMainWindow):
         if self.seed_lines:
             self.seed_lines[index].setPen(pg.mkPen(color))
 
-    def make_color_state(self, index: int, vmin_max: tuple, color: tuple[int, int, int], colorpos='default', colormax_pos=1, colormin_pos=0):
+    def make_color_state(self, index: int, vmin_max: tuple, color: tuple[int, int, int], colorpos='default'):
         vmin, vmax = vmin_max
         # get the current minimum and maximum values of the channel at the index
         colormin_pos, colormax_pos = 0, 1
@@ -738,6 +738,11 @@ class CompositeImageViewWidget(QMainWindow):
             'levels': (vmin, vmax),
             'mode': 'mono'
         }
+        logger.info(f'Created histogram state for channel {index} with info {self.histogram_states[index]}')
+
+        # set the current histogram state in the channel view
+        if index == self.channel_slider.value():
+            self.channel_view.getHistogramWidget().restoreState(self.histogram_states[index])
 
 
     def choose_color(self):

@@ -294,8 +294,8 @@ class MainApplication(QtWidgets.QMainWindow):
                     "levels": v["levels"],
                     "top_color": v["gradient"]["ticks"][1][1],  # top tick color
                     "bottom_color": v["gradient"]["ticks"][0][1],
-                    "top_pos": v["gradient"]["ticks"][1][0],
-                    "bottom_pos": v["gradient"]["ticks"][0][0],
+                    "top_pos": v['levels'][1],
+                    "bottom_pos": v['levels'][0],
                 }
                 for k, v in self.result_viewer_widget.histogram_states.items()
             },
@@ -389,6 +389,7 @@ class MainApplication(QtWidgets.QMainWindow):
             for k, st in hist.items():
                 try:
                     idx = int(k)
+                    logger.info(f"Restoring histogram state for component {idx} with levels {st['levels']} and top color {st['top_color']}")
                     self.result_viewer_widget.make_color_state(idx, st["levels"], st["top_color"])
                 except Exception:
                     pass

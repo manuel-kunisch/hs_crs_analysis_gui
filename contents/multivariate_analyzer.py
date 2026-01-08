@@ -429,25 +429,24 @@ class MultivariateAnalyzer(object):
         w_min_sorted = np.searchsorted(sorted_wavenumbers, wavenumber - width, side='left')
         w_max_sorted = np.searchsorted(sorted_wavenumbers, wavenumber + width, side='right') - 1
 
+        print(w_min_sorted, w_max_sorted)
         # Ensure valid index bounds
         w_max_sorted = min(w_max_sorted, len(sorted_wavenumbers) - 1)
         w_min_sorted = max(w_min_sorted, 0)
 
         print(wavenumber, width)
         if w_max_sorted < w_min_sorted:
-            if wavenumber - width < sorted_wavenumbers[0]:
-                w_min_sorted = 0
-                w_max_sorted = 0
-            if wavenumber + width > sorted_wavenumbers[-1]:
-                w_max_sorted = sorted_wavenumbers.size - 1
-                w_min_sorted = sorted_wavenumbers.size - 1
-            logger.warning(
-                f"Invalid range (w_min={w_min_sorted}, w_max={w_max_sorted}). Skipping.")
+            # take nearest index
+            nearest_idx = (np.abs(sorted_wavenumbers - wavenumber)).argmin()
+            w_min_sorted = nearest_idx
+            w_max_sorted = nearest_idx
+            logger.warning(f'Resonance {wavenumber} ± {width} out of bounds, using nearest index {nearest_idx}, i.e. wavenumber {sorted_wavenumbers[nearest_idx]}')
 
         # Convert back to original indices
         selected_indices_sorted = np.arange(w_min_sorted, w_max_sorted + 1)
         resonance_indices = sorted_indices[selected_indices_sorted]  # Map back to original order
 
+        logger.info(f"Resonance wavenumbers for {wavenumber} ± {width}: {sorted_wavenumbers[selected_indices_sorted]}")
         # logger.info(f'Selecting indices {resonance_indices}, Info: {spectral_info}')
         return np.sort(resonance_indices)  # Return indices in ascending order of original wavenumbers
 

@@ -1471,7 +1471,16 @@ class ROIPlotter(pg.PlotWidget):
             line_item = self.roi_avg_lines[roi_id]
             self.removeItem(line_item)
         # Plot the z_data in the new plot
-        l = self.plot(self.roi_manager.wavenumbers, z_data, pen=roi_pen, name=label)
+        l = self.plot(
+            self.roi_manager.wavenumbers,
+            z_data,
+            pen=roi_pen,
+            name=label,
+            symbol='o',  # Shape: 'o' (circle), 's' (square), 't' (triangle), 'x' (cross) etc.
+            symbolSize=6,
+            symbolBrush=roi_pen.color(),
+            symbolPen='w'  # White border for better visibility
+        )
 
         self.roi_avg_lines[roi_id] = l
         self.update_highight(roi_id)
@@ -1659,11 +1668,26 @@ class ROIPlotter(pg.PlotWidget):
         curve_of_interest = self.roi_avg_lines[roi_id]
         y = curve_of_interest.yData
         x_min, x_max = np.amin(spectral_range), np.amax(spectral_range)
+        print(x_min, x_max)
         x_mask = (self.roi_manager.wavenumbers >= x_min) & (self.roi_manager.wavenumbers <= x_max)
 
         # filter data for filling
         x_fill = self.roi_manager.wavenumbers[x_mask]
         y_fill = y[x_mask]
+
+        # make sure to avoid issue when there is only one point in the range
+        if not len(y_fill):
+            logger.warning(f'No y data found for ROI {roi_id} in the spectral range {spectral_range}. Highlight skipped.')
+            return
+        elif len(x_fill) < 2:
+            # stretch the range a bit
+            delta = .1
+            x_fill = np.array([x_fill[0]-delta, x_fill[0]+delta])
+            # calc the correct y points on the linear connections to the neighbor points
+            y_fill = [y_fill[0], y_fill[0]]
+
+
+
 
         curve_zero = pg.PlotDataItem(x_fill, np.zeros_like(y_fill), pen=pg.mkPen('w', width=0))
         curve_masked = pg.PlotDataItem(x_fill, y_fill, pen=pg.mkPen('w', width=0))

@@ -749,7 +749,6 @@ class AnalysisManager(QtCore.QObject):
         logger.info(f'Resonance callback triggered')
         self.update_spectral_info()
         logger.info(f'new spectral info in the mv_analyzer:{self.mv_analyzer.spectral_info}')
-        # self.highlight_resonance_row(current_row)
         # TODO: lazy variant, rehighlight all resonances when something changes, hard to keep track of all changes
         self.highlight_all_resonances()
 
@@ -772,6 +771,7 @@ class AnalysisManager(QtCore.QObject):
         if not info:
             return
         spectral_range = np.array([info['Wavenumber'] - info['Width'], info['Wavenumber'] + info['Width']])
+        logger.info(f'Highlighting spectral range: {spectral_range} for component {info["Component"]}')
         self.roi_manager.highlight_component_region(spectral_range, self.get_component_index(row_table))
 
     def show_W_seeds(self):
@@ -978,10 +978,10 @@ class AnalysisManager(QtCore.QObject):
         component_combobox: QtWidgets.QComboBox = self.resonance_table.cellWidget(row, self.res_settings_widget_columns['Component'])
         if component_combobox is None:
             return None
-        # get only text after the last space
-        return int(component_combobox.currentText().split(' ')[-1]) - 1
+        idx = int(component_combobox.currentText().split(' ')[-1]) - 1
+        return idx
 
-    def get_row_index(self, component: int) -> int | None:
+    def get_row_index(self, component_idx: int) -> int | None:
         """
         Returns the row number of the component in the table. If multiple components are found, the first one is returned.
         If no component is found, None is returned.
@@ -995,14 +995,14 @@ class AnalysisManager(QtCore.QObject):
         """
         # find the row number of the component in the table
         for row in range(self.resonance_table.rowCount()):
-            if self.get_component_index(row) == component:
+            if self.get_component_index(row) == component_idx:
                 return row
         return None
 
-    def get_row_indices(self, component: int) -> list[int] | None:
+    def get_row_indices(self, component_idx: int) -> list[int] | None:
         rows = []
         for row in range(self.resonance_table.rowCount()):
-            if self.get_component_index(row) == component:
+            if self.get_component_index(row) == component_idx:
                 rows.append(row)
         return rows if rows else None
 

@@ -492,6 +492,105 @@ class _NumericEntry(QtWidgets.QDoubleSpinBox):
             pass
 
 
+class WavenumberLoadDialog(QtWidgets.QDialog):
+    """
+    Helper window to manually enter or load wavenumbers from a file.
+    """
+
+    def __init__(self, target_length, current_data=None, parent=None):
+        super().__init__(parent)
+        self.target_length = target_length
+        self.loaded_data = current_data
+        self.setWindowTitle("Load Custom Wavenumbers")
+        self.resize(400, 500)
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Instructions
+        info = QtWidgets.QLabel(
+            f"Enter or load <b>{self.target_length}</b> wavenumber values.<br>"
+            "Accepted formats: CSV, single column text, space-separated."
+        )
+        info.setTextFormat(QtCore.Qt.RichText)
+        layout.addWidget(info)
+
+        # Text Area
+        self.text_edit = QtWidgets.QPlainTextEdit()
+        self.text_edit.setPlaceholderText("Paste values here (one per line)...")
+        if self.loaded_data is not None:
+            # Pre-fill with current data if available
+            text_str = "\n".join([f"{x:.2f}" for x in self.loaded_data])
+            self.text_edit.setPlainText(text_str)
+        layout.addWidget(self.text_edit)
+
+        # Buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        load_btn = QtWidgets.QPushButton("Load from File...")
+        load_btn.clicked.connect(self.load_from_file)
+        btn_layout.addWidget(load_btn)
+
+        btn_layout.addStretch()
+
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+
+        self.apply_btn = QtWidgets.QPushButton("Apply")
+        self.apply_btn.setDefault(True)
+        self.apply_btn.clicked.connect(self.validate_and_accept)
+
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(self.apply_btn)
+        layout.addLayout(btn_layout)
+
+        # Status Label
+        self.status_label = QtWidgets.QLabel("")
+        layout.addWidget(self.status_label)
+
+    def load_from_file(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open Wavenumber File", "", "Text Files (*.txt *.csv *.dat);;All Files (*)"
+        )
+        if path:
+            try:
+                # Try loading with numpy, usually robust for csv/txt
+                data = np.loadtxt(path, delimiter=None)  # Auto-detect whitespace/delimiter usually works
+                # If comma separated explicitly without spaces, loadtxt might fail without delimiter arg,
+                # but usually it's fine.
+                self.text_edit.setPlainText("\n".join([str(x) for x in data.flatten()]))
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(self, "Load Error", f"Could not parse file:\n{e}")
+
+    def validate_and_accept(self):
+        text = self.text_edit.toPlainText()
+        # Replace commas with newlines to handle CSV pastes
+        text = text.replace(",", "\n").replace(";", "\n")
+
+        try:
+            # Parse numbers
+            values = np.fromstring(text, sep='\n')
+
+            if len(values) == 0:
+                raise ValueError("No data entered.")
+
+            if len(values) != self.target_length:
+                resp = QtWidgets.QMessageBox.question(
+                    self, "Dimension Mismatch",
+                    f"You provided {len(values)} points, but the image has {self.target_length} frames.\n"
+                    "Do you want to apply this anyway? (This may cause errors in processing)",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+                )
+                if resp != QtWidgets.QMessageBox.Yes:
+                    return
+
+            self.loaded_data = values
+            self.accept()
+
+        except Exception as e:
+            self.status_label.setText(f"<font color='red'>Error: {e}</font>")
+
+
 class WavenumberWidget(QtWidgets.QWidget):
     wavenumbers_changed = QtCore.pyqtSignal(np.ndarray)
 
@@ -499,14 +598,16 @@ class WavenumberWidget(QtWidgets.QWidget):
         super().__init__()
         self.n_frames = int(n_frames)
         self.wavenumbers = None
+        self.custom_wavenumbers = None  # Store custom array
         self.beam_mode = 0  # 0: pump is variable, 1: stokes is variable
+
         self.init_ui(**kwargs)
         self.update_wavenums()
 
     def init_ui(self, max_width=70):
-        main_layout = QtWidgets.QHBoxLayout(self)
-        main_layout.setContentsMargins(10, 8, 10, 8)
-        main_layout.setSpacing(10)
+        main_layout = QtWidgets.QVBoxLayout(self)  # Changed to Vertical to stack Mode select on top
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(5)
 
         self.setStyleSheet("""
         QGroupBox {
@@ -526,78 +627,114 @@ class WavenumberWidget(QtWidgets.QWidget):
         QToolButton { padding: 8px; border-radius: 10px; }
         """)
 
-        # ---------------- Pump (variable) group ----------------
+        # --- Top Bar: Source Selector ---
+        top_bar = QtWidgets.QHBoxLayout()
+        top_bar.setContentsMargins(10, 5, 10, 0)
+        top_bar.addWidget(QtWidgets.QLabel("Source:"))
+
+        self.source_combo = QtWidgets.QComboBox()
+        self.source_combo.addItems(["Calculated (Pump/Stokes)", "Custom / Manual"])
+        self.source_combo.currentIndexChanged.connect(self.on_source_changed)
+        top_bar.addWidget(self.source_combo)
+        top_bar.addStretch()
+
+        main_layout.addLayout(top_bar)
+
+        # --- Stacked Widget for Modes ---
+        self.stack = QtWidgets.QStackedWidget()
+        main_layout.addWidget(self.stack)
+
+        # PAGE 1: Calculated (Existing Logic)
+        self.page_calc = QtWidgets.QWidget()
+        calc_layout = QtWidgets.QHBoxLayout(self.page_calc)
+        calc_layout.setContentsMargins(10, 8, 10, 8)
+        calc_layout.setSpacing(10)
+
+        # ... (Existing Pump Group Construction) ...
         self.pump_beam_group = QtWidgets.QGroupBox("Pump Beam")
         var_beam_layout = QtWidgets.QGridLayout(self.pump_beam_group)
         var_beam_layout.setHorizontalSpacing(10)
         var_beam_layout.setVerticalSpacing(6)
-        self.pump_beam_group.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
 
         self.min_max_checkbox = QtWidgets.QCheckBox("Min/Max")
         self.stepsize_checkbox = QtWidgets.QCheckBox("Stepsize")
 
-        # Make them exclusive (like a mode selector)
         button_group = QtWidgets.QButtonGroup(self)
         button_group.setExclusive(True)
         button_group.addButton(self.min_max_checkbox)
         button_group.addButton(self.stepsize_checkbox)
-
         self.min_max_checkbox.setChecked(True)
 
         var_beam_layout.addWidget(self.min_max_checkbox, 0, 0, 1, 2)
         var_beam_layout.addWidget(self.stepsize_checkbox, 1, 0, 1, 2)
 
-        # entries (keep names for compatibility)
         self.min_wavelength_entry = _NumericEntry(value=800.0, decimals=2, width=max_width)
         self.max_wavelength_entry = _NumericEntry(value=830.0, decimals=2, width=max_width)
-        self.stepsize_entry = _NumericEntry(value=30.0, decimals=3, minimum=0.001, maximum=5000.0, step=0.5, width=max_width)
-        self.stepsize_entry.setEnabled(False)  # default: min/max mode
+        self.stepsize_entry = _NumericEntry(value=30.0, decimals=3, minimum=0.001, maximum=5000.0, step=0.5,
+                                            width=max_width)
+        self.stepsize_entry.setEnabled(False)
 
-        # layout rows
         var_beam_layout.addWidget(QtWidgets.QLabel("Min:"), 0, 2)
-        var_beam_layout.addWidget(self.min_wavelength_entry, 0, 3, alignment=QtCore.Qt.AlignLeft)
-        nm1 = QtWidgets.QLabel("nm"); nm1.setProperty("class", "unit"); nm1.setObjectName("unit1")
-        nm1.setStyleSheet("QLabel { opacity: 0.75; }")
-        var_beam_layout.addWidget(nm1, 0, 4)
-
+        var_beam_layout.addWidget(self.min_wavelength_entry, 0, 3)
+        var_beam_layout.addWidget(QtWidgets.QLabel("nm"), 0, 4)  # Simplified unit label
         var_beam_layout.addWidget(QtWidgets.QLabel("Max:"), 0, 5)
-        var_beam_layout.addWidget(self.max_wavelength_entry, 0, 6, alignment=QtCore.Qt.AlignLeft)
-        nm2 = QtWidgets.QLabel("nm"); nm2.setStyleSheet("QLabel { opacity: 0.75; }")
-        var_beam_layout.addWidget(nm2, 0, 7)
-
+        var_beam_layout.addWidget(self.max_wavelength_entry, 0, 6)
+        var_beam_layout.addWidget(QtWidgets.QLabel("nm"), 0, 7)
         var_beam_layout.addWidget(QtWidgets.QLabel("Step:"), 1, 2)
-        var_beam_layout.addWidget(self.stepsize_entry, 1, 3, alignment=QtCore.Qt.AlignLeft)
-        nm3 = QtWidgets.QLabel("nm"); nm3.setStyleSheet("QLabel { opacity: 0.75; }")
-        var_beam_layout.addWidget(nm3, 1, 4)
+        var_beam_layout.addWidget(self.stepsize_entry, 1, 3)
+        var_beam_layout.addWidget(QtWidgets.QLabel("nm"), 1, 4)
 
-        main_layout.addWidget(self.pump_beam_group)
+        calc_layout.addWidget(self.pump_beam_group)
 
-        # ---------------- Swap button ----------------
+        # Swap Button
         swap_button = QtWidgets.QToolButton()
         swap_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
         swap_button.setToolTip("Swap which beam is tuned (Pump ↔ Stokes)")
-        main_layout.addWidget(swap_button)
+        swap_button.clicked.connect(self.swap_beams)
+        calc_layout.addWidget(swap_button)
 
-        # ---------------- Stokes (fixed) group ----------------
+        # Stokes Group
         self.stokes_beam_group = QtWidgets.QGroupBox("Stokes Beam")
         fixed_beam_layout = QtWidgets.QGridLayout(self.stokes_beam_group)
         fixed_beam_layout.setHorizontalSpacing(10)
         fixed_beam_layout.setVerticalSpacing(6)
-        self.stokes_beam_group.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
 
         fixed_label = QtWidgets.QLabel("λ<sub>fixed</sub> =")
         fixed_label.setTextFormat(QtCore.Qt.RichText)
         fixed_beam_layout.addWidget(fixed_label, 0, 0)
 
         self.fixed_entry = _NumericEntry(value=1064.0, decimals=2, width=max_width)
-        fixed_beam_layout.addWidget(self.fixed_entry, 0, 1, alignment=QtCore.Qt.AlignLeft)
+        fixed_beam_layout.addWidget(self.fixed_entry, 0, 1)
+        fixed_beam_layout.addWidget(QtWidgets.QLabel("nm"), 0, 2)
 
-        nm4 = QtWidgets.QLabel("nm"); nm4.setStyleSheet("QLabel { opacity: 0.75; }")
-        fixed_beam_layout.addWidget(nm4, 0, 2)
+        calc_layout.addWidget(self.stokes_beam_group)
 
-        main_layout.addWidget(self.stokes_beam_group)
+        # Add Page 1 to stack
+        self.stack.addWidget(self.page_calc)
 
-        # ---------------- Info group ----------------
+        # PAGE 2: Custom (New)
+        self.page_custom = QtWidgets.QWidget()
+        custom_layout = QtWidgets.QHBoxLayout(self.page_custom)
+        custom_layout.setContentsMargins(10, 8, 10, 8)
+
+        custom_group = QtWidgets.QGroupBox("Custom Wavenumbers")
+        cg_layout = QtWidgets.QHBoxLayout(custom_group)
+
+        self.btn_load_custom = QtWidgets.QPushButton("Edit / Load Wavenumbers...")
+        self.btn_load_custom.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogDetailedView))
+        self.btn_load_custom.clicked.connect(self.open_custom_dialog)
+
+        self.custom_status_label = QtWidgets.QLabel("No data loaded.")
+        self.custom_status_label.setStyleSheet("color: gray; font-style: italic;")
+
+        cg_layout.addWidget(self.btn_load_custom)
+        cg_layout.addWidget(self.custom_status_label)
+        cg_layout.addStretch()
+
+        custom_layout.addWidget(custom_group)
+        self.stack.addWidget(self.page_custom)
+
+        # --- Info Group (Shared at bottom) ---
         info_box = QtWidgets.QGroupBox("Info")
         info_layout = QtWidgets.QVBoxLayout(info_box)
         info_layout.setSpacing(4)
@@ -608,21 +745,41 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.num_label = QtWidgets.QLabel(f"Frames: {self.n_frames}")
 
         info_layout.addWidget(self.min_label)
+        # info_layout.addSpacing(15)
         info_layout.addWidget(self.max_label)
-        info_layout.addSpacing(6)
+        # info_layout.addSpacing(15)
         info_layout.addWidget(self.num_label)
-        info_layout.addStretch(1)
+        info_layout.addStretch()
 
-        main_layout.addWidget(info_box)
+        # info_layout.addLayout(info_row)
 
+        # Warning label for mismatches
+        self.warn_label = QtWidgets.QLabel("")
+        self.warn_label.setStyleSheet("color: red; font-weight: bold;")
+        self.warn_label.setVisible(False)
+        info_layout.addWidget(self.warn_label)
+
+        # Wrap Info in a widget to add to main VBox
+        calc_layout.addWidget(info_box)
+
+        # --- Connections ---
         self.min_max_checkbox.stateChanged.connect(self.on_min_max_checked)
         self.stepsize_checkbox.stateChanged.connect(self.on_stepsize_checked)
-        swap_button.clicked.connect(self.swap_beams)
 
         self.min_wavelength_entry.textChanged.connect(self.update_wavenums)
         self.max_wavelength_entry.textChanged.connect(self.update_wavenums)
         self.stepsize_entry.textChanged.connect(self.update_wavenums)
         self.fixed_entry.textChanged.connect(self.update_wavenums)
+
+    def on_source_changed(self, index):
+        self.stack.setCurrentIndex(index)
+        self.update_wavenums()
+
+    def open_custom_dialog(self):
+        dlg = WavenumberLoadDialog(target_length=self.n_frames, current_data=self.custom_wavenumbers, parent=self)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            self.custom_wavenumbers = dlg.loaded_data
+            self.update_wavenums()
 
     def on_min_max_checked(self, state):
         if state == QtCore.Qt.Checked:
@@ -638,7 +795,7 @@ class WavenumberWidget(QtWidgets.QWidget):
             with QtCore.QSignalBlocker(self.min_max_checkbox):
                 self.min_max_checkbox.setChecked(False)
             self.min_wavelength_entry.setEnabled(True)
-            self.max_wavelength_entry.setEnabled(False)  # derived from min + step
+            self.max_wavelength_entry.setEnabled(False)
             self.stepsize_entry.setEnabled(True)
             self.update_wavenums()
 
@@ -647,68 +804,89 @@ class WavenumberWidget(QtWidgets.QWidget):
         stokes_label = self.stokes_beam_group.title()
         self.pump_beam_group.setTitle(stokes_label)
         self.stokes_beam_group.setTitle(pump_label)
-
         self.beam_mode = (self.beam_mode + 1) % 2
         self.update_wavenums()
-        # logger.debug(self.beam_mode)
 
     def set_nframes(self, n_frames):
         self.n_frames = int(n_frames)
         self.update_wavenums()
 
     def update_wavenums(self):
-        # robust against weird intermediate states
         channels = max(1, int(self.n_frames))
+        is_custom = (self.source_combo.currentIndex() == 1)
 
-        minimum = float(self.min_wavelength_entry.value())
-        fixed_wavelength = float(self.fixed_entry.value())
+        if is_custom:
+            if self.custom_wavenumbers is None:
+                # Fallback to simple index range (0, 1, 2, ..., N-1)
+                self.wavenumbers = np.arange(channels, dtype=np.float32)
 
-        fixed_k = 1.0 / (fixed_wavelength * 1e-7)
-        k_fix = np.full(channels, fixed_k, dtype=np.float64)
-
-        if self.min_max_checkbox.isChecked():
-            maximum = float(self.max_wavelength_entry.value())
-            # ensure ordering
-            if maximum < minimum:
-                minimum, maximum = maximum, minimum
-                with QtCore.QSignalBlocker(self.min_wavelength_entry), QtCore.QSignalBlocker(self.max_wavelength_entry):
-                    self.min_wavelength_entry.setValue(minimum)
-                    self.max_wavelength_entry.setValue(maximum)
-
-            # true step for linspace endpoints
-            if channels > 1:
-                stepsize = (maximum - minimum) / (channels - 1)
+                self.custom_status_label.setText("Default: Frame indices")
+                self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.0f} (idx)")
+                self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.0f} (idx)")
+                self.warn_label.setVisible(False)
             else:
-                stepsize = 0.0
+                self.wavenumbers = self.custom_wavenumbers
+                self.custom_status_label.setText(f"Loaded: {len(self.wavenumbers)} points")
 
-            # write derived stepsize without feedback loops
-            with QtCore.QSignalBlocker(self.stepsize_entry):
-                self.stepsize_entry.setValue(stepsize)
+                # Check consistency
+                if len(self.wavenumbers) != channels:
+                    self.warn_label.setText(f"Warning: Data length ({len(self.wavenumbers)}) != Frames ({channels})")
+                    self.warn_label.setVisible(True)
+                else:
+                    self.warn_label.setVisible(False)
+
+                if len(self.wavenumbers) > 0:
+                    self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} cm⁻¹")
+                    self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} cm⁻¹")
 
         else:
-            stepsize = float(self.stepsize_entry.value())
-            maximum = minimum + stepsize * (channels - 1)
+            # --- Calculated Logic ---
+            self.warn_label.setVisible(False)
+            minimum = float(self.min_wavelength_entry.value())
+            fixed_wavelength = float(self.fixed_entry.value())
 
-            # write derived max without feedback loops
-            with QtCore.QSignalBlocker(self.max_wavelength_entry):
-                self.max_wavelength_entry.setValue(maximum)
+            fixed_k = 1.0 / (fixed_wavelength * 1e-7)
+            k_fix = np.full(channels, fixed_k, dtype=np.float64)
 
-        lambdas = np.linspace(minimum * 1e-7, maximum * 1e-7, channels, dtype=np.float64)
-        k_var = np.reciprocal(lambdas)
+            if self.min_max_checkbox.isChecked():
+                maximum = float(self.max_wavelength_entry.value())
+                if maximum < minimum:
+                    minimum, maximum = maximum, minimum
+                    with QtCore.QSignalBlocker(self.min_wavelength_entry), QtCore.QSignalBlocker(
+                            self.max_wavelength_entry):
+                        self.min_wavelength_entry.setValue(minimum)
+                        self.max_wavelength_entry.setValue(maximum)
 
-        if not self.beam_mode:   # 0: pump variable
-            k_pump = k_var
-            k_stokes = k_fix
-        else:                    # 1: stokes variable
-            k_pump = k_fix
-            k_stokes = k_var
+                if channels > 1:
+                    stepsize = (maximum - minimum) / (channels - 1)
+                else:
+                    stepsize = 0.0
 
-        self.wavenumbers = (k_pump - k_stokes).astype(np.float32, copy=False)
+                with QtCore.QSignalBlocker(self.stepsize_entry):
+                    self.stepsize_entry.setValue(stepsize)
 
-        self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} cm⁻¹")
-        self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} cm⁻¹")
-        self.num_label.setText(f"Frames: {len(self.wavenumbers)}")
+            else:
+                stepsize = float(self.stepsize_entry.value())
+                maximum = minimum + stepsize * (channels - 1)
+                with QtCore.QSignalBlocker(self.max_wavelength_entry):
+                    self.max_wavelength_entry.setValue(maximum)
 
+            lambdas = np.linspace(minimum * 1e-7, maximum * 1e-7, channels, dtype=np.float64)
+            k_var = np.reciprocal(lambdas)
+
+            if not self.beam_mode:  # 0: pump variable
+                k_pump = k_var
+                k_stokes = k_fix
+            else:  # 1: stokes variable
+                k_pump = k_fix
+                k_stokes = k_var
+
+            self.wavenumbers = (k_pump - k_stokes).astype(np.float32, copy=False)
+
+            self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} cm⁻¹")
+            self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} cm⁻¹")
+
+        self.num_label.setText(f"Frames: {self.n_frames}")
         self.wavenumbers_changed.emit(self.wavenumbers)
 
     def apply_wavelength_meta(self, meta: dict, n_frames: int):
@@ -763,7 +941,6 @@ class WavenumberWidget(QtWidgets.QWidget):
             w.blockSignals(False)
 
         self.update_wavenums()
-
 
 class DataHandler(QtWidgets.QWidget):
     """

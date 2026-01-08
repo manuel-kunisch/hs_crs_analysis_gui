@@ -736,10 +736,7 @@ class CompositeImageViewWidget(QMainWindow):
 
     def reload_color(self, channel_index: int):
         self.set_colormap(channel_index, self.get_color(channel_index), change_color_manager=False)
-        cur_channel = self.channel_slider.value()
-        if cur_channel != channel_index:
-            self.update_channel_view(channel_index)
-            self.update_channel_view(cur_channel)
+
 
     def make_color_state(self, index: int, vmin_max: tuple, color: tuple[int, int, int], colorpos='default'):
         vmin, vmax = vmin_max

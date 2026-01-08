@@ -1788,6 +1788,11 @@ class SeedWidget(QtWidgets.QWidget):
                 pen = pg.mkPen(self.default_colors[i%len(self.default_colors)])
             self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pen, name=f'Component {i}')
 
+    def set_spectral_units(self, units: str):
+        if units != 'nm':
+            self.seed_H_plot.setLabel('bottom', 'Wavenumber [1/cm]')
+        else:
+            self.seed_H_plot.setLabel('bottom', 'Wavelength [nm]')
 
     def _replot_seeds(self):
         """Re-draw the seed markers based on current checkboxes and data."""

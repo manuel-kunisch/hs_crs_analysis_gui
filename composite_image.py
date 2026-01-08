@@ -761,6 +761,11 @@ class CompositeImageViewWidget(QMainWindow):
         if index == self.channel_slider.value():
             self.channel_view.getHistogramWidget().restoreState(self.histogram_states[index])
 
+    def set_spectral_units(self, units: str):
+        if units.lower() == 'nm':
+            self.spectrum_view.setLabel('bottom', 'Wavelength (nm)')
+        else:
+            self.spectrum_view.setLabel('bottom', 'Wavenumber (1/cm)')
 
     def choose_color(self):
         # Open a QColorDialog to choose a color for colormap

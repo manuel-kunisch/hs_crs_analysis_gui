@@ -510,7 +510,7 @@ class WavenumberLoadDialog(QtWidgets.QDialog):
 
         # Instructions
         info = QtWidgets.QLabel(
-            f"Enter or load <b>{self.target_length}</b> wavenumber values.<br>"
+            f"Enter or load <b>{self.target_length}</b> values (wavenumbers or wavelengths).<br>"
             "Accepted formats: CSV, single column text, space-separated."
         )
         info.setTextFormat(QtCore.Qt.RichText)
@@ -636,6 +636,16 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.source_combo.addItems(["Calculated (Pump/Stokes)", "Custom / Manual"])
         self.source_combo.currentIndexChanged.connect(self.on_source_changed)
         top_bar.addWidget(self.source_combo)
+
+        self.custom_unit_combo = QtWidgets.QComboBox()
+        self.custom_unit_combo.addItems([ "cm⁻¹", "nm"])
+        self.custom_unit_combo.setFixedWidth(60)
+        self.custom_unit_combo.currentIndexChanged.connect(self.update_wavenums)
+
+        top_bar.addSpacing(15)
+
+        top_bar.addWidget(QtWidgets.QLabel("Unit:"))
+        top_bar.addWidget(self.custom_unit_combo)
         top_bar.addStretch()
 
         main_layout.addLayout(top_bar)
@@ -650,7 +660,6 @@ class WavenumberWidget(QtWidgets.QWidget):
         calc_layout.setContentsMargins(10, 8, 10, 8)
         calc_layout.setSpacing(10)
 
-        # ... (Existing Pump Group Construction) ...
         self.pump_beam_group = QtWidgets.QGroupBox("Pump Beam")
         var_beam_layout = QtWidgets.QGridLayout(self.pump_beam_group)
         var_beam_layout.setHorizontalSpacing(10)
@@ -707,6 +716,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         fixed_beam_layout.addWidget(self.fixed_entry, 0, 1)
         fixed_beam_layout.addWidget(QtWidgets.QLabel("nm"), 0, 2)
 
+        self.source_combo.currentTextChanged.connect(lambda unit: self.fixed_entry.setEnabled(False) if unit == "nm" else self.fixed_entry.setEnabled(True))
         calc_layout.addWidget(self.stokes_beam_group)
 
         # Add Page 1 to stack
@@ -815,41 +825,41 @@ class WavenumberWidget(QtWidgets.QWidget):
         channels = max(1, int(self.n_frames))
         is_custom = (self.source_combo.currentIndex() == 1)
 
+        unit_str = self.custom_unit_combo.currentText()
+
         if is_custom:
             if self.custom_wavenumbers is None:
-                # Fallback to simple index range (0, 1, 2, ..., N-1)
                 self.wavenumbers = np.arange(channels, dtype=np.float32)
-
-                self.custom_status_label.setText("Default: Frame indices")
+                self.custom_status_label.setText("Default: Indices")
+                # Fallback labels
                 self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.0f} (idx)")
                 self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.0f} (idx)")
                 self.warn_label.setVisible(False)
+                # Emit indices, but technically unit_str might be misleading here if not set
+                # but usually user loads data immediately.
             else:
                 self.wavenumbers = self.custom_wavenumbers
-                self.custom_status_label.setText(f"Loaded: {len(self.wavenumbers)} points")
+                self.custom_status_label.setText(f"Loaded: {len(self.wavenumbers)} pts")
 
-                # Check consistency
                 if len(self.wavenumbers) != channels:
-                    self.warn_label.setText(f"Warning: Data length ({len(self.wavenumbers)}) != Frames ({channels})")
+                    self.warn_label.setText(f"Size Mismatch: {len(self.wavenumbers)} vs {channels}")
                     self.warn_label.setVisible(True)
                 else:
                     self.warn_label.setVisible(False)
 
                 if len(self.wavenumbers) > 0:
-                    self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} cm⁻¹")
-                    self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} cm⁻¹")
+                    self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} {unit_str}")
+                    self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} {unit_str}")
 
         else:
             # --- Calculated Logic ---
             self.warn_label.setVisible(False)
+
+            # 1. Get Range
             minimum = float(self.min_wavelength_entry.value())
-            fixed_wavelength = float(self.fixed_entry.value())
-
-            fixed_k = 1.0 / (fixed_wavelength * 1e-7)
-            k_fix = np.full(channels, fixed_k, dtype=np.float64)
-
             if self.min_max_checkbox.isChecked():
                 maximum = float(self.max_wavelength_entry.value())
+                # ... (swap logic same as before) ...
                 if maximum < minimum:
                     minimum, maximum = maximum, minimum
                     with QtCore.QSignalBlocker(self.min_wavelength_entry), QtCore.QSignalBlocker(
@@ -861,30 +871,40 @@ class WavenumberWidget(QtWidgets.QWidget):
                     stepsize = (maximum - minimum) / (channels - 1)
                 else:
                     stepsize = 0.0
-
                 with QtCore.QSignalBlocker(self.stepsize_entry):
                     self.stepsize_entry.setValue(stepsize)
-
             else:
+                self.fixed_entry.setEnabled(False)
                 stepsize = float(self.stepsize_entry.value())
                 maximum = minimum + stepsize * (channels - 1)
                 with QtCore.QSignalBlocker(self.max_wavelength_entry):
                     self.max_wavelength_entry.setValue(maximum)
 
-            lambdas = np.linspace(minimum * 1e-7, maximum * 1e-7, channels, dtype=np.float64)
-            k_var = np.reciprocal(lambdas)
+            # 2. Calculate Axis
+            # Check if we are doing Raman (Fixed enabled) or Hyperspectral (Fixed disabled)
+            if unit_str != "nm":
+                # --- RAMAN MODE (cm-1) ---
+                fixed_wavelength = float(self.fixed_entry.value())
 
-            if not self.beam_mode:  # 0: pump variable
-                k_pump = k_var
-                k_stokes = k_fix
-            else:  # 1: stokes variable
-                k_pump = k_fix
-                k_stokes = k_var
+                # Convert nm to cm: factor 1e-7
+                lambdas_cm = np.linspace(minimum * 1e-7, maximum * 1e-7, channels, dtype=np.float64)
+                fixed_k = 1.0 / (fixed_wavelength * 1e-7)
 
-            self.wavenumbers = (k_pump - k_stokes).astype(np.float32, copy=False)
+                k_var = np.reciprocal(lambdas_cm)
+                k_fix = np.full(channels, fixed_k, dtype=np.float64)
 
-            self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} cm⁻¹")
-            self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} cm⁻¹")
+                if not self.beam_mode:  # 0: pump variable
+                    self.wavenumbers = (k_var - k_fix).astype(np.float32)
+                else:  # 1: stokes variable
+                    self.wavenumbers = (k_fix - k_var).astype(np.float32)
+            else:
+                # --- HYPERSPECTRAL MODE (nm) ---
+                # Just output the tunable range directly in nm
+                self.wavenumbers = np.linspace(minimum, maximum, channels, dtype=np.float32)
+
+            # 3. Update Info Box
+            self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} {unit_str}")
+            self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} {unit_str}")
 
         self.num_label.setText(f"Frames: {self.n_frames}")
         self.wavenumbers_changed.emit(self.wavenumbers)

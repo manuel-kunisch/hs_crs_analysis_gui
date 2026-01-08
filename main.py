@@ -66,6 +66,7 @@ class MainApplication(QtWidgets.QMainWindow):
         self.data_handler.wavenumber_widget.wavenumbers_changed.connect(self.update_wavenum_changed)
         self.data_handler.loader_widget.physical_units_manager.widget.fov_change_signal.connect(self.update_fov)
         self.data_handler.loader_widget.physical_units_manager.widget.scale_bar_length_spinbox.valueChanged.connect(self.update_scale_bars)
+        self.data_handler.wavenumber_widget.custom_unit_combo.currentTextChanged.connect(self.change_spectral_units)
 
         # add scale bars
         px_size = self.data_handler.loader_widget.physical_units_manager.pixel_size
@@ -220,6 +221,9 @@ class MainApplication(QtWidgets.QMainWindow):
         self.scale_bar_raw.update_scale_bar_len(len)
         self.scale_bar_channels.update_scale_bar_len(len)
         self.scale_bar_composite.update_scale_bar_len(len)
+
+    def change_spectral_units(self, unit: str):
+        self.result_viewer_widget.set_spectral_units(unit)
 
     def updated_widget_component_colors(self, lut_index: int, color: tuple):
         # update the color scheme of all components in the data widget

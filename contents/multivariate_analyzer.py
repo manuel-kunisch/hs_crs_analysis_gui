@@ -276,6 +276,7 @@ class MultivariateAnalyzer(object):
 
         # optional downsample for speed
         ds = max(int(downsample), 1)
+        ny, nx = ref_2d.shape
         if ds > 1:
             ref_ds = ref_2d[::ds, ::ds]
             rad_ds = max(int(radius_px // ds), 1)
@@ -432,6 +433,7 @@ class MultivariateAnalyzer(object):
         w_max_sorted = min(w_max_sorted, len(sorted_wavenumbers) - 1)
         w_min_sorted = max(w_min_sorted, 0)
 
+        print(wavenumber, width)
         if w_max_sorted < w_min_sorted:
             if wavenumber - width < sorted_wavenumbers[0]:
                 w_min_sorted = 0

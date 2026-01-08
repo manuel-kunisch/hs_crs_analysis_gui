@@ -275,10 +275,8 @@ class MainApplication(QtWidgets.QMainWindow):
             "fov": self.data_handler.loader_widget.physical_units_manager.get_fov(),
             "unit": self.data_handler.loader_widget.physical_units_manager.unit,
             # wavennumber widget
-            "wavenumbers": self.data_handler.wavenumber_widget.wavenumbers.tolist(),
-            "lambda_min": self.data_handler.wavenumber_widget.min_wavelength_entry.text(),
-            "lambda_max": self.data_handler.wavenumber_widget.max_wavelength_entry.text(),
-            "mode": self.data_handler.wavenumber_widget.beam_mode,
+            "wavenumber_widget": self.data_handler.wavenumber_widget.export_state(),
+            "wavenumbers": self.data_handler.wavenumber_widget.wavenumbers.tolist() if self.data_handler.wavenumber_widget.wavenumbers is not None else None,
 
             # components and resonance settings
             "num_components": self.analysis_manager.num_components_spinbox.value(),
@@ -355,13 +353,25 @@ class MainApplication(QtWidgets.QMainWindow):
             self.data_handler.wavenumber_widget.wavenumbers = wav
             self.update_wavenum_changed(wav)
 
-        # set the correct wavelength range in the wavenumber widget
-        if preset.get("lambda_min", None) is not None:
-            self.data_handler.wavenumber_widget.min_wavelength_entry.setText(str(preset["lambda_min"]))
-        if preset.get("lambda_max", None) is not None:
-            self.data_handler.wavenumber_widget.max_wavelength_entry.setText(str(preset["lambda_max"]))
-        if preset.get("mode", None) is not None:
-            self.data_handler.wavenumber_widget.beam_mode = preset["mode"]
+        wav_state = preset.get("wavenumber_widget", None)
+        if isinstance(wav_state, dict):
+            self.data_handler.wavenumber_widget.import_state(wav_state)
+        else:
+            # legacy fallback (old preset format)
+            if preset.get("lambda_min", None) is not None:
+                self.data_handler.wavenumber_widget.min_wavelength_entry.setText(str(preset["lambda_min"]))
+            if preset.get("lambda_max", None) is not None:
+                self.data_handler.wavenumber_widget.max_wavelength_entry.setText(str(preset["lambda_max"]))
+            if preset.get("mode", None) is not None:
+                self.data_handler.wavenumber_widget.beam_mode = preset["mode"]
+
+            if preset.get("wavenumbers", None) is not None:
+                self.data_handler.wavenumber_widget.custom_wavenumbers = np.asarray(preset["wavenumbers"],
+                                                                                    dtype=np.float32)
+                self.data_handler.wavenumber_widget.source_combo.setCurrentIndex(1)  # custom
+                self.data_handler.wavenumber_widget.stack.setCurrentIndex(1)
+
+            self.data_handler.wavenumber_widget.update_wavenums()
 
         # 5) ROIs (after image+binning+wavenumbers exist)
         roi_state = preset.get("roi_manager", None)
@@ -379,11 +389,16 @@ class MainApplication(QtWidgets.QMainWindow):
 
         # 7) result-viewer histograms + labels (your existing structure)
         labels = preset.get("labels", None)
-        if labels is not None:
-            self.result_viewer_widget.custom_labels = labels
-            for k, v in labels.items():
+        if isinstance(labels, dict) and labels:
+            # snapshot so iteration can't be affected
+            labels_items = list(labels.items())
+
+            # decouple from preset dict (avoid shared reference)
+            self.result_viewer_widget.custom_labels = {}
+
+            for k, v in labels_items:
                 try:
-                    self.result_viewer_widget.update_label(int(k), v)
+                    self.result_viewer_widget.update_label(int(k), v)  # update_label should fill custom_labels
                 except Exception:
                     pass
 

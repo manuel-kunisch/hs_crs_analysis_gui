@@ -962,6 +962,123 @@ class WavenumberWidget(QtWidgets.QWidget):
 
         self.update_wavenums()
 
+    def export_state(self) -> dict:
+        """Serialize full spectral-axis UI state (not just the derived axis array)."""
+        return {
+            "version": 1,   # new version with min_nm/max_nm etc.
+            "n_frames": int(self.n_frames),
+
+            # UI choices
+            "source_index": int(self.source_combo.currentIndex()),  # 0=Calculated, 1=Custom
+            "unit": str(self.custom_unit_combo.currentText()),  # "cm⁻¹" or "nm"
+            "beam_mode": int(self.beam_mode),  # 0/1
+
+            # calculated-mode inputs (still useful to store even if custom)
+            "calc_mode": "minmax" if self.min_max_checkbox.isChecked() else "stepsize",
+            "min_nm": float(self.min_wavelength_entry.value()),
+            "max_nm": float(self.max_wavelength_entry.value()),
+            "step_nm": float(self.stepsize_entry.value()),
+            "fixed_nm": float(self.fixed_entry.value()),
+
+            # custom-mode payload
+            "custom_values": None if self.custom_wavenumbers is None else self.custom_wavenumbers.tolist(),
+        }
+
+    def import_state(self, state: dict):
+        """Restore spectral-axis UI state. Calls update_wavenums() exactly once at the end."""
+        if not isinstance(state, dict) or not state:
+            return
+
+        # Backward-compat
+        if "lambda_min" in state and "min_nm" not in state:
+            state = {
+                "version": 0,
+                "n_frames": state.get("n_frames", self.n_frames),
+                "source_index": 0,
+                "unit": state.get("unit", "cm⁻¹"),
+                "beam_mode": state.get("mode", self.beam_mode),
+                "calc_mode": "minmax",
+                "min_nm": float(state.get("lambda_min", 800.0)),
+                "max_nm": float(state.get("lambda_max", 830.0)),
+                "step_nm": float(state.get("step_nm", self.stepsize_entry.value())),
+                "fixed_nm": float(state.get("fixed_nm", self.fixed_entry.value())),
+                "custom_values": None,
+            }
+
+        # --- block widget signals while restoring ---
+        blockers = [
+            QtCore.QSignalBlocker(self.source_combo),
+            QtCore.QSignalBlocker(self.custom_unit_combo),
+            QtCore.QSignalBlocker(self.min_max_checkbox),
+            QtCore.QSignalBlocker(self.stepsize_checkbox),
+            QtCore.QSignalBlocker(self.min_wavelength_entry),
+            QtCore.QSignalBlocker(self.max_wavelength_entry),
+            QtCore.QSignalBlocker(self.stepsize_entry),
+            QtCore.QSignalBlocker(self.fixed_entry),
+        ]
+
+        # restore frame count (only matters if no image is loaded yet)
+        try:
+            self.n_frames = int(state.get("n_frames", self.n_frames))
+        except Exception:
+            pass
+
+        # restore source + unit
+        self.source_combo.setCurrentIndex(int(state.get("source_index", 0)))
+        self.stack.setCurrentIndex(int(state.get("source_index", 0)))
+
+        unit = str(state.get("unit", "cm⁻¹"))
+        uidx = self.custom_unit_combo.findText(unit)
+        if uidx >= 0:
+            self.custom_unit_combo.setCurrentIndex(uidx)
+
+        # restore beam mode (don’t spam swap_beams(); just set)
+        try:
+            self.beam_mode = int(state.get("beam_mode", self.beam_mode))
+        except Exception:
+            pass
+
+        # restore numeric inputs
+        for key, widget in [
+            ("min_nm", self.min_wavelength_entry),
+            ("max_nm", self.max_wavelength_entry),
+            ("step_nm", self.stepsize_entry),
+            ("fixed_nm", self.fixed_entry),
+        ]:
+            if key in state and state[key] is not None:
+                try:
+                    widget.setValue(float(state[key]))
+                except Exception:
+                    pass
+
+        # restore calc mode
+        calc_mode = state.get("calc_mode", "minmax")
+        if calc_mode == "stepsize":
+            self.min_max_checkbox.setChecked(False)
+            self.stepsize_checkbox.setChecked(True)
+            self.min_wavelength_entry.setEnabled(True)
+            self.max_wavelength_entry.setEnabled(False)
+            self.stepsize_entry.setEnabled(True)
+        else:
+            self.min_max_checkbox.setChecked(True)
+            self.stepsize_checkbox.setChecked(False)
+            self.min_wavelength_entry.setEnabled(True)
+            self.max_wavelength_entry.setEnabled(True)
+            self.stepsize_entry.setEnabled(False)
+
+        # restore custom array
+        custom_vals = state.get("custom_values", None)
+        if custom_vals is None:
+            self.custom_wavenumbers = None
+        else:
+            self.custom_wavenumbers = np.asarray(custom_vals, dtype=np.float32)
+
+        del blockers  # unblock
+
+        # compute + emit once
+        self.update_wavenums()
+
+
 class DataHandler(QtWidgets.QWidget):
     """
     Main widget for data handling combining the image loader and wavenumber widget

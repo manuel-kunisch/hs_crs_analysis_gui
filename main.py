@@ -26,6 +26,17 @@ logger.setLevel(logging.INFO)
 # example_image2 = np.moveaxis(tifffile.imread('/Users/mkunisch/Nextcloud/Manuel_BA/HS_CARS_Lung_cells_day_2_Vukosaljevic_et_al/Results/2023_05_23_15614_reshaped_NMF_2017_03_23_Lungcells_Day2_60mWBoth_2xZoom_16ms_Pos2_HS_CARS_ch-1_C.tif'),
 #                            0, -1)
 
+def _norm_spec_unit(unit: str) -> str:
+    u = (unit or "").strip().lower()
+    return "nm" if u == "nm" else "cm⁻¹"
+
+def _spec_axis_label(unit: str) -> str:
+    unit = _norm_spec_unit(unit)
+    return "Wavelength [nm]" if unit == "nm" else "Wavenumber [cm⁻¹]"
+
+def _spec_unit_suffix(unit: str) -> str:
+    unit = _norm_spec_unit(unit)
+    return " nm" if unit == "nm" else " cm⁻¹"
 
 class MainApplication(QtWidgets.QMainWindow):
     def __init__(self):
@@ -224,7 +235,21 @@ class MainApplication(QtWidgets.QMainWindow):
         self.scale_bar_composite.update_scale_bar_len(len)
 
     def change_spectral_units(self, unit: str):
+        unit = _norm_spec_unit(unit)
+
+        # 1) composite/result viewer
         self.result_viewer_widget.set_spectral_units(unit)
+
+        # 2) ROI manager + ROI spectrum plot
+        self.data_widget.set_spectral_units(unit)
+
+        # 3) analysis resonance table + seed window label
+        self.analysis_manager.set_spectral_units(unit)
+
+        # 4) optional: your extra ROI plot in data_widgets.py if it exists
+        if getattr(self.data_widget, "roi_avg_plot_wid", None) is not None:
+            self.data_widget.roi_avg_plot_wid.setLabel('bottom', _spec_axis_label(unit))
+
 
     def updated_widget_component_colors(self, lut_index: int, color: QColor):
         # update the color scheme of all components in the data widget
@@ -373,6 +398,7 @@ class MainApplication(QtWidgets.QMainWindow):
 
             self.data_handler.wavenumber_widget.update_wavenums()
 
+        self.change_spectral_units(self.data_handler.wavenumber_widget.custom_unit_combo.currentText())
         # 5) ROIs (after image+binning+wavenumbers exist)
         roi_state = preset.get("roi_manager", None)
         if roi_state and hasattr(self.data_widget.roi_manager, "import_state"):

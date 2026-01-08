@@ -29,6 +29,7 @@ class RamanImageView(ImageViewLineRoi):
         super().__init__(*args, **kwargs)
         # self.roi = pg.LineSegmentROI([(0, 0), (50, 50)])
         self.max_ticks = max_ticks
+        self.unit = "cm⁻¹"
         self.fps = 10
         self.autoplay = autoplay
         if self.autoplay:
@@ -57,13 +58,22 @@ class RamanImageView(ImageViewLineRoi):
         self.wavenumber = None
         self.roiPlotWidget = roi_plot_widget
 
+    def set_spectral_units(self, unit: str):
+        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
+        if unit == "nm":
+            self.ui.roiPlot.getAxis('bottom').setLabel('Wavelength [nm]')
+        else:
+            self.ui.roiPlot.getAxis('bottom').setLabel('Raman Shift [1/cm]')
+        self.unit = unit
+        self.updateImage()
+
     def updateImage(self, show_frame_label=False, **kwargs):
         super().updateImage(**kwargs)
         frame = self.currentIndex
         if show_frame_label:
             self.frame_label.setText(f'Frame: {frame}')
         if self.view is not None and self.wavenumber is not None:
-            self.view.setTitle(f'Frame: {frame} @ {self.wavenumber[self.currentIndex]:.1f} 1/cm')
+            self.view.setTitle(f'Frame: {frame} @ {self.wavenumber[self.currentIndex]:.1f} {self.unit}')
 
     def roiChanged(self, *args, plot_widget=None):
         # args is the line roi which is passed at the event call

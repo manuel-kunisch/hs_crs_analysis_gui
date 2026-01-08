@@ -1561,6 +1561,35 @@ class AnalysisManager(QtCore.QObject):
         self.update_spectral_info()
         self.highlight_all_resonances()
 
+    def set_spectral_units(self, unit: str):
+        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
+        self.spectral_units = unit
+
+        # Header text (keep your internal column keys "Wavenumber"/"Width"!)
+        wn_col = self.res_settings_widget_columns.get("Wavenumber")
+        wd_col = self.res_settings_widget_columns.get("Width")
+        if wn_col is not None:
+            item = self.resonance_table.horizontalHeaderItem(wn_col)
+            if item:
+                item.setText("Wavelength (nm)" if unit == "nm" else "Wavenumber (cm⁻¹)")
+        if wd_col is not None:
+            item = self.resonance_table.horizontalHeaderItem(wd_col)
+            if item:
+                item.setText("Width (nm)" if unit == "nm" else "Width (cm⁻¹)")
+
+        # Spinbox suffixes for existing rows
+        suffix = (" nm" if unit == "nm" else " cm⁻¹")
+        for row in range(self.resonance_table.rowCount()):
+            wn_sb = self.resonance_table.cellWidget(row, wn_col) if wn_col is not None else None
+            wd_sb = self.resonance_table.cellWidget(row, wd_col) if wd_col is not None else None
+            if hasattr(wn_sb, "setSuffix"):
+                wn_sb.setSuffix(suffix)
+            if hasattr(wd_sb, "setSuffix"):
+                wd_sb.setSuffix(suffix)
+
+        # If seed window is open, update its axis label too
+        if getattr(self, "seed_window", None) is not None:
+            self.seed_window.set_spectral_units(unit)
 
 class SeedWidget(QtWidgets.QWidget):
     default_colors = CompositeImageViewWidget.colormap_colors

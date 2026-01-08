@@ -29,6 +29,7 @@ class ROIManager(QtCore.QObject):
     def __init__(self, image_view: pg.ImageView, color_manager=None):
         super().__init__()
         self.image_view = image_view
+        self.spectral_units = "cm⁻¹"
         self.rois = []  # list that stores each roi object sorted by index
         self.gaussian_specs_by_component: dict[int, list[tuple[float, float, float]]] = {}
         self.roi_region_change_signals = {}
@@ -63,7 +64,7 @@ class ROIManager(QtCore.QObject):
         load_spectra_button = QtWidgets.QPushButton("Load Spectrum from File")
         load_spectra_button.clicked.connect(self.load_spectra)
         
-        load_preset_button = QtWidgets.QPushButton("Load Preset")
+        load_preset_button = QtWidgets.QPushButton("Load Lookup Table and Spectra Preset")
         load_preset_button.clicked.connect(self.load_presets)
 
         # add buttons on top of the table
@@ -689,7 +690,12 @@ class ROIManager(QtCore.QObject):
         # add the wavenumbers to the signal column 0 are the wavenumbers, column 1 the intensity values
         if self.wavenumbers is not None:
             signal = np.vstack((self.wavenumbers, signal)).T
-            header = 'Wavenumber (cm-1), ' + header
+            unit = getattr(self, "spectral_units", "cm⁻¹")
+            if unit == "nm":
+                header = "Wavelength (nm), " + header
+            else:
+                header = "Wavenumber (cm-1), " + header
+
         # open user prompt to enter name of the file, default is the label of the ROI
         file_name, _ = QtWidgets.QFileDialog.getSaveFileName(None, "Export ROI", f"{roi.label}", "CSV Files (*.csv)")
         if not file_name:
@@ -1448,6 +1454,9 @@ class ROIPlotter(pg.PlotWidget):
     def __init__(self, roi_manager: ROIManager):
         super().__init__()
         self.roi_manager = roi_manager
+        self.spectral_units = "cm⁻¹"
+        self.set_spectral_units(self.spectral_units)
+        self.setLabel('left', text='Intensity [a.u.]')
         self.curves = {}
         # add a legend to the plot
         self.legend = self.addLegend()
@@ -1462,6 +1471,11 @@ class ROIPlotter(pg.PlotWidget):
         # keyed by component index (0, 1, 2, ...)
         self.component_gaussians: dict[int, dict] = {}
         self.component_gaussian_lines: dict[int, pg.PlotDataItem] = {}
+
+    def set_spectral_units(self, unit: str):
+        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
+        self.spectral_units = unit
+        self.setLabel('bottom', 'Wavelength [nm]' if unit == "nm" else 'Wavenumber [cm⁻¹]')
 
     def plot_roi_average(self, roi_id, z_data, label):
         roi_index = self.roi_manager.roi_id_idx.get(roi_id)

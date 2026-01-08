@@ -143,6 +143,11 @@ class DataWidget(QtWidgets.QWidget):
 
         self.update_overview_images()  # Call this to display initial images
 
+    def set_spectral_units(self, unit: str):
+        self.roi_manager.spectral_units = unit
+        self.roi_manager.roi_plotter.set_spectral_units(unit)
+        self.raman_raw_image_view.set_spectral_units(unit)
+
     def init_toolbar(self):
         self.lut_combo_box = QtWidgets.QComboBox(self)
         self.lut_combo_box.addItems(['grey', 'thermal', 'flame', 'yellowy', 'bipolar', 'spectrum', 'cyclic', 'greyclip',

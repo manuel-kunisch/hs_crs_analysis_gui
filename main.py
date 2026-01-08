@@ -6,6 +6,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore, Qt  # Import the necessary modules
 from PyQt5 import QtWidgets
+from PyQt5.QtGui import QColor
 from pyqtgraph.dockarea.Dock import Dock
 from pyqtgraph.dockarea.DockArea import DockArea
 
@@ -225,9 +226,9 @@ class MainApplication(QtWidgets.QMainWindow):
     def change_spectral_units(self, unit: str):
         self.result_viewer_widget.set_spectral_units(unit)
 
-    def updated_widget_component_colors(self, lut_index: int, color: tuple):
+    def updated_widget_component_colors(self, lut_index: int, color: QColor):
         # update the color scheme of all components in the data widget
-        logger.info(f'Updating component colors: {lut_index = }, {color = }')
+        logger.info(f'Updating component colors: {lut_index = }, {color.getRgb() = }')
         self.data_widget.roi_manager.reload_colors()
         self.analysis_manager.reload_colors()
         self.result_viewer_widget.reload_colors()

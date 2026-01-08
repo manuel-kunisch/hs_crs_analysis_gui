@@ -242,7 +242,7 @@ class CompositeImageViewWidget(QMainWindow):
         # Create a QPushButton for choosing a colormap color
         self.color_button = QPushButton("Choose Channel Color")
         # self.color_button.setMaximumSize(*max_but_size)
-        self.color_button.clicked.connect(self.choose_color)
+        self.color_button.clicked.connect(lambda: self.choose_color())
         channel_selection_layout.addWidget(self.color_button, 0, 2, alignment=Qt.AlignHCenter)
 
         # add autoscale button for channel view
@@ -253,7 +253,7 @@ class CompositeImageViewWidget(QMainWindow):
 
         # Create a ColorButton for choosing the colormap color
         self.color_widget = pg.ColorButton()
-        self.color_widget.sigColorChanged.connect(self.callback_color)
+        self.color_widget.sigColorChanged.connect(self.callback_color_widget)
         channel_selection_layout.addWidget(self.color_widget, 1, 2, alignment=Qt.AlignHCenter)
 
         self.show_seeds_check = QCheckBox("Show Seeds")
@@ -436,12 +436,13 @@ class CompositeImageViewWidget(QMainWindow):
         # logger.info(f'{datetime.now()}: Analysis started')
 
     def get_color(self, channel: int) -> tuple[int, int, int]:
+        if self.color_manager is not None:
+            return self.color_manager.get_color_rgb(channel)
         if channel in self.histogram_states:
             histogram_state = self.histogram_states[channel]
             colormap_color = histogram_state['gradient']['ticks'][1][1][:3]
         else:
-            colormap_color = self.colormap_colors[channel % len(self.colormap_colors)] if self.color_manager is None \
-                else self.color_manager.get_color_rgb(channel)
+            colormap_color = self.colormap_colors[channel % len(self.colormap_colors)]
         return colormap_color
 
     def update_channel_view(self, channel_index):
@@ -482,18 +483,20 @@ class CompositeImageViewWidget(QMainWindow):
         self.channel_spinbox.setValue(channel_index)
         logger.debug(f'{channel_index =}, {colormap_color =}')
         # Set the color of the ColorButton to match the current colormap color
+        self.color_widget.blockSignals(True)
         self.color_widget.setColor(pg.mkColor(colormap_color))
+        self.color_widget.blockSignals(False)
         # Update the label to show current channel index
         self.channel_view.view.setTitle(f"Channel {channel_index} {self.custom_labels.get(channel_index, '')}")
 
-    def callback_color(self):
+    def callback_color_widget(self):
         # Get the selected color from the ColorButton
         selected_color = self.color_widget.color()
-        self.color_changed_signal.emit(self.channel_slider.value(), selected_color)
-        self.update_plot(self.channel_slider.value(), selected_color)
-        self.update_colormap()
+        self.color_widget.blockSignals(True)
+        self.choose_color(selected_color)
+        self.color_widget.blockSignals(False)
 
-    def update_colormap(self):
+    def sync_colormap_current_channel_to_widget(self):
         # Get the selected color from the ColorButton
         selected_color = self.color_widget.color()
 
@@ -548,6 +551,7 @@ class CompositeImageViewWidget(QMainWindow):
         if self.color_manager:
             if change_color_manager:
                 # emits a signal as well
+                print('Changed set color in color manager')
                 self.color_manager.set_color_rgb(index, color)
 
         if index == self.channel_slider.value():
@@ -561,7 +565,7 @@ class CompositeImageViewWidget(QMainWindow):
             logger.info(f'Updated colormap color for channel {index}')
 
         # update the composite image with the new colormap color
-        self.update_plot(index, QColor(*color))
+        self.update_plot_line_color(index, QColor(*color))
         # self.update_channel_and_composite_levels()
         # update is automatically triggered by gradient change
 
@@ -715,7 +719,7 @@ class CompositeImageViewWidget(QMainWindow):
             locals_['seeds']
         )
 
-    def update_plot(self, index: int, color: QColor):
+    def update_plot_line_color(self, index: int, color: QColor):
         # update the color of the plot in the spectrum view
         if self.spectrum_lines:
             self.spectrum_lines[index].setPen(pg.mkPen(color))
@@ -767,57 +771,17 @@ class CompositeImageViewWidget(QMainWindow):
         else:
             self.spectrum_view.setLabel('bottom', 'Wavenumber (1/cm)')
 
-    def choose_color(self):
+    def choose_color(self, color: QColor | None = None):
         # Open a QColorDialog to choose a color for colormap
-        color = QColorDialog.getColor()
+        if color is None:
+            color = QColorDialog.getColor()
 
         if color.isValid():
-            # Convert QColor to QColor object
+            # Convert QColor to QColor object and
             qcolor = pg.mkColor(color.name())
+            self.set_colormap(self.channel_slider.value(), (qcolor.red(), qcolor.green(), qcolor.blue()))
 
-            # Convert QColor to pg.Color and set it as colormap color
-            colormap_color = pg.Color(qcolor.red(), qcolor.green(), qcolor.blue())
-            colormap = pg.ColorMap(pos=[0, 1], color=[(0, 0, 0), colormap_color])
-
-            self.color_changed_signal.emit(self.channel_slider.value(), color)
-            # Update the colormap in the PlotWidget
-            self.update_plot(self.channel_slider.value(), qcolor)
-            self.channel_view.setColorMap(colormap)
-
-    # old implementation of the get_rgba method where the colormap was applied to the image
-    """
-    def get_rgba(self) -> np.ndarray or None:
-        rgb_ims = []
-        if self.img is None:
-            return
-        channels = self.img.shape[-1]
-        for i in range(channels):
-            try:
-                histogram_state = self.histogram_states[i]
-            except KeyError:
-                pass
-            min_value, max_value = histogram_state['levels']
-            # min_value, max_value = histogram_state['gradient']['ticks'][0][0], histogram_state['gradient']['ticks'][1][0]
-            b_color = histogram_state['gradient']['ticks'][0][1][:-1]
-            t_color = histogram_state['gradient']['ticks'][1][1][:-1]
-            colormap = pg.ColorMap(pos=[min_value, max_value], color=[b_color, t_color])
-            rgb_im = colormap.map(self.img[:, :, i], mode='float')
-            # Returns an array of colormaps corresponding to a single value or an array of values.
-            #         Data must be either a scalar position or an array (any shape) of positions.
-            # Scaled from 0 to 255, integer values only for mode = 'byte'
-            # Float from 0 to 1 else
-            # Highest values is 1 if pixel value >= max_color_value (tick value for t_color)
-            # 0 if pixel value <= min_color_value (tick value for b_color)
-            if i == 0:
-                logger.debug(f'{rgb_im.shape=}')
-                logger.debug(f'{np.amax(rgb_im[..., 0])=}')
-            # Scale to desired data type
-            rgb_ims.append(rgb_im*max_dtype_val)
-        rgb_sum = np.sum(rgb_ims, axis=0)
-        rgb_norm = rgb_sum
-        # summed image gives correct representation of colormaps
-        return rgb_norm
-    """
+        self.sync_colormap_current_channel_to_widget()
 
     # new implementation of the get_rgba method where the colormap is applied to the image similar to FIJI
     # with 8 bit colormaps
@@ -890,7 +854,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.histogram_states[channel_index] = histogram_state
         false_color_im = self.get_rgba()
         self.composite_view.setImage(false_color_im, autoLevels=False)
-        self.sync_color_button_to_gradient()
+        self._sync_color_button_to_gradient()
         # Restore the previous view settings
         """
         # Get the current view settings
@@ -935,7 +899,7 @@ class CompositeImageViewWidget(QMainWindow):
         # Reset the levels of the composite image to the default range (0 - 65535)
         self.composite_view.ui.histogram.setLevels(0, max_dtype_val)
 
-    def sync_color_button_to_gradient(self):
+    def _sync_color_button_to_gradient(self):
         """Sync the ColorButton with the top color in the histogram gradient."""
         if self.timeout_callbacks:
             return
@@ -964,7 +928,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.color_widget.blockSignals(False)
 
         # update plot
-        self.update_plot(self.channel_slider.value(), pg.mkColor(top_color))
+        self.update_plot_line_color(self.channel_slider.value(), pg.mkColor(top_color))
 
     def lock_bottom_tick(self):
         gradient = self.channel_view.getHistogramWidget().gradient

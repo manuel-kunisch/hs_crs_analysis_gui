@@ -548,6 +548,8 @@ class CompositeImageViewWidget(QMainWindow):
 
         self.colormap_colors[index % len(self.colormap_colors)] = color
 
+
+        logger.info(f"Composite Image: Setting colormap color for channel {index} to {color}")
         if self.color_manager:
             if change_color_manager:
                 # emits a signal as well
@@ -555,7 +557,6 @@ class CompositeImageViewWidget(QMainWindow):
                 self.color_manager.set_color_rgb(index, color)
 
         if index == self.channel_slider.value():
-            print('Updating color in result viewer')
             self.color_widget.setColor(pg.mkColor(color))
 
         if index in self.histogram_states:
@@ -566,6 +567,8 @@ class CompositeImageViewWidget(QMainWindow):
 
         # update the composite image with the new colormap color
         self.update_plot_line_color(index, QColor(*color))
+        self.sync_colormap_current_channel_to_widget()
+
         # self.update_channel_and_composite_levels()
         # update is automatically triggered by gradient change
 
@@ -726,9 +729,17 @@ class CompositeImageViewWidget(QMainWindow):
         if self.seed_lines:
             self.seed_lines[index].setPen(pg.mkPen(color))
 
-    def reload_colors(self):
+    def reload_color_current_channel(self):
         cur_channel = self.channel_slider.value()
+        # comes from the color manager, so no need to change it there
         self.set_colormap(cur_channel, self.get_color(cur_channel), change_color_manager=False)
+
+    def reload_color(self, channel_index: int):
+        self.set_colormap(channel_index, self.get_color(channel_index), change_color_manager=False)
+        cur_channel = self.channel_slider.value()
+        if cur_channel != channel_index:
+            self.update_channel_view(channel_index)
+            self.update_channel_view(cur_channel)
 
     def make_color_state(self, index: int, vmin_max: tuple, color: tuple[int, int, int], colorpos='default'):
         vmin, vmax = vmin_max

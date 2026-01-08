@@ -231,7 +231,7 @@ class MainApplication(QtWidgets.QMainWindow):
         logger.info(f'Updating component colors: {lut_index = }, {color.getRgb() = }')
         self.data_widget.roi_manager.reload_colors()
         self.analysis_manager.reload_colors()
-        self.result_viewer_widget.reload_colors()
+        self.result_viewer_widget.reload_color(lut_index)
 
     def update_binning(self, binning_factor: int):
         old_binning = self.data_handler.get_current_binning()

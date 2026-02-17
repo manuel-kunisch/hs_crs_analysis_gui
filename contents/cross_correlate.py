@@ -164,7 +164,7 @@ def row_correlation(data, lookup_x, lookup_y, overlap_row: int, mode,
     if 'sigma' in modes:
         modes.remove('sigma')
         corr_list = remove_outliers(corr_list, sigma_interval)
-        corr_list = np.nan_to_num(corr_list, copy=False)
+        corr_list = np.nan_to_num(corr_list)
     if 'mean' in modes:
         # average over all correlations, each image is offset by the same value
         a = np.array(corr_list)
@@ -432,8 +432,8 @@ def extend(image, length, axis=1):
 def add_cols(image, dummy):
     shape_ = np.array(image.shape)
     dtype = image.dtype
-    extension_l =  np.full((shape_[0], dummy[0], shape_[-1]), np.NaN, dtype=dtype)
-    extension_r = np.full((shape_[0], dummy[1], shape_[-1]), np.NaN, dtype=dtype)
+    extension_l =  np.full((shape_[0], dummy[0], shape_[-1]), np.nan, dtype=dtype)
+    extension_r = np.full((shape_[0], dummy[1], shape_[-1]), np.nan, dtype=dtype)
     image = np.concatenate((extension_l, image, extension_r), axis=1, dtype=dtype)
     return image
 
@@ -445,10 +445,10 @@ def adjust_rows(im_l, im_r):
     dtype = im_l.dtype
     if diff != 0:
         if diff > 0:
-            dummy = np.full((diff, im_l.shape[1], im_l.shape[2]), np.NaN, dtype=dtype)
+            dummy = np.full((diff, im_l.shape[1], im_l.shape[2]), np.nan, dtype=dtype)
             im_l = np.concatenate((im_l, dummy), axis=0, dtype=dtype)
         else:
-            dummy = np.full((abs(diff), im_r.shape[1], im_r.shape[2]), np.NaN, dtype=dtype)
+            dummy = np.full((abs(diff), im_r.shape[1], im_r.shape[2]), np.nan, dtype=dtype)
             im_r = np.concatenate((im_r, dummy), axis=0, dtype=dtype)
     return im_l, im_r
 
@@ -517,8 +517,8 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
         int_offset = int(mean_corr[0])
         dummy_length = abs(int_offset)
         dtype = img_l.dtype
-        dummy_l = np.full((dummy_length, img_l.shape[1], img_l.shape[2]), np.NaN, dtype=dtype)
-        dummy_r = np.full((dummy_length, img_r.shape[1], img_r.shape[2]), np.NaN, dtype=dtype)
+        dummy_l = np.full((dummy_length, img_l.shape[1], img_l.shape[2]), np.nan, dtype=dtype)
+        dummy_r = np.full((dummy_length, img_r.shape[1], img_r.shape[2]), np.nan, dtype=dtype)
         if int_offset != 0:
             if int_offset > 0:
                 l_extension = (dummy_l, img_l)
@@ -679,7 +679,7 @@ def average_columns(image, mean_offset, overlap, y_slice_idx_list, overlap_idx_l
             plt.show()
         
         weight_list = lin_weights(overlap_l.shape[1])
-        stitch_center = np.full((im_l.shape[0], overlap_l.shape[1], im_l.shape[2]), np.NaN, dtype=np.float32)
+        stitch_center = np.full((im_l.shape[0], overlap_l.shape[1], im_l.shape[2]), np.nan, dtype=np.float32)
         
         for i in range(0, overlap_l.shape[1]):   # start at the top, place the bottom image on top of it
             # averaging the ith row with weights
@@ -734,7 +734,7 @@ def remove_outliers(correlations, sigma_interval = 2):
             if (value < mean_corr[i] - sigma_interval * sd[i] or
                 value > mean_corr[i] + sigma_interval * sd[i]):
                 logger.debug('Standard deviation too large', value)
-                corr_array[i] = np.NaN    
+                corr_array[i] = np.nan
     return correlations
 
 def translate_offset_to_text(offset):

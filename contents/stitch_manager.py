@@ -673,7 +673,7 @@ class StitchManager(QtCore.QObject):
         # load + bin + reorder to (y,x,c)
         data, lookup_x, lookup_y = self.stitcher.build_dataset_from_files(
             files,
-            tile_preprocess_fn=tile_preprocess_fn
+            tile_preprocess_fn
         )
 
         # IMPORTANT: respect scan dir meaning (your visualization flips columns accordingly)

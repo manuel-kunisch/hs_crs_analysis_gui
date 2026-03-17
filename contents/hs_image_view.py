@@ -11,6 +11,8 @@ logger = logging.getLogger('HS Image Viewer')
 
 
 class RamanImageView(ImageViewLineRoi):
+    playback_state_changed = QtCore.pyqtSignal(bool)
+
     #FIXME: Make this a ROI plot which shows the mean intensity over different Raman shifts
     """
     modified ImageView object with additional features
@@ -30,10 +32,10 @@ class RamanImageView(ImageViewLineRoi):
         # self.roi = pg.LineSegmentROI([(0, 0), (50, 50)])
         self.max_ticks = max_ticks
         self.unit = "cm⁻¹"
-        self.fps = 10
-        self.autoplay = autoplay
-        if self.autoplay:
-            self.play(self.fps)
+        self.fps = 10.0
+        self.autoplay = bool(autoplay)
+        self._playback_tick_in_progress = False
+        self._suppress_manual_stop = False
         # create vertical ticks in the frame graph
         self.frameTicks = VTickGroup(yrange=[0.8, 1], pen=0.4)
         # make frame plot unscalable
@@ -132,36 +134,69 @@ class RamanImageView(ImageViewLineRoi):
         pass
 
     def stopAutoPlay(self):
-        self.autoplay = False
-        logger.info('Auto Play Paused')
-        self.playTimer.stop()
+        self.set_playing(False)
+
+    def is_playing(self) -> bool:
+        return self.playTimer.isActive()
+
+    def set_playing(self, playing: bool):
+        playing = bool(playing)
+        was_playing = self.is_playing()
+        self.autoplay = playing
+
+        if playing and self.image is not None and self.nframes() > 1:
+            interval_ms = max(1, int(round(1000.0 / self.fps)))
+            self.playTimer.start(interval_ms)
+        else:
+            self.playTimer.stop()
+            if playing:
+                self.autoplay = False
+                playing = False
+
+        if was_playing != playing:
+            logger.info('Auto Play %s', 'Started' if playing else 'Paused')
+            self.playback_state_changed.emit(playing)
+
+    def set_playback_fps(self, fps: float):
+        self.fps = max(0.1, float(fps))
+        if self.autoplay:
+            self.set_playing(True)
 
     def togglePause(self):
-        super().togglePause()
-        if not self.playTimer.isActive():
-            self.stopAutoPlay()
-        else:
-            self.autoplay = True
-            logger.info('togglePause(): Keep playing')
+        self.set_playing(not self.is_playing())
 
-    def play(self, fps):
+    def play(self, fps=None):
         logger.debug('play(): Keep playing')
-        if self.image is None:
+        if fps is not None:
+            self.fps = max(0.1, float(fps))
+        self.set_playing(True)
+
+    def timeout(self):
+        if self.image is None or self.nframes() <= 1:
+            self.set_playing(False)
             return
-        if self.currentIndex+1 >= self.nframes() and self.playLoop:
-            # check if the user dragged the slider to the end
-            self.setCurrentIndex(0)
-        else:
-            super().play(fps)
+
+        next_index = self.currentIndex + 1
+        if next_index >= self.nframes():
+            if not self.playLoop:
+                self.set_playing(False)
+                return
+            next_index = 0
+
+        self._playback_tick_in_progress = True
+        self._suppress_manual_stop = True
+        try:
+            self.setCurrentIndex(next_index)
+        finally:
+            self._suppress_manual_stop = False
+            self._playback_tick_in_progress = False
 
     def timeLineChanged(self):
         super().timeLineChanged()
         logger.debug('timeLineChanged(): Time Line call')
         self.roiChanged()
-        # prevent reset when the user drags the slider to the end
-
-        # if self.currentIndex >= self.nframes() and self.playLoop:
-        #     self.setCurrentIndex(0)
+        if self.autoplay and not self._playback_tick_in_progress and not self._suppress_manual_stop:
+            self.set_playing(False)
 
     def hideTimeLine(self):
         self.ui.roiPlot.hideAxis('bottom')
@@ -177,14 +212,22 @@ class RamanImageView(ImageViewLineRoi):
         if keep_viewbox:
             view = self.getView()
             view_range = view.viewRange()
-        super().setImage(*args, axes={'x': 2, 'y': 1, 't': 0}, **kwargs)
+        self._suppress_manual_stop = True
+        try:
+            super().setImage(*args, axes={'x': 2, 'y': 1, 't': 0}, **kwargs)
+        finally:
+            self._suppress_manual_stop = False
         if keep_viewbox:
             # Restore the previous view settings
             view.setXRange(view_range[0][0] , view_range[0][1] )
             view.setYRange(view_range[1][0] , view_range[1][1] )
         # set the current frame index to the previous value if possible
         if current_frame < self.nframes():
-            self.setCurrentIndex(current_frame)
+            self._suppress_manual_stop = True
+            try:
+                self.setCurrentIndex(current_frame)
+            finally:
+                self._suppress_manual_stop = False
         # Start Auto Play
         if self.autoplay:
             self.play(self.fps)

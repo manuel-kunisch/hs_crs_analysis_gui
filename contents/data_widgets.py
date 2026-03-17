@@ -24,6 +24,8 @@ class DataWidget(QtWidgets.QWidget):
         super().__init__()
         # widgets initialized in other methods 
         self.show_processed_image_check = None
+        self.auto_play_button = None
+        self.auto_play_speed_spinbox = None
         self.image_selection_slider = None
         self.lut_combo_box = None
         self.overview_dock = None
@@ -170,13 +172,22 @@ class DataWidget(QtWidgets.QWidget):
 
 
         self.auto_play_button = QtWidgets.QPushButton(self)
-        self.auto_play_button.setIcon(qta.icon('mdi.animation-play-outline'))
-        # self.auto_play_button.setIcon(Qt.QIcon('icons/play.png'))
-        # show the play icon
+        self.auto_play_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay))
         self.auto_play_button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        self.auto_play_button.clicked.connect(self.raman_raw_image_view.togglePause)
+        self.auto_play_button.clicked.connect(
+            lambda checked: self.raman_raw_image_view.set_playing(checked)
+        )
         self.auto_play_button.setCheckable(True)
-        self.auto_play_button.setChecked(True)
+        self.auto_play_button.setChecked(False)
+
+        self.auto_play_speed_spinbox = QtWidgets.QDoubleSpinBox(self)
+        self.auto_play_speed_spinbox.setRange(0.5, 60.0)
+        self.auto_play_speed_spinbox.setSingleStep(0.5)
+        self.auto_play_speed_spinbox.setDecimals(1)
+        self.auto_play_speed_spinbox.setValue(self.raman_raw_image_view.fps)
+        self.auto_play_speed_spinbox.setSuffix(" fps")
+        self.auto_play_speed_spinbox.valueChanged.connect(self.raman_raw_image_view.set_playback_fps)
+        self.raman_raw_image_view.playback_state_changed.connect(self.sync_auto_play_button)
 
         self.show_processed_image_check = QtWidgets.QCheckBox("Display Processed Image")
         self.show_processed_image_check.clicked.connect(self.callback_processed_img)
@@ -211,6 +222,8 @@ class DataWidget(QtWidgets.QWidget):
         first_row_layout.addWidget(lut_widget)
         first_row_layout.addWidget(autoscale_button)
         first_row_layout.addWidget(self.auto_play_button)
+        first_row_layout.addWidget(QtWidgets.QLabel("Autoplay"))
+        first_row_layout.addWidget(self.auto_play_speed_spinbox)
         first_row_widget = QtWidgets.QWidget()
         first_row_widget.setMaximumHeight(50)
         first_row_widget.setLayout(first_row_layout)
@@ -236,11 +249,19 @@ class DataWidget(QtWidgets.QWidget):
 
         self.image_view_dock.addWidget(first_row_widget, row=16, col=0, colspan=16)
         self.image_view_dock.addWidget(second_row_widget, row=17, col=0, colspan=16)
+        self.sync_auto_play_button(self.raman_raw_image_view.is_playing())
+
+    def sync_auto_play_button(self, is_playing: bool):
+        self.auto_play_button.blockSignals(True)
+        self.auto_play_button.setChecked(is_playing)
+        icon_type = QtWidgets.QStyle.SP_MediaPause if is_playing else QtWidgets.QStyle.SP_MediaPlay
+        self.auto_play_button.setIcon(self.style().standardIcon(icon_type))
+        self.auto_play_button.setToolTip("Pause autoplay" if is_playing else "Start autoplay")
+        self.auto_play_button.blockSignals(False)
 
 
     def show_average_image(self, state=True):
         if state:
-            self.auto_play_button.setChecked(False)
             self.raman_raw_image_view.stopAutoPlay()
             avg = np.expand_dims(np.mean(self.image, axis=0), axis=0)
             # fill the axis 0 with the average image with the same shape as the original image so we can quickly
@@ -372,11 +393,7 @@ class DataWidget(QtWidgets.QWidget):
 
     def display_raw_image(self, keep_view=True):
         logger.info('Displaying image')
-        # keep the current index
-        current_index = self.raman_raw_image_view.currentIndex
         self.raman_raw_image_view.setImage(self.image[...], keep_viewbox=keep_view)
-        if self.image.shape[0] >= current_index:
-            self.raman_raw_image_view.setCurrentIndex(current_index)
 
 
     def display_modified_image(self, modified_data: np.ndarray = None, keep_view=False):
@@ -385,14 +402,11 @@ class DataWidget(QtWidgets.QWidget):
 
         modified_data: np.ndarray of the same shape as the raw image except axis 0 (frames) can vary
         """
-        current_index = self.raman_raw_image_view.currentIndex
         if modified_data is not None:
             if not modified_data.size:
                 self.display_raw_image(keep_view)
             else:
                 self.raman_raw_image_view.setImage(modified_data[...], keep_viewbox=keep_view)
-            if modified_data.shape[0] >= current_index:
-                self.raman_raw_image_view.setCurrentIndex(current_index)
             return
 
         # call without arguments to display the subtracted data
@@ -400,8 +414,6 @@ class DataWidget(QtWidgets.QWidget):
             logger.info('Displaying subtracted data')
             print(self.roi_manager.subtracted_data.shape)
             self.raman_raw_image_view.setImage(self.roi_manager.subtracted_data[...], keep_viewbox=keep_view)
-            if self.roi_manager.subtracted_data.shape[0] >= current_index:
-                self.raman_raw_image_view.setCurrentIndex(current_index)
             return
 
         self.display_raw_image(keep_view)

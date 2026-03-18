@@ -89,7 +89,7 @@ class MainApplication(QtWidgets.QMainWindow):
         self.show_scale_bars(self.data_handler.loader_widget.physical_units_manager.widget.show_scalebar_checkbox.isChecked())
 
         try:
-            self.data_hFandler.wavenumber_widget.set_nframes(
+            self.data_handler.wavenumber_widget.set_nframes(
                 self.data_widget.raman_raw_image_view.getProcessedImage().shape[0])
         except AttributeError as e:
             # No imaging data exists yet
@@ -290,7 +290,7 @@ class MainApplication(QtWidgets.QMainWindow):
         # create the histogram for the color states
         for index, state in enumerate(v_min_vmax_states):
             self.result_viewer_widget.make_color_state(index, state, color_states[index])
-        print(v_min_vmax_states)
+        logger.info('Loaded %s saved histogram color states from preset.', len(v_min_vmax_states))
 
     def save_state(self):
         preset = {

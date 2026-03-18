@@ -39,7 +39,7 @@ class FIJISaver:
         # flatten the ranges to a single tuple
         tuple_ranges = tuple(val for r in self.ranges for val in r)
 
-        print(tuple_ranges)
+        logger.debug('Writing FIJI channel ranges: %s', tuple_ranges)
 
         # old variant using extratags
         """

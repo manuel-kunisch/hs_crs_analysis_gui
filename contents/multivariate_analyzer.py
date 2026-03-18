@@ -429,12 +429,12 @@ class MultivariateAnalyzer(object):
         w_min_sorted = np.searchsorted(sorted_wavenumbers, wavenumber - width, side='left')
         w_max_sorted = np.searchsorted(sorted_wavenumbers, wavenumber + width, side='right') - 1
 
-        print(w_min_sorted, w_max_sorted)
+        logger.debug('Initial sorted resonance bounds for %.3f ± %.3f: [%s, %s]',
+                     wavenumber, width, w_min_sorted, w_max_sorted)
         # Ensure valid index bounds
         w_max_sorted = min(w_max_sorted, len(sorted_wavenumbers) - 1)
         w_min_sorted = max(w_min_sorted, 0)
 
-        print(wavenumber, width)
         if w_max_sorted < w_min_sorted:
             # take nearest index
             nearest_idx = (np.abs(sorted_wavenumbers - wavenumber)).argmin()
@@ -576,7 +576,7 @@ class MultivariateAnalyzer(object):
                 weights = H - np.min(H)
                 weights /= np.max(weights)
                 weights = np.exp(weights) - 1.0  # exponential scaling
-                print(f"weights {weights}")
+                logger.debug('Using exponential H weights for W seed estimation with shape %s.', weights.shape)
                 return np.average(image_data, axis=1, weights=weights)
 
         # ------------------------------------------------------------------
@@ -719,10 +719,9 @@ class MultivariateAnalyzer(object):
         self.seed_W = None
         self._W_prepared = False
 
-    # %% debug functions
+    # Optional matplotlib inspection helpers
     def plot_PCA_mpl(self):
-        # FIXME: debug method, remove later
-        # TODO: add possibility to add a QT Canvas where data is plotted in init
+        # Convenience helper for offline inspection of PCA components.
         for i in range(0, self._n_components):  # only plot the interesting components
             l, = plt.plot(self.PCs[i, :], label=f"PC {i:.0f}")
             # self.ax1_lines.append(l)
@@ -744,7 +743,7 @@ class MultivariateAnalyzer(object):
         plt.show()
 
     def plot_nnmf_mpl(self):
-        # FIXME debug method, remove later
+        # Convenience helper for offline inspection of NNMF results.
         # loadings
         for i in range(0, self._n_components):  # only plot the interesting components
             l, = plt.plot(self.fixed_H[i, :], label=fr" H {i:.0f}")

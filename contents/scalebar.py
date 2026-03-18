@@ -1,4 +1,8 @@
+import logging
+
 import pyqtgraph as pg
+
+logger = logging.getLogger(__name__)
 
 class ScaleBar(pg.ScaleBar):
     def __init__(self, view_box: pg.ViewBox, pixel_size: float , scale_bar_size=50, unit='µm', **kwargs):
@@ -20,12 +24,12 @@ class ScaleBar(pg.ScaleBar):
 
     def update_scale_bar_len(self, val: float):
         self.scale_bar_len = val
-        print(f'Updated {self.scale_bar_len=}')
+        logger.debug('Updated scale bar length to %s %s.', self.scale_bar_len, self.unit)
         self.update_scale_bar()
 
     def update_pixel_size(self, val: float):
         self.pixel_size = val
-        print(f'Updated {self.pixel_size=}')
+        logger.debug('Updated scale bar pixel size to %s.', self.pixel_size)
         self.update_scale_bar()
 
     def update_scale_bar(self):

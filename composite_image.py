@@ -522,11 +522,11 @@ class CompositeImageViewWidget(QMainWindow):
         # get the min and max values for all channels
         if self.img is None:
             return
-        print('Updating color positions in result viewer to match FIJI linear gamma curve')
+        logger.info('Updating channel color ranges to match the current image data.')
         for i in range(self.img.shape[-1]):
             histogram_state = self.histogram_states.get(i, None)
             if histogram_state is None:
-                print(f'No histogram state for channel {i}. Skip update')
+                logger.debug('No histogram state stored for channel %s. Skipping update.', i)
                 continue
             selected_im = self.img[:, :, i]
             amin = np.amin(selected_im)
@@ -541,7 +541,7 @@ class CompositeImageViewWidget(QMainWindow):
 
             histogram_state['gradient']['ticks'][0] = (colormin_pos, (0, 0, 0, old_opacity_min))
             histogram_state['gradient']['ticks'][1] = (colormax_pos, self.colormap_colors[i] + (old_opacity_max,))
-            print(f'Updated color positions for channel {i} to {colormin_pos}, {colormax_pos}')
+            logger.debug('Updated channel %s color positions to %.4f and %.4f.', i, colormin_pos, colormax_pos)
 
     def set_colormap(self, index: int, color: tuple[int, int, int], change_color_manager=True):
         # Set the colormap color for the specified index
@@ -553,7 +553,7 @@ class CompositeImageViewWidget(QMainWindow):
         if self.color_manager:
             if change_color_manager:
                 # emits a signal as well
-                print('Changed set color in color manager')
+                logger.debug('Propagating channel %s color change to the shared color manager.', index)
                 self.color_manager.set_color_rgb(index, color)
 
         if index == self.channel_slider.value():
@@ -753,7 +753,7 @@ class CompositeImageViewWidget(QMainWindow):
                 # set the colormin and colormax positions to the min and max values of the image
                 colormin_pos = amin / max_dtype_val
                 colormax_pos = amax / max_dtype_val
-                print(f'Calculated color positions for channel {index} to {colormin_pos}, {colormax_pos}')
+                logger.debug('Calculated color positions for channel %s: %.4f, %.4f.', index, colormin_pos, colormax_pos)
 
         self.histogram_states[index] = {
             'gradient': {
@@ -954,7 +954,7 @@ class CompositeImageViewWidget(QMainWindow):
 
             # Check if tick was modified
             if not np.isclose(pos, locked_pos) or current_color != locked_color:
-                print("Bottom tick modified. Enforcing manual lock.")
+                logger.debug('Bottom histogram tick modified manually; restoring locked state.')
                 gradient.blockSignals(True)
                 tick.setPos(QPointF(locked_pos, 0))  # y=0 is ignored
                 current_ticks = gradient.listTicks()

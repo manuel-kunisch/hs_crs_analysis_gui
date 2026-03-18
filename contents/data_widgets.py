@@ -276,7 +276,7 @@ class DataWidget(QtWidgets.QWidget):
 
     # create new subtracted data
     def callback_processed_img(self, state: bool, data: np.ndarray=None, label_text: str = None):
-        # TODO: this function is a mess. Refactor it or make it more modular
+        # Keep raw, processed, and averaged display paths synchronized in one place.
         if state:
             if data is not None:
                 if not data.size:
@@ -412,7 +412,7 @@ class DataWidget(QtWidgets.QWidget):
         # call without arguments to display the subtracted data
         if self.roi_manager.subtracted_data is not None:
             logger.info('Displaying subtracted data')
-            print(self.roi_manager.subtracted_data.shape)
+            logger.debug('Subtracted data shape: %s', self.roi_manager.subtracted_data.shape)
             self.raman_raw_image_view.setImage(self.roi_manager.subtracted_data[...], keep_viewbox=keep_view)
             return
 
@@ -1123,8 +1123,7 @@ class DataHandler(QtWidgets.QWidget):
 
         # --- normalize (if requested) ---
         if self._normalize:
-            print('Normalizing image')
-            print(f'{max_dtype_val=}')
+            logger.info('Normalizing loaded image to %s dynamic range.', max_dtype_val)
             image = np.multiply(image, max_dtype_val / np.amax(image, axis=None))
             image = image.astype(dtype)
             logger.info('Image normalized')
@@ -1206,8 +1205,7 @@ class DataHandler(QtWidgets.QWidget):
         if axis_order is not {'z': 0, 'y': 1, 'x': 2}:
             image = np.moveaxis(image, [0, 1, 2], [axis_order['z'], axis_order['y'], axis_order['x']])
         # pass each frame to the bin_image function
-        print(f'bin_image_3d: {image.shape = }')
-        print(frame.shape for frame in image)
+        logger.debug('Binning 3D image with shape %s and factor %s.', image.shape, bin_factor)
         return np.stack([DataHandler.bin_image(frame, bin_factor) for frame in image])
 
 

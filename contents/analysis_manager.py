@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('Hyperspectral Analysis')
 logger.setLevel(logging.INFO)
 
-debug = True
+debug = False
 
 class AnalysisWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
@@ -732,7 +732,7 @@ class AnalysisManager(QtCore.QObject):
         widget_np.setValue(n_pixels)
 
     def adjust_eps(self):
-        print('adjusting eps')
+        logger.debug('Adjusting pixel threshold from the requested seed-pixel count.')
         current_row = self.resonance_table.currentRow()
         # widget_eps: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(current_row, self.res_settings_widget_columns['Pixel Threshold'])
         widget_np: QtWidgets.QDoubleSpinBox = self.resonance_table.cellWidget(current_row, self.res_settings_widget_columns['# Seed Pixels'])
@@ -775,7 +775,7 @@ class AnalysisManager(QtCore.QObject):
         self.roi_manager.highlight_component_region(spectral_range, self.get_component_index(row_table))
 
     def show_W_seeds(self):
-        """ debug function to check the W seeds from the spectral data"""
+        """Open a temporary viewer for inspecting W seeds derived from the current inputs."""
         self.reload_H_seeds_from_rois()
         if not self.mv_analyzer._W_prepared:
             self.mv_analyzer.estimate_W_seed_matrix_from_H()
@@ -1475,7 +1475,7 @@ class AnalysisManager(QtCore.QObject):
             # get the spectrum for each pixel
             spectra = self.z3D_data[:, pixels[0], pixels[1]]
             mean_spectrum = np.mean(spectra, axis=1)
-            print(mean_spectrum.shape)
+            logger.debug('Setting H seed for component %s from %s seed pixels.', component, pixels[0].size)
             self.mv_analyzer.set_H_seed(component, mean_spectrum)
 
     def update_image_data(self, img, wavenumbers):

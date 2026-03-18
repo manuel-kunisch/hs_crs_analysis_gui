@@ -1682,7 +1682,7 @@ class ROIPlotter(pg.PlotWidget):
         curve_of_interest = self.roi_avg_lines[roi_id]
         y = curve_of_interest.yData
         x_min, x_max = np.amin(spectral_range), np.amax(spectral_range)
-        print(x_min, x_max)
+        logger.debug('Highlighting ROI %s over spectral range [%s, %s].', roi_id, x_min, x_max)
         x_mask = (self.roi_manager.wavenumbers >= x_min) & (self.roi_manager.wavenumbers <= x_max)
 
         # filter data for filling

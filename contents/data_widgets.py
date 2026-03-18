@@ -104,6 +104,7 @@ class DataWidget(QtWidgets.QWidget):
         self.raman_raw_image_view.view.setDefaultPadding(0)
         self.raman_raw_image_view.setColorMap(pg.colormap.get('plasma'))
         self.raman_raw_image_view.ui.roiBtn.setText("Linescan")
+        self.raman_raw_image_view.ui.roiBtn.toggled.connect(self.set_linescan_visible)
 
         # To hide the Linescan ROI hide the dock...
 
@@ -124,6 +125,14 @@ class DataWidget(QtWidgets.QWidget):
         self.roi_manager.processed_data_signal.connect(lambda data:
                                                        self.callback_processed_img(
                                                            self.show_processed_image_check.isChecked(), data))
+        self.set_linescan_visible(False)
+
+    def set_linescan_visible(self, visible: bool):
+        self.linescan_dock.setVisible(visible)
+        self.raman_raw_image_view.ui.roiBtn.blockSignals(True)
+        self.raman_raw_image_view.ui.roiBtn.setChecked(visible)
+        self.raman_raw_image_view.ui.roiBtn.blockSignals(False)
+        self.raman_raw_image_view.roiClicked()
 
     def init_overview_dock(self):
         self.overview_dock = Dock("Overview", size=(150, 300))

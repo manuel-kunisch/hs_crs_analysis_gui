@@ -64,17 +64,33 @@ class CompositeImageViewWidget(QMainWindow):
         self.setGeometry(100, 100, 900, 900)
 
         self.central_widget = QWidget(self)
+        self.central_widget.setObjectName("resultRoot")
         self.setCentralWidget(self.central_widget)
         self.master_v_layout = QVBoxLayout(self.central_widget)
-
-        # Create a QHBoxLayout to hold the scrollbar and v_layout
-        self.main_h_layout = QHBoxLayout()
-        # Create a QHBoxLayout to hold the scrollbar, label, and color button
-        option_widget_v_layout = QHBoxLayout()
-        # Right column
-        right_col_v_layout = QVBoxLayout()
-        right_col_v_layout.setAlignment(Qt.AlignTop)
-        main_img_layout = QGridLayout()
+        self.master_v_layout.setContentsMargins(14, 14, 14, 14)
+        self.master_v_layout.setSpacing(12)
+        self.central_widget.setStyleSheet("""
+            QWidget#resultRoot {
+                background-color: #303030;
+            }
+            QWidget#resultPanel {
+                background-color: #383838;
+                border: 1px solid #4a4a4a;
+                border-radius: 8px;
+            }
+            QLabel[role="sectionTitle"] {
+                color: #f0f0f0;
+                font-size: 14px;
+                font-weight: 600;
+            }
+            QLabel[role="sectionMeta"] {
+                color: #a8a8a8;
+                font-size: 11px;
+            }
+            QPushButton, QComboBox, QSpinBox, QSlider, QCheckBox {
+                font-size: 11px;
+            }
+        """)
 
         # Create a PyqtGraph ImageView widget for the composite image
         self.composite_view = ImageViewYXC()
@@ -86,23 +102,15 @@ class CompositeImageViewWidget(QMainWindow):
         self.composite_view.ui.histogram.axis.setRange(0, max_dtype_val)
         self.composite_view.ui.histogram.axis.fixedWidth = 10
         self.composite_view.ui.histogram.axis.setMaximumWidth(10)
+        self.composite_view.ui.histogram.setMaximumWidth(96)
         # self.composite_view.ui.histogram.hide()
 
-        # %% Make splitter for the composite image and the channel view
-
-        # adjust the image shape to the expected shape returned by the NNMF
-        self.composite_view.ui.histogram.setHistogramRange(0, max_dtype_val)
-        self.composite_view.ui.histogram.setLevels(0, max_dtype_val)
-        main_plot_v_splitter = QSplitter()
-        main_plot_v_splitter.setOrientation(Qt.Vertical)
-        main_plot_v_splitter.addWidget(self.composite_view)
-
-
         # Create a PyqtGraph ImageView widget for individual channels
-        component_layout = QHBoxLayout()
         self.channel_view = ImageViewLineRoiYXZ(view=PlotItem())
         self.channel_view.view.setDefaultPadding(0)
-        self.spectrum_view = pg.PlotWidget(title="Spectrum", size=(100,300))
+        self.channel_view.ui.histogram.setMaximumWidth(96)
+        self.channel_view.view.setTitle("Channel Preview")
+        self.spectrum_view = pg.PlotWidget(title="Component Spectra", size=(100,300))
         self.spectrum_view.setLabel('left', 'Intensity counts')
         self.spectrum_view.setLabel('bottom', 'Wavenumber (1/cm)')
         self.legend = self.spectrum_view.addLegend()
@@ -130,54 +138,11 @@ class CompositeImageViewWidget(QMainWindow):
 
         # Create a QPushButton for resetting the levels
         reset_levels_button = QPushButton("Reset Black Levels")
-        # reset_levels_button.setMaximumWidth(50)
         reset_levels_button.clicked.connect(self.reset_levels)
 
-        composite_buttons_layout = QGridLayout()
-        composite_buttons_layout.addWidget(save_tiff_button, 0, 0, alignment=Qt.AlignHCenter)
-        composite_buttons_layout.addWidget(save_seeds_button, 0, 1, alignment=Qt.AlignRight)
-        composite_buttons_layout.addWidget(save_seed_mode_label, 0, 2, alignment=Qt.AlignRight)
-        composite_buttons_layout.addWidget(save_seed_mode_combobox, 0, 3, alignment=Qt.AlignLeft)
-        composite_buttons_layout.addWidget(save_H_as_csv_button, 0, 4, alignment=Qt.AlignCenter)
-        composite_buttons_layout.addWidget(reset_levels_button, 0, 5, alignment=Qt.AlignRight)
-        composite_buttons_widget = QWidget()
-        composite_buttons_widget.setLayout(composite_buttons_layout)
-
-        composite_widget = QWidget()
-        composite_layout = QVBoxLayout()
-        composite_widget.setLayout(composite_layout)
-        composite_layout.addWidget(self.composite_view)
-        composite_layout.addWidget(composite_buttons_widget)
-        composite_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        main_plot_v_splitter.addWidget(composite_widget)
-        # Create a QSplitter to contain the ImageView and PlotWidget
-        components_h_splitter = QSplitter()
-        # Add the widgets to the components_h_splitter
-        components_h_splitter.addWidget(self.channel_view)
-        components_h_splitter.addWidget(self.spectrum_view)
-        # Set the orientation of the components_h_splitter (horizontal in this case)
-        components_h_splitter.setOrientation(Qt.Horizontal)
-        main_plot_v_splitter.addWidget(components_h_splitter)
-        # Add the components_h_splitter to the layout
-        main_img_layout.addWidget(main_plot_v_splitter, 0, 0, 20, 20)
-        main_img_layout.addLayout(option_widget_v_layout, 20, 0, 1, 10)
-        # Add v_layout to the h_layout
-        self.main_h_layout.addLayout(main_img_layout, stretch=5)
-        self.main_h_layout.addLayout(right_col_v_layout)
-
-        # Set stretch factors (e.g., 2:1 ratio)
-        main_plot_v_splitter.setStretchFactor(0, 2)  # composite_widget gets 2x the space
-        main_plot_v_splitter.setStretchFactor(1, 1)  # components_h_splitter gets 1x the space
-
         # %% Buttons to modfiy the false color images
-        # Create a VLayout for channel selection in preview
-        channel_selection_layout = QGridLayout()
-        
-        image_channels = 1
-        if self.img is not None:
-            image_channels = self.img.shape[2]
-            self.update_image(self.img)
+        image_channels = self.img.shape[2] if self.img is not None else 1
+
         # Add a QScrollBar for selecting the channel
         self.channel_slider = QSlider()
         self.channel_slider.setTickPosition(QSlider.TicksBothSides)
@@ -185,20 +150,12 @@ class CompositeImageViewWidget(QMainWindow):
         self.channel_slider.setOrientation(1)  # Horizontal orientation
         self.channel_slider.setMinimum(0)
         self.channel_slider.setMaximum(image_channels - 1)
-        self.channel_slider.setMaximumWidth(200)
         self.channel_slider.valueChanged.connect(self.callback_channel)
-        # let the scrollbar expand horizontally but not vertically
-        # self.channel_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        # self.channel_slider.setFixedHeight(10)  # Adjust the width as needed
-        # Row 1, Column 0, Span 1 row, 2 columns
-        channel_selection_layout.addWidget(self.channel_slider, 1, 0, 2, 2, alignment=Qt.AlignHCenter)
 
         # Create a QSpinBox for selecting the channel
         self.channel_spinbox = QSpinBox()
         self.channel_spinbox.setRange(0, image_channels - 1)
         self.channel_spinbox.valueChanged.connect(self.callback_channel)
-        channel_spinbox_group = QHBoxLayout()
-        channel_spinbox_group.setAlignment(Qt.AlignLeft)
         channel_label = QLabel("Channel: ")
 
         # Adjusting the QSpinBox size
@@ -207,66 +164,148 @@ class CompositeImageViewWidget(QMainWindow):
         self.channel_spinbox.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)  # Prevent resizing
 
         # Adjusting the QSlider size
-        self.channel_slider.setFixedHeight(20)  # Set a smaller height
-        self.channel_slider.setMinimumWidth(150)  # Ensure it's not too small
+        self.channel_slider.setFixedHeight(22)
+        self.channel_slider.setMinimumWidth(220)
         self.channel_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)  # Allow horizontal stretching
-
-
-        # make label only take as much space as required...
-        channel_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        channel_spinbox_group.addWidget(channel_label)
-        channel_spinbox_group.addWidget(self.channel_spinbox)
-        channel_selection_layout.addLayout(channel_spinbox_group, 0,0, 1, 2, alignment=Qt.AlignHCenter)
-
-        option_widget_v_layout.addLayout(channel_selection_layout)
-
-        hint_label = QLabel("Hint: You can double press the dock symbol to undock the composite_image and you "+
-                            "can also dock it into the data section")
-        hint_label.setWordWrap(True)
-        hint_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.MinimumExpanding)
-        hint_label.setMaximumWidth(100)
-        right_col_v_layout.addWidget(hint_label)
-        italic_font = QtGui.QFont()
-        italic_font.setItalic(True)
-        hint_label.setFont(italic_font)
-
-
-
-
-        # Add stretchable spacers to control the spacing between widgets
-        horizontal_spacer = QSpacerItem(0, 0, 1, 0)
-        vertical_spacer = QSpacerItem(0, 0, 0, 1)
-
-        channel_selection_layout.addItem(horizontal_spacer, 0, 1)
 
         # Create a QPushButton for choosing a colormap color
         self.color_button = QPushButton("Choose Channel Color")
-        # self.color_button.setMaximumSize(*max_but_size)
         self.color_button.clicked.connect(lambda: self.choose_color())
-        channel_selection_layout.addWidget(self.color_button, 0, 2, alignment=Qt.AlignHCenter)
 
         # add autoscale button for channel view
         autoscale_button = QPushButton("AutoScale")
-        # autoscale_button.setMaximumSize(*max_but_size)
         autoscale_button.clicked.connect(self.channel_view.autoLevels)
-        channel_selection_layout.addWidget(autoscale_button, 0, 3, alignment=Qt.AlignHCenter)
 
         # Create a ColorButton for choosing the colormap color
         self.color_widget = pg.ColorButton()
         self.color_widget.sigColorChanged.connect(self.callback_color_widget)
-        channel_selection_layout.addWidget(self.color_widget, 1, 2, alignment=Qt.AlignHCenter)
 
         self.show_seeds_check = QCheckBox("Show Seeds")
         self.show_seeds_check.setCheckable(True)
         self.show_seeds_check.clicked.connect(lambda state: self.plot_seeds(self.spectral_cmps_seed) if state else self.plot_seeds(np.array([])))
-        self.show_seeds_check.setMaximumWidth(100)
-        main_img_layout.addWidget(self.show_seeds_check, 20, 19, 1, 1, alignment=Qt.AlignVCenter)
+        self.show_seeds_check.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        # Add the h_layout to the main layout
-        self.master_v_layout.addLayout(self.main_h_layout)
+        for widget in [save_tiff_button, save_seeds_button, save_H_as_csv_button, reset_levels_button,
+                       save_seed_mode_combobox, self.channel_spinbox, self.color_button, autoscale_button]:
+            widget.setMinimumHeight(28)
+
+        composite_header = QWidget()
+        composite_header_layout = QHBoxLayout(composite_header)
+        composite_header_layout.setContentsMargins(0, 0, 0, 0)
+        composite_header_layout.setSpacing(10)
+        composite_title = QLabel("Composite Overview")
+        composite_title.setProperty("role", "sectionTitle")
+        composite_meta = QLabel("Inspect the fused result, adjust colors, and export publication figures.")
+        composite_meta.setProperty("role", "sectionMeta")
+        composite_meta.setWordWrap(True)
+        composite_title_layout = QVBoxLayout()
+        composite_title_layout.setContentsMargins(0, 0, 0, 0)
+        composite_title_layout.setSpacing(2)
+        composite_title_layout.addWidget(composite_title)
+        composite_title_layout.addWidget(composite_meta)
+        composite_header_layout.addLayout(composite_title_layout, stretch=1)
+        dock_hint = QLabel("Dock tip: double-click the dock title to undock or move this panel.")
+        dock_hint.setProperty("role", "sectionMeta")
+        dock_hint.setWordWrap(True)
+        dock_hint.setMaximumWidth(260)
+        composite_header_layout.addWidget(dock_hint, alignment=Qt.AlignRight | Qt.AlignVCenter)
+
+        composite_controls_widget = QWidget()
+        composite_controls_layout = QHBoxLayout(composite_controls_widget)
+        composite_controls_layout.setContentsMargins(0, 0, 0, 0)
+        composite_controls_layout.setSpacing(8)
+        composite_controls_layout.addWidget(save_tiff_button)
+        composite_controls_layout.addWidget(save_seeds_button)
+        composite_controls_layout.addWidget(save_seed_mode_label)
+        composite_controls_layout.addWidget(save_seed_mode_combobox)
+        composite_controls_layout.addStretch(1)
+        composite_controls_layout.addWidget(save_H_as_csv_button)
+        composite_controls_layout.addWidget(reset_levels_button)
+
+        composite_panel = QWidget()
+        composite_panel.setObjectName("resultPanel")
+        composite_panel_layout = QVBoxLayout(composite_panel)
+        composite_panel_layout.setContentsMargins(12, 12, 12, 12)
+        composite_panel_layout.setSpacing(10)
+        composite_panel_layout.addWidget(composite_header)
+        composite_panel_layout.addWidget(self.composite_view, stretch=1)
+        composite_panel_layout.addWidget(composite_controls_widget)
+
+        channel_controls_widget = QWidget()
+        channel_controls_layout = QGridLayout(channel_controls_widget)
+        channel_controls_layout.setContentsMargins(0, 0, 0, 0)
+        channel_controls_layout.setHorizontalSpacing(8)
+        channel_controls_layout.setVerticalSpacing(6)
+        channel_controls_layout.addWidget(channel_label, 0, 0)
+        channel_controls_layout.addWidget(self.channel_spinbox, 0, 1)
+        channel_controls_layout.addWidget(self.color_button, 0, 2)
+        channel_controls_layout.addWidget(self.color_widget, 0, 3)
+        channel_controls_layout.addWidget(autoscale_button, 0, 4)
+        channel_controls_layout.addWidget(self.channel_slider, 1, 0, 1, 5)
+        channel_controls_layout.setColumnStretch(4, 1)
+
+        channel_header = QWidget()
+        channel_header_layout = QHBoxLayout(channel_header)
+        channel_header_layout.setContentsMargins(0, 0, 0, 0)
+        channel_header_layout.setSpacing(8)
+        channel_title = QLabel("Channel Preview")
+        channel_title.setProperty("role", "sectionTitle")
+        channel_meta = QLabel("Browse individual component maps and refine the false color.")
+        channel_meta.setProperty("role", "sectionMeta")
+        channel_header_layout.addWidget(channel_title)
+        channel_header_layout.addWidget(channel_meta, stretch=1)
+
+        channel_panel = QWidget()
+        channel_panel.setObjectName("resultPanel")
+        channel_panel_layout = QVBoxLayout(channel_panel)
+        channel_panel_layout.setContentsMargins(12, 12, 12, 12)
+        channel_panel_layout.setSpacing(10)
+        channel_panel_layout.addWidget(channel_header)
+        channel_panel_layout.addWidget(self.channel_view, stretch=1)
+        channel_panel_layout.addWidget(channel_controls_widget)
+
+        spectrum_header = QWidget()
+        spectrum_header_layout = QHBoxLayout(spectrum_header)
+        spectrum_header_layout.setContentsMargins(0, 0, 0, 0)
+        spectrum_header_layout.setSpacing(8)
+        spectrum_title = QLabel("Spectral Components")
+        spectrum_title.setProperty("role", "sectionTitle")
+        spectrum_meta = QLabel("Compare extracted component spectra and optional seed spectra.")
+        spectrum_meta.setProperty("role", "sectionMeta")
+        spectrum_header_layout.addWidget(spectrum_title)
+        spectrum_header_layout.addWidget(spectrum_meta, stretch=1)
+        spectrum_header_layout.addWidget(self.show_seeds_check, alignment=Qt.AlignRight)
+
+        spectrum_panel = QWidget()
+        spectrum_panel.setObjectName("resultPanel")
+        spectrum_panel_layout = QVBoxLayout(spectrum_panel)
+        spectrum_panel_layout.setContentsMargins(12, 12, 12, 12)
+        spectrum_panel_layout.setSpacing(10)
+        spectrum_panel_layout.addWidget(spectrum_header)
+        spectrum_panel_layout.addWidget(self.spectrum_view, stretch=1)
+
+        self.components_h_splitter = QSplitter(Qt.Horizontal)
+        self.components_h_splitter.setChildrenCollapsible(False)
+        self.components_h_splitter.setHandleWidth(8)
+        self.components_h_splitter.addWidget(channel_panel)
+        self.components_h_splitter.addWidget(spectrum_panel)
+
+        self.main_plot_v_splitter = QSplitter(Qt.Vertical)
+        self.main_plot_v_splitter.setChildrenCollapsible(False)
+        self.main_plot_v_splitter.setHandleWidth(8)
+        self.main_plot_v_splitter.addWidget(composite_panel)
+        self.main_plot_v_splitter.addWidget(self.components_h_splitter)
+        self.main_plot_v_splitter.setStretchFactor(0, 3)
+        self.main_plot_v_splitter.setStretchFactor(1, 2)
+        self.master_v_layout.addWidget(self.main_plot_v_splitter)
+        self.main_plot_v_splitter.setSizes([520, 320])
+        self.components_h_splitter.setSizes([420, 620])
 
         # Initialize colormap, levels, and max value state dictionaries
         self.histogram_states = {}
+
+        if self.img is not None:
+            self.update_image(self.img)
 
 
         # Connect the slot function to histogram level sliders' valueChanged signals
@@ -375,6 +414,7 @@ class CompositeImageViewWidget(QMainWindow):
             None
         """
         self.timeout_callbacks = True
+        first_result_load = self.img is None
         self.img = img_file
         if spectral_axis is not None:
             if spectral_axis != -1:
@@ -404,6 +444,9 @@ class CompositeImageViewWidget(QMainWindow):
         if spectral_cmps is not None:
             self.plot_components(spectral_cmps)
         self.timeout_callbacks = False
+        if first_result_load:
+            self.composite_view.getView().autoRange(padding=0.02)
+            self.channel_view.getView().autoRange(padding=0.02)
         # print('Updated Channel View')
 
 
@@ -445,16 +488,39 @@ class CompositeImageViewWidget(QMainWindow):
             colormap_color = self.colormap_colors[channel % len(self.colormap_colors)]
         return colormap_color
 
+    @staticmethod
+    def _capture_viewbox_range(image_view) -> tuple[list[float], list[float]] | None:
+        try:
+            view = image_view.getView()
+            return view.viewRange()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _restore_viewbox_range(image_view, view_range):
+        if view_range is None:
+            return
+        try:
+            view = image_view.getView()
+            view.setXRange(view_range[0][0], view_range[0][1], padding=0)
+            view.setYRange(view_range[1][0], view_range[1][1], padding=0)
+        except Exception:
+            logger.debug('Could not restore image view range.', exc_info=True)
+
     def update_channel_view(self, channel_index):
         if self.img is None:
             return 
+        channel_view_range = self._capture_viewbox_range(self.channel_view)
+        self.channel_slider.blockSignals(True)
         self.channel_slider.setValue(channel_index)
+        self.channel_slider.blockSignals(False)
         logger.debug('Update Time %i' % channel_index)
         # Get the selected channel
         selected_im = self.img[:, :, channel_index]
 
         # Update the channel view
         self.channel_view.setImage(selected_im, autoLevels=False)
+        self._restore_viewbox_range(self.channel_view, channel_view_range)
 
         # Apply saved levels and histogram state if available
         if channel_index in self.histogram_states:
@@ -480,7 +546,9 @@ class CompositeImageViewWidget(QMainWindow):
             # self.update_levels()
             logger.debug("Channel unknown")
         # Update the QSpinBox with the current channel index
+        self.channel_spinbox.blockSignals(True)
         self.channel_spinbox.setValue(channel_index)
+        self.channel_spinbox.blockSignals(False)
         logger.debug(f'{channel_index =}, {colormap_color =}')
         # Set the color of the ColorButton to match the current colormap color
         self.color_widget.blockSignals(True)
@@ -861,25 +929,10 @@ class CompositeImageViewWidget(QMainWindow):
         histogram_state = self.channel_view.getHistogramWidget().saveState()
         self.histogram_states[channel_index] = histogram_state
         false_color_im = self.get_rgba()
+        composite_view_range = self._capture_viewbox_range(self.composite_view)
         self.composite_view.setImage(false_color_im, autoLevels=False)
+        self._restore_viewbox_range(self.composite_view, composite_view_range)
         self._sync_color_button_to_gradient()
-        # Restore the previous view settings
-        """
-        # Get the current view settings
-        view_range = self.composite_view.getView().viewRange()
-        view_center = self.composite_view.getView().viewPixelSize()
-        self.composite_view.getView().setRange(xRange=view_range[0], yRange=view_range[1])
-        # Optionally, you can center the view on the image
-        image_width = self.img.shape[1]
-        image_height = self.img.shape[0]
-        view_width = view_range[0][1] - view_range[0][0]
-        view_height = view_range[1][1] - view_range[1][0]
-        x_offset = (image_width - view_width) / 2
-        y_offset = (image_height - view_height) / 2
-        print(x_offset, y_offset)
-        self.composite_view.getView().setXRange(view_range[0][0] + x_offset, view_range[0][1] + x_offset)
-        self.composite_view.getView().setYRange(view_range[1][0] + y_offset, view_range[1][1] + y_offset)
-        """
 
         self.composite_view.ui.histogram.setHistogramRange(0, max_dtype_val)
         if auto_min_max:

@@ -58,23 +58,37 @@ class RamanImageView(ImageViewLineRoi):
         self.frame_label.setPos(10, 1)
         self.linescan = []
         self.wavenumber = None
+        self.axis_labels = None
         self.roiPlotWidget = roi_plot_widget
 
     def set_spectral_units(self, unit: str):
         unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
-        if unit == "nm":
+        if self.axis_labels is not None:
+            self.ui.roiPlot.getAxis('bottom').setLabel('Channels')
+        elif unit == "nm":
             self.ui.roiPlot.getAxis('bottom').setLabel('Wavelength [nm]')
         else:
             self.ui.roiPlot.getAxis('bottom').setLabel('Raman Shift [1/cm]')
         self.unit = unit
         self.updateImage()
 
+    def set_axis_labels(self, labels):
+        self.axis_labels = None if labels is None else [str(label) for label in labels]
+        if self.axis_labels is None:
+            self.set_spectral_units(self.unit)
+        else:
+            self.ui.roiPlot.getAxis('bottom').setLabel('Channels')
+            self.update_timeline_ticks()
+            self.updateImage()
+
     def updateImage(self, show_frame_label=False, **kwargs):
         super().updateImage(**kwargs)
         frame = self.currentIndex
         if show_frame_label:
             self.frame_label.setText(f'Frame: {frame}')
-        if self.view is not None and self.wavenumber is not None:
+        if self.view is not None and self.axis_labels is not None and 0 <= frame < len(self.axis_labels):
+            self.view.setTitle(f'Frame: {frame} @ {self.axis_labels[frame]}')
+        elif self.view is not None and self.wavenumber is not None:
             self.view.setTitle(f'Frame: {frame} @ {self.wavenumber[self.currentIndex]:.1f} {self.unit}')
 
     def roiChanged(self, *args, plot_widget=None):
@@ -234,6 +248,14 @@ class RamanImageView(ImageViewLineRoi):
         self.update_timeline_ticks()
 
     def update_timeline_ticks(self):
+        if self.axis_labels is not None:
+            bottom_axis = self.ui.roiPlot.getAxis('bottom')
+            step = max(1, len(self.axis_labels) // max(1, self.max_ticks - 2))
+            tick_values = [(i, label) for i, label in enumerate(self.axis_labels) if i % step == 0]
+            if tick_values:
+                bottom_axis.setTicks([tick_values])
+            return
+
         if self.wavenumber is None:
             return
         bottom_axis = self.ui.roiPlot.getAxis('bottom')

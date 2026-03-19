@@ -159,6 +159,9 @@ class DataWidget(QtWidgets.QWidget):
         self.roi_manager.roi_plotter.set_spectral_units(unit)
         self.raman_raw_image_view.set_spectral_units(unit)
 
+    def set_spectral_axis_labels(self, labels):
+        self.raman_raw_image_view.set_axis_labels(labels)
+
     def init_toolbar(self):
         self.lut_combo_box = QtWidgets.QComboBox(self)
         self.lut_combo_box.addItems(['grey', 'thermal', 'flame', 'yellowy', 'bipolar', 'spectrum', 'cyclic', 'greyclip',
@@ -527,7 +530,8 @@ class WavenumberLoadDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.target_length = target_length
         self.loaded_data = current_data
-        self.setWindowTitle("Load Custom Wavenumbers")
+        self.loaded_labels = None
+        self.setWindowTitle("Load Custom Spectral Axis")
         self.resize(400, 500)
         self.init_ui()
 
@@ -536,18 +540,19 @@ class WavenumberLoadDialog(QtWidgets.QDialog):
 
         # Instructions
         info = QtWidgets.QLabel(
-            f"Enter or load <b>{self.target_length}</b> values (wavenumbers or wavelengths).<br>"
-            "Accepted formats: CSV, single column text, space-separated."
+            f"Enter or load <b>{self.target_length}</b> values or labels.<br>"
+            "Accepted formats: CSV, single column text, space-separated.<br>"
+            "Examples: <i>2850, 2930, 3010</i> or <i>DAPI, FITC, Cy5</i>."
         )
         info.setTextFormat(QtCore.Qt.RichText)
         layout.addWidget(info)
 
         # Text Area
         self.text_edit = QtWidgets.QPlainTextEdit()
-        self.text_edit.setPlaceholderText("Paste values here (one per line)...")
+        self.text_edit.setPlaceholderText("Paste numeric values or labels here (one per line)...")
         if self.loaded_data is not None:
             # Pre-fill with current data if available
-            text_str = "\n".join([f"{x:.2f}" for x in self.loaded_data])
+            text_str = "\n".join([str(x) for x in self.loaded_data])
             self.text_edit.setPlainText(text_str)
         layout.addWidget(self.text_edit)
 
@@ -586,31 +591,53 @@ class WavenumberLoadDialog(QtWidgets.QDialog):
                 # but usually it's fine.
                 self.text_edit.setPlainText("\n".join([str(x) for x in data.flatten()]))
             except Exception as e:
-                QtWidgets.QMessageBox.warning(self, "Load Error", f"Could not parse file:\n{e}")
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        self.text_edit.setPlainText(f.read())
+                except Exception:
+                    QtWidgets.QMessageBox.warning(self, "Load Error", f"Could not parse file:\n{e}")
 
     def validate_and_accept(self):
         text = self.text_edit.toPlainText()
         # Replace commas with newlines to handle CSV pastes
-        text = text.replace(",", "\n").replace(";", "\n")
+        text = text.replace(";", "\n")
 
         try:
-            # Parse numbers
-            values = np.fromstring(text, sep='\n')
+            tokens = [
+                part.strip()
+                for raw_line in text.splitlines()
+                for part in raw_line.split(",")
+                if part.strip()
+            ]
 
-            if len(values) == 0:
+            if len(tokens) == 0:
                 raise ValueError("No data entered.")
 
-            if len(values) != self.target_length:
+            if len(tokens) != self.target_length:
                 resp = QtWidgets.QMessageBox.question(
                     self, "Dimension Mismatch",
-                    f"You provided {len(values)} points, but the image has {self.target_length} frames.\n"
+                    f"You provided {len(tokens)} points, but the image has {self.target_length} frames.\n"
                     "Do you want to apply this anyway? (This may cause errors in processing)",
                     QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
                 )
                 if resp != QtWidgets.QMessageBox.Yes:
                     return
 
-            self.loaded_data = values
+            numeric_values = []
+            all_numeric = True
+            for token in tokens:
+                try:
+                    numeric_values.append(float(token))
+                except ValueError:
+                    all_numeric = False
+                    break
+
+            if all_numeric:
+                self.loaded_data = np.asarray(numeric_values, dtype=np.float32)
+                self.loaded_labels = None
+            else:
+                self.loaded_data = np.arange(len(tokens), dtype=np.float32)
+                self.loaded_labels = tokens
             self.accept()
 
         except Exception as e:
@@ -625,6 +652,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.n_frames = int(n_frames)
         self.wavenumbers = None
         self.custom_wavenumbers = None  # Store custom array
+        self.custom_axis_labels = None
         self.beam_mode = 0  # 0: pump is variable, 1: stokes is variable
 
         self.init_ui(**kwargs)
@@ -812,9 +840,11 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.update_wavenums()
 
     def open_custom_dialog(self):
-        dlg = WavenumberLoadDialog(target_length=self.n_frames, current_data=self.custom_wavenumbers, parent=self)
+        current_data = self.custom_axis_labels if self.custom_axis_labels is not None else self.custom_wavenumbers
+        dlg = WavenumberLoadDialog(target_length=self.n_frames, current_data=current_data, parent=self)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             self.custom_wavenumbers = dlg.loaded_data
+            self.custom_axis_labels = dlg.loaded_labels
             self.update_wavenums()
 
     def on_min_max_checked(self, state):
@@ -856,6 +886,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         if is_custom:
             if self.custom_wavenumbers is None:
                 self.wavenumbers = np.arange(channels, dtype=np.float32)
+                self.custom_axis_labels = None
                 self.custom_status_label.setText("Default: Indices")
                 # Fallback labels
                 self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.0f} (idx)")
@@ -865,7 +896,10 @@ class WavenumberWidget(QtWidgets.QWidget):
                 # but usually user loads data immediately.
             else:
                 self.wavenumbers = self.custom_wavenumbers
-                self.custom_status_label.setText(f"Loaded: {len(self.wavenumbers)} pts")
+                if self.custom_axis_labels is not None:
+                    self.custom_status_label.setText(f"Loaded: {len(self.custom_axis_labels)} labels")
+                else:
+                    self.custom_status_label.setText(f"Loaded: {len(self.wavenumbers)} pts")
 
                 if len(self.wavenumbers) != channels:
                     self.warn_label.setText(f"Size Mismatch: {len(self.wavenumbers)} vs {channels}")
@@ -874,12 +908,17 @@ class WavenumberWidget(QtWidgets.QWidget):
                     self.warn_label.setVisible(False)
 
                 if len(self.wavenumbers) > 0:
-                    self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} {unit_str}")
-                    self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} {unit_str}")
+                    if self.custom_axis_labels is not None:
+                        self.min_label.setText(f"First: {self.custom_axis_labels[0]}")
+                        self.max_label.setText(f"Last: {self.custom_axis_labels[-1]}")
+                    else:
+                        self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} {unit_str}")
+                        self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} {unit_str}")
 
         else:
             # --- Calculated Logic ---
             self.warn_label.setVisible(False)
+            self.custom_axis_labels = None
 
             # 1. Get Range
             minimum = float(self.min_wavelength_entry.value())
@@ -1008,6 +1047,7 @@ class WavenumberWidget(QtWidgets.QWidget):
 
             # custom-mode payload
             "custom_values": None if self.custom_wavenumbers is None else self.custom_wavenumbers.tolist(),
+            "custom_labels": None if self.custom_axis_labels is None else list(self.custom_axis_labels),
         }
 
     def import_state(self, state: dict):
@@ -1094,10 +1134,16 @@ class WavenumberWidget(QtWidgets.QWidget):
 
         # restore custom array
         custom_vals = state.get("custom_values", None)
-        if custom_vals is None:
+        custom_labels = state.get("custom_labels", None)
+        if custom_vals is None and custom_labels is None:
             self.custom_wavenumbers = None
+            self.custom_axis_labels = None
         else:
-            self.custom_wavenumbers = np.asarray(custom_vals, dtype=np.float32)
+            if custom_vals is not None:
+                self.custom_wavenumbers = np.asarray(custom_vals, dtype=np.float32)
+            elif custom_labels is not None:
+                self.custom_wavenumbers = np.arange(len(custom_labels), dtype=np.float32)
+            self.custom_axis_labels = None if custom_labels is None else [str(v) for v in custom_labels]
 
         del blockers  # unblock
 

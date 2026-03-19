@@ -52,6 +52,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectral_cmps = spectral_cmps
         self.spectral_cmps_seed = None
         self.wavenumbers = None
+        self.axis_labels = None
         self.fiji_saver = FIJISaver(self.img, f'{os.path.join(os.getcwd(), "result.tif")}',
                                     colors=self.colormap_colors, dtype=np.uint16)
         self.custom_model = False
@@ -319,9 +320,34 @@ class CompositeImageViewWidget(QMainWindow):
     def update_wavenumbers(self, wavenumbers):
         self.wavenumbers = wavenumbers
         self.fiji_saver.wavenumbers = wavenumbers
+        self._update_spectrum_axis()
         self.plot_components(self.spectral_cmps)
 
         # TODO: update plot
+
+    def set_axis_labels(self, labels):
+        self.axis_labels = None if labels is None else [str(label) for label in labels]
+        self._update_spectrum_axis()
+        self.plot_components(self.spectral_cmps)
+
+    def _spectral_x_values(self, length: int) -> np.ndarray:
+        if self.axis_labels is not None:
+            return np.arange(length, dtype=np.float32)
+        if self.wavenumbers is not None:
+            return self.wavenumbers
+        return np.arange(length, dtype=np.float32)
+
+    def _update_spectrum_axis(self):
+        axis = self.spectrum_view.getPlotItem().getAxis('bottom')
+        if self.axis_labels is None:
+            axis.setTicks(None)
+            return
+
+        axis.setLabel('Channels')
+        step = max(1, len(self.axis_labels) // 8)
+        tick_values = [(i, label) for i, label in enumerate(self.axis_labels) if i % step == 0]
+        if tick_values:
+            axis.setTicks([tick_values])
 
     def update_label(self, component_number: int, new_label: str):
         # Store/update the label for the given component
@@ -349,11 +375,12 @@ class CompositeImageViewWidget(QMainWindow):
         except AttributeError as e:
             logger.warning(e)
             return
+        x_values = self._spectral_x_values(spectral_components.shape[1])
         # self.spectrum_view.setTitle(rf"{'Custom' if self.custom_model else 'Random'} NNMF H Components")
         for i in range(num_components):
             component = spectral_components[i, :]
             name = self.custom_labels.get(i, f'Component {i}') if self.custom_model else f'Component {i}'
-            line = self.spectrum_view.plot(self.wavenumbers, component, pen=pg.mkPen(self.get_color(i)), name=name)
+            line = self.spectrum_view.plot(x_values, component, pen=pg.mkPen(self.get_color(i)), name=name)
             self.spectrum_lines.append(line)
         if self.custom_model:
             if self.show_seeds_check.isChecked():
@@ -389,9 +416,10 @@ class CompositeImageViewWidget(QMainWindow):
 
         if seeds is None:
             return
+        x_values = self._spectral_x_values(seeds.shape[1])
         for i in range(seeds.shape[0]):
             seed = seeds[i, :]
-            line = self.spectrum_view.plot(self.wavenumbers, seed, pen=pg.mkPen(self.get_color(i), style=Qt.DashLine if dashed else Qt.SolidLine),
+            line = self.spectrum_view.plot(x_values, seed, pen=pg.mkPen(self.get_color(i), style=Qt.DashLine if dashed else Qt.SolidLine),
                                            name=f'Seed {i}')
             self.seed_lines.append(line)
         # raise NotImplementedError("Plotting seeds is not yet implemented,\nPlease do not pass seeds to the result viewer")
@@ -718,12 +746,15 @@ class CompositeImageViewWidget(QMainWindow):
         if not file_path:  # User canceled the dialog
             return
 
-        wavenumbers = self.wavenumbers[...]
+        axis_values = self.axis_labels if self.axis_labels is not None else [str(v) for v in self.wavenumbers[...]]
 
-        # save to text with header "wavenumbers, cmp1, cmp2, ..."
-        header = "Wavenumber (1/cm)," + ",".join([f"Component {i}" for i in range(self.spectral_cmps.shape[0])])
-        data_to_save = np.vstack((wavenumbers, self.spectral_cmps)).T
-        np.savetxt(file_path, data_to_save, delimiter=",", header=header, comments='')
+        header_label = "Channel Label" if self.axis_labels is not None else "Wavenumber (1/cm)"
+        header = header_label + "," + ",".join([f"Component {i}" for i in range(self.spectral_cmps.shape[0])])
+        rows = [
+            [axis_values[i], *self.spectral_cmps[:, i].tolist()]
+            for i in range(self.spectral_cmps.shape[1])
+        ]
+        np.savetxt(file_path, rows, delimiter=",", header=header, comments='', fmt='%s')
         logger.info(f"Saved H components to {file_path}")
 
     @staticmethod
@@ -842,7 +873,9 @@ class CompositeImageViewWidget(QMainWindow):
             self.channel_view.getHistogramWidget().restoreState(self.histogram_states[index])
 
     def set_spectral_units(self, units: str):
-        if units.lower() == 'nm':
+        if self.axis_labels is not None:
+            self.spectrum_view.setLabel('bottom', 'Channels')
+        elif units.lower() == 'nm':
             self.spectrum_view.setLabel('bottom', 'Wavelength (nm)')
         else:
             self.spectrum_view.setLabel('bottom', 'Wavenumber (1/cm)')

@@ -200,6 +200,9 @@ class MainApplication(QtWidgets.QMainWindow):
         self.data_widget.update_wavenumbers(wavenumbers)
         self.analysis_manager.update_wavenumbers(wavenumbers)
         self.result_viewer_widget.update_wavenumbers(wavenumbers)
+        axis_labels = self.data_handler.wavenumber_widget.custom_axis_labels
+        self.data_widget.set_spectral_axis_labels(axis_labels)
+        self.result_viewer_widget.set_axis_labels(axis_labels)
         # Inform Analyzer
 
     def update_data(self, img_array=None):

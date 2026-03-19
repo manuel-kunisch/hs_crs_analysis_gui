@@ -319,9 +319,10 @@ class AnalysisManager(QtCore.QObject):
             slot=self.add_resonance_settings
         )
         check_W_seeds_button = _make_btn(
-            "Check W seeds (from H only)",
+            "Preview W seeds",
             "dialog-ok-apply", QtWidgets.QStyle.SP_DialogApplyButton,
-            slot=self.show_W_seeds
+            slot=self.show_W_seeds,
+            tooltip="Preview the current W maps with the selected W seed method."
         )
         test_seeds_button = _make_btn(
             "Test seeds",
@@ -380,58 +381,41 @@ class AnalysisManager(QtCore.QObject):
         bg_gb_layout.addLayout(bg_btn_row)
         right_layout.addWidget(bg_gb)
 
-        # (3) W seed init settings
-        wseed_gb = QtWidgets.QGroupBox("W seed initialization")
+        # (3) Seed init settings
+        wseed_gb = QtWidgets.QGroupBox("Seed initialization")
         wseed_layout = QtWidgets.QVBoxLayout(wseed_gb)
         wseed_layout.setSpacing(8)
 
-        h_weight_seed_check = QtWidgets.QCheckBox("H weighted")
-        h_weight_seed_check.setChecked(True)
-        h_weight_seed_check.stateChanged.connect(
-            lambda state: setattr(self.mv_analyzer, "H_weighted_W_seed", bool(state))
+        method_row = QtWidgets.QHBoxLayout()
+        method_row.setSpacing(10)
+        method_row.addWidget(QtWidgets.QLabel("W map from H:"))
+        self.w_seed_mode_dropdown = QtWidgets.QComboBox()
+        self.w_seed_mode_dropdown.addItem("NNLS abundance map (recommended)", "NNLS abundance map")
+        self.w_seed_mode_dropdown.addItem("Selective score map", "Selective score map")
+        self.w_seed_mode_dropdown.addItem("H-weighted average (legacy)", "H weights")
+        self.w_seed_mode_dropdown.addItem("Average image (fallback)", "Average image")
+        self.w_seed_mode_dropdown.addItem("Homogeneous (empty)", "Homogeneous (empty)")
+        self.w_seed_mode_dropdown.currentIndexChanged.connect(
+            lambda index: self.mv_analyzer.set_W_seed_mode(self.w_seed_mode_dropdown.itemData(index))
         )
-        self.mv_analyzer.H_weighted_W_seed = h_weight_seed_check.isChecked()
+        method_row.addWidget(self.w_seed_mode_dropdown, 1)
+        wseed_layout.addLayout(method_row)
 
-        mode_row = QtWidgets.QHBoxLayout()
-        mode_row.setSpacing(10)
-        avg_w_seed_radio = QtWidgets.QRadioButton("Average image")
-        empty_w_seed_radio = QtWidgets.QRadioButton("Homogeneous (empty)")
-        # disable the radios when H weighted is checked
-        h_weight_seed_check.stateChanged.connect(
-            lambda state: avg_w_seed_radio.setDisabled(bool(state))
+        wseed_hint = QtWidgets.QLabel(
+            "Uses the current H seed to build the spatial W map. "
+            "Fixed W masks from ROIs are kept unchanged."
         )
-        h_weight_seed_check.stateChanged.connect(
-            lambda state: empty_w_seed_radio.setDisabled(bool(state))
-        )
-        # set correct initial state
-        if h_weight_seed_check.isChecked():
-            avg_w_seed_radio.setDisabled(True)
-            empty_w_seed_radio.setDisabled(True)
+        wseed_hint.setWordWrap(True)
+        wseed_hint.setStyleSheet("color: #6b7280;")
+        wseed_layout.addWidget(wseed_hint)
 
-        # Button group to make the radios exclusive
-        W_seed_group = QtWidgets.QButtonGroup(self)
-        W_seed_group.setExclusive(True)
-        W_seed_group.addButton(avg_w_seed_radio)
-        W_seed_group.addButton(empty_w_seed_radio)
-
-        avg_w_seed_radio.toggled.connect(lambda checked: self.mv_analyzer.set_W_seed_mode("None") if checked else None)
-        empty_w_seed_radio.toggled.connect(
-            lambda checked: self.mv_analyzer.set_W_seed_mode("Empty") if checked else None)
-
-        avg_w_seed_radio.setChecked(True)
-        self.mv_analyzer.set_W_seed_mode("None")
-
-        mode_row.addWidget(avg_w_seed_radio)
-        mode_row.addWidget(empty_w_seed_radio)
-        mode_row.addStretch(1)
-
-        wseed_layout.addWidget(h_weight_seed_check)
-        wseed_layout.addLayout(mode_row)
+        self.w_seed_mode_dropdown.setCurrentIndex(0)
+        self.mv_analyzer.set_W_seed_mode(self.w_seed_mode_dropdown.itemData(0))
 
         # Seed pixel metric
         metric_row = QtWidgets.QHBoxLayout()
         metric_row.setSpacing(10)
-        metric_row.addWidget(QtWidgets.QLabel("Seed pixel metric:"))
+        metric_row.addWidget(QtWidgets.QLabel("H seed pixel metric:"))
         seed_pixel_mode_dropdown = QtWidgets.QComboBox()
         seed_pixel_mode_dropdown.addItems(["Max Intensity", "Score"])
         seed_pixel_mode_dropdown.setCurrentIndex(0)
@@ -479,8 +463,9 @@ class AnalysisManager(QtCore.QObject):
         """
         1. Reload H seeds from ROIs
         2. Process spectral info (initialize also H components from it that are not yet defined via seed pixels)
-        3. Fill remaining W seeds with possibly existing H seeds, if not just average the image data
-        3. All remaining H seeds are randomly initialized
+        3. Rebuild W seeds from the chosen H-to-W method wherever an H seed exists
+        4. Fill any remaining W seeds with a fallback image-based seed
+        5. Randomly initialize only the H seeds that are still missing
         Parameters
         ----------
         show_seeds: bool
@@ -501,7 +486,10 @@ class AnalysisManager(QtCore.QObject):
         seed_W, seed_H, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True,
                                                                             debug_mode=False)  # create W seeds from spectral info and pass to analyzer
 
-        logger.info('..... Trying to set W seeds from H components ........')
+        logger.info('Rebuilding W seeds from the current H seeds using %s.', self.mv_analyzer.w_seed_mode)
+        self._rebuild_W_seeds_from_H(overwrite_existing=True)
+
+        logger.info('Filling remaining W seeds after H-based initialization.')
         # fill remaining W seeds
         # tries to either fill from given H seeds or from average image data (fallback)
         self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)  # fill the W seed matrix
@@ -522,6 +510,12 @@ class AnalysisManager(QtCore.QObject):
         seed_H_final = self.mv_analyzer.seed_H
 
         self.show_seed_window(seed_W_3d, seed_H_final, seed_pixels)
+
+    def _rebuild_W_seeds_from_H(self, overwrite_existing: bool = True):
+        self.mv_analyzer.estimate_W_seed_matrix_from_H(
+            overwrite=overwrite_existing,
+            skip_components=self._fixed_seed_W.keys()
+        )
 
     def show_seed_window(self, seed_W_3d, seed_H, seed_pixels):
         if self.seed_window is None:
@@ -775,14 +769,16 @@ class AnalysisManager(QtCore.QObject):
         self.roi_manager.highlight_component_region(spectral_range, self.get_component_index(row_table))
 
     def show_W_seeds(self):
-        """Open a temporary viewer for inspecting W seeds derived from the current inputs."""
+        """Open a temporary viewer for inspecting the current W maps."""
+        self._fixed_seed_W = {}
         self.reload_H_seeds_from_rois()
-        if not self.mv_analyzer._W_prepared:
-            self.mv_analyzer.estimate_W_seed_matrix_from_H()
+        _, _, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True, debug_mode=False)
+        self._rebuild_W_seeds_from_H(overwrite_existing=True)
+        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
         # open a new floating composite_image with the W seeds in a pyqtgraph image view
         W_seed_3d = self.mv_analyzer.seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
                                                     self.mv_analyzer.raw_data_3d.shape[2], -1)
-        self.seed_W_view = self.make_W_seed_view(W_seed_3d)
+        self.seed_W_view = self.make_W_seed_view(W_seed_3d, seed_pixels=seed_pixels)
         self.seed_W_view.show()
 
     def make_W_seed_view(self, W_seed_3d, seed_pixels: dict = None, plot_all_seeds: bool = False):
@@ -894,6 +890,7 @@ class AnalysisManager(QtCore.QObject):
             'Width': width,
             'Pixel Threshold': thres,
             '# Seed Pixels': n_pixels,
+            'Use subtracted data': get_value('Use subtracted data', bool, True),
             'Use Gaussian': use_gauss,
             'Amplitude': amp
         }

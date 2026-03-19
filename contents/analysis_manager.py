@@ -72,6 +72,10 @@ class AnalysisManager(QtCore.QObject):
         # Main widget instantiated in the init_ui method
         self.analysis_widget = None
         self.mv_analyzer = MultivariateAnalyzer(data, 3, self.wavenumbers)
+        self._overwrite_existing_W_from_H = True
+        self.w_seed_mode_dropdown: QtWidgets.QComboBox | None = None
+        self.overwrite_W_from_H_check: QtWidgets.QCheckBox | None = None
+        self.seed_pixel_mode_dropdown: QtWidgets.QComboBox | None = None
 
         # set up thread for analysis
         self.thread_analysis = QtCore.QThread()
@@ -412,15 +416,26 @@ class AnalysisManager(QtCore.QObject):
         self.w_seed_mode_dropdown.setCurrentIndex(0)
         self.mv_analyzer.set_W_seed_mode(self.w_seed_mode_dropdown.itemData(0))
 
+        self.overwrite_W_from_H_check = QtWidgets.QCheckBox("Overwrite existing W with H-based map")
+        self.overwrite_W_from_H_check.setChecked(self._overwrite_existing_W_from_H)
+        self.overwrite_W_from_H_check.setToolTip(
+            "If enabled, H-based W estimation replaces existing spectral W seeds. "
+            "If disabled, it only fills missing W columns."
+        )
+        self.overwrite_W_from_H_check.toggled.connect(
+            lambda state: setattr(self, "_overwrite_existing_W_from_H", bool(state))
+        )
+        wseed_layout.addWidget(self.overwrite_W_from_H_check)
+
         # Seed pixel metric
         metric_row = QtWidgets.QHBoxLayout()
         metric_row.setSpacing(10)
         metric_row.addWidget(QtWidgets.QLabel("H seed pixel metric:"))
-        seed_pixel_mode_dropdown = QtWidgets.QComboBox()
-        seed_pixel_mode_dropdown.addItems(["Max Intensity", "Score"])
-        seed_pixel_mode_dropdown.setCurrentIndex(0)
-        seed_pixel_mode_dropdown.currentTextChanged.connect(lambda text: setattr(self, "_seed_pixel_mode", text))
-        metric_row.addWidget(seed_pixel_mode_dropdown, 1)
+        self.seed_pixel_mode_dropdown = QtWidgets.QComboBox()
+        self.seed_pixel_mode_dropdown.addItems(["Max Intensity", "Score"])
+        self.seed_pixel_mode_dropdown.setCurrentIndex(0)
+        self.seed_pixel_mode_dropdown.currentTextChanged.connect(lambda text: setattr(self, "_seed_pixel_mode", text))
+        metric_row.addWidget(self.seed_pixel_mode_dropdown, 1)
         wseed_layout.addLayout(metric_row)
 
         right_layout.addWidget(wseed_gb)
@@ -464,6 +479,7 @@ class AnalysisManager(QtCore.QObject):
         1. Reload H seeds from ROIs
         2. Process spectral info (initialize also H components from it that are not yet defined via seed pixels)
         3. Rebuild W seeds from the chosen H-to-W method wherever an H seed exists
+           or only fill missing W columns, depending on the W overwrite setting
         4. Fill any remaining W seeds with a fallback image-based seed
         5. Randomly initialize only the H seeds that are still missing
         Parameters
@@ -486,8 +502,12 @@ class AnalysisManager(QtCore.QObject):
         seed_W, seed_H, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True,
                                                                             debug_mode=False)  # create W seeds from spectral info and pass to analyzer
 
-        logger.info('Rebuilding W seeds from the current H seeds using %s.', self.mv_analyzer.w_seed_mode)
-        self._rebuild_W_seeds_from_H(overwrite_existing=True)
+        logger.info(
+            'Updating W seeds from the current H seeds using %s (overwrite_existing=%s).',
+            self.mv_analyzer.w_seed_mode,
+            self._overwrite_existing_W_from_H,
+        )
+        self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
 
         logger.info('Filling remaining W seeds after H-based initialization.')
         # fill remaining W seeds
@@ -773,7 +793,7 @@ class AnalysisManager(QtCore.QObject):
         self._fixed_seed_W = {}
         self.reload_H_seeds_from_rois()
         _, _, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True, debug_mode=False)
-        self._rebuild_W_seeds_from_H(overwrite_existing=True)
+        self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
         self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
         # open a new floating composite_image with the W seeds in a pyqtgraph image view
         W_seed_3d = self.mv_analyzer.seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
@@ -1557,6 +1577,69 @@ class AnalysisManager(QtCore.QObject):
         # now propagate to analyzer + gaussian dummy ROIs + highlights
         self.update_spectral_info()
         self.highlight_all_resonances()
+
+    def export_seed_init_state(self) -> dict:
+        mode = self.mv_analyzer.w_seed_mode
+        if self.w_seed_mode_dropdown is not None:
+            mode = self.w_seed_mode_dropdown.itemData(self.w_seed_mode_dropdown.currentIndex())
+
+        seed_pixel_metric = self._seed_pixel_mode
+        if self.seed_pixel_mode_dropdown is not None:
+            seed_pixel_metric = self.seed_pixel_mode_dropdown.currentText()
+
+        return {
+            "w_seed_mode": mode,
+            "overwrite_existing_w_from_h": bool(self._overwrite_existing_W_from_H),
+            "seed_pixel_metric": seed_pixel_metric,
+        }
+
+    def import_seed_init_state(self, state: dict | list | tuple | None):
+        if state is None:
+            return
+
+        if isinstance(state, dict):
+            settings = dict(state)
+        elif isinstance(state, (list, tuple)) and len(state) >= 3:
+            full, avg, h_weighted = [bool(v) for v in state[:3]]
+            if h_weighted:
+                mode = "H weights"
+            elif full:
+                mode = "Homogeneous (empty)"
+            elif avg:
+                mode = "Average image"
+            else:
+                mode = "NNLS abundance map"
+            settings = {
+                "w_seed_mode": mode,
+                "overwrite_existing_w_from_h": False,
+            }
+        else:
+            return
+
+        mode = settings.get("w_seed_mode", "NNLS abundance map")
+        if self.w_seed_mode_dropdown is not None:
+            blocker = QtCore.QSignalBlocker(self.w_seed_mode_dropdown)
+            for idx in range(self.w_seed_mode_dropdown.count()):
+                if self.w_seed_mode_dropdown.itemData(idx) == mode:
+                    self.w_seed_mode_dropdown.setCurrentIndex(idx)
+                    break
+            del blocker
+        self.mv_analyzer.set_W_seed_mode(mode)
+
+        overwrite_existing = bool(settings.get("overwrite_existing_w_from_h", False))
+        self._overwrite_existing_W_from_H = overwrite_existing
+        if self.overwrite_W_from_H_check is not None:
+            blocker = QtCore.QSignalBlocker(self.overwrite_W_from_H_check)
+            self.overwrite_W_from_H_check.setChecked(overwrite_existing)
+            del blocker
+
+        seed_pixel_metric = settings.get("seed_pixel_metric")
+        if seed_pixel_metric in {"Max Intensity", "Score"}:
+            self._seed_pixel_mode = seed_pixel_metric
+            if self.seed_pixel_mode_dropdown is not None:
+                blocker = QtCore.QSignalBlocker(self.seed_pixel_mode_dropdown)
+                self.seed_pixel_mode_dropdown.setCurrentText(seed_pixel_metric)
+                del blocker
 
     def set_spectral_units(self, unit: str):
         unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"

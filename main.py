@@ -310,6 +310,7 @@ class MainApplication(QtWidgets.QMainWindow):
             "num_components": self.analysis_manager.num_components_spinbox.value(),
             "analysis_method": self.analysis_manager.mv_analyzer.analysis_method,
             "custom_model": self.analysis_manager.mv_analyzer.custom_nnmf_init,
+            "seed_init_settings": self.analysis_manager.export_seed_init_state(),
             "w_seed_settings": [self.analysis_manager.mv_analyzer.full_W_seed, self.analysis_manager.mv_analyzer.avg_W_seed,
                                 self.analysis_manager.mv_analyzer.H_weighted_W_seed],
 
@@ -410,6 +411,9 @@ class MainApplication(QtWidgets.QMainWindow):
         # 6) analysis settings + resonance table
         self.analysis_manager.num_components_spinbox.setValue(int(preset.get("num_components", 3)))
         self.analysis_manager.mv_analyzer.set_custom_nnmf_init(bool(preset.get("custom_model", True)))
+        self.analysis_manager.import_seed_init_state(
+            preset.get("seed_init_settings", preset.get("w_seed_settings"))
+        )
 
         rows = preset.get("spectral_preset", None)
         if rows is not None and hasattr(self.analysis_manager, "import_resonance_table_state"):

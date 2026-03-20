@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from datetime import datetime
 
@@ -9,6 +10,7 @@ from skimage.restoration import rolling_ball
 from sklearn.decomposition import PCA, NMF
 
 from contents.custom_pyqt_objects import ImageViewYX
+from contents import nnls_pytorch
 
 d_type = '16bit'
 
@@ -43,12 +45,20 @@ class MultivariateAnalyzer(object):
         self.prepared = None
         self.resonance_data_2d = None
         self.analysis_method = method
+        self.prefer_torch_nnls = True
+        self.torch_nnls_max_iter = 250
+        self.torch_nnls_tol = 1e-4
+        self.torch_nnls_chunk_size = 32768
+        self._nnls_abundance_cache = {}
         self.update_image_data(data, n_components, wavenumbers)
 
     def update_spectral_info(self, spectral_info: list[dict[str, float | int]]):
         self.spectral_info = spectral_info
         logger.info(f'MV Anaylzer: Updated spectral info: {self.spectral_info}')
         self._W_prepared = False
+
+    def _clear_nnls_abundance_cache(self):
+        self._nnls_abundance_cache = {}
 
     def update_image_data(self, data: np.ndarray, n_components: int, wavenumbers: np.ndarray):
         self.prepared = False
@@ -74,6 +84,7 @@ class MultivariateAnalyzer(object):
         self.full_W_seed = False
         self.H_weighted_W_seed = False
         self.w_seed_mode = 'nnls'
+        self._clear_nnls_abundance_cache()
         self.wavenumbers = wavenumbers
         if self.raw_data_3d is not None:
             logger.info(f'{self.raw_data_3d.shape=}')
@@ -87,6 +98,7 @@ class MultivariateAnalyzer(object):
 
     def update_resonance_image_data(self, data: np.ndarray):
         logger.info('Updated resonance/subtracted data in the MV analyzer')
+        self._clear_nnls_abundance_cache()
         # check if the emitted data is non-empty
         if data.size:
             self.resonance_data_zyx = data
@@ -106,6 +118,7 @@ class MultivariateAnalyzer(object):
 
     def update_components(self, n_components):
         self._n_components = n_components
+        self._clear_nnls_abundance_cache()
         if self.seed_H is not None:
             if self.seed_H.shape[0] < n_components:
                 # Add rows of ones to the seed matrix
@@ -154,14 +167,18 @@ class MultivariateAnalyzer(object):
         return any(bool(info.get('Use subtracted data', True)) for info in info_list)
 
     def _get_image_data_for_component(self, component_index: int, bgd: bool = False) -> np.ndarray:
+        image_data, _ = self._get_image_data_and_source_key(component_index, bgd=bgd)
+        return image_data
+
+    def _get_image_data_and_source_key(self, component_index: int, bgd: bool = False) -> tuple[np.ndarray, str]:
         if not self._component_prefers_subtracted_data(component_index, bgd=bgd):
             logger.info('Component %s uses raw data for W seed estimation.', component_index)
-            return self.data_2d
+            return self.data_2d, 'raw'
         if bgd:
             logger.info('Background component! Using raw data for W seed estimation.')
-            return self.data_2d
+            return self.data_2d, 'raw'
         logger.info('Using subtracted data for W seed estimation from H.')
-        return self.resonance_data_2d
+        return self.resonance_data_2d, 'subtracted'
 
     def _get_seed_basis(self, eps: float = 1e-8) -> tuple[np.ndarray, dict[int, int]]:
         if self.seed_H is None:
@@ -189,6 +206,113 @@ class MultivariateAnalyzer(object):
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
         working_data = np.maximum(working_data, 0.0)
         return np.maximum(working_data @ prepared_target, 0.0)
+
+    @staticmethod
+    def _make_nnls_cache_key(
+            basis: np.ndarray,
+            component_to_basis: dict[int, int],
+            source_key: str,
+            n_pixels: int,
+            backend_name: str,
+    ) -> tuple:
+        basis_components = tuple(
+            component for component, _ in sorted(component_to_basis.items(), key=lambda item: item[1])
+        )
+        basis_bytes = np.ascontiguousarray(basis, dtype=np.float64).view(np.uint8)
+        basis_hash = hashlib.sha1(basis_bytes).hexdigest()
+        return source_key, n_pixels, basis.shape, basis_components, basis_hash, backend_name
+
+    def _nnls_backend_name(self) -> str:
+        if self.prefer_torch_nnls and nnls_pytorch.cuda_available():
+            return 'torch-cuda'
+        return 'scipy-cpu'
+
+    def _build_scipy_nnls_abundance_matrix(
+            self,
+            image_data: np.ndarray,
+            basis: np.ndarray,
+            eps: float,
+    ) -> np.ndarray:
+        working_data = np.asarray(image_data, dtype=np.float64)
+        working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
+        working_data = np.maximum(working_data, 0.0)
+
+        abundance = np.full((working_data.shape[0], basis.shape[1]), eps, dtype=np.float32)
+        active_pixels = np.where(np.any(working_data > eps, axis=1))[0]
+        logger.info(
+            'Running SciPy NNLS abundance solve on %s active pixels with %s seed spectra.',
+            active_pixels.size,
+            basis.shape[1],
+        )
+        for pixel_index in active_pixels:
+            coeffs, _ = nnls(basis, working_data[pixel_index])
+            abundance[pixel_index] = np.maximum(coeffs, eps)
+        return abundance
+
+    def _build_nnls_abundance_matrix(
+            self,
+            image_data: np.ndarray,
+            basis: np.ndarray,
+            eps: float,
+            source_key: str,
+    ) -> np.ndarray:
+        if basis.shape[1] == 1:
+            working_data = np.asarray(image_data, dtype=np.float64)
+            working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
+            working_data = np.maximum(working_data, 0.0)
+            denom = float(np.dot(basis[:, 0], basis[:, 0])) + eps
+            abundance = np.full((working_data.shape[0], 1), eps, dtype=np.float32)
+            abundance[:, 0] = np.maximum((working_data @ basis[:, 0]) / denom, eps).astype(np.float32)
+            return abundance
+
+        if self.prefer_torch_nnls and nnls_pytorch.cuda_available():
+            try:
+                logger.info('Using PyTorch CUDA NNLS solver for %s data.', source_key)
+                abundance = nnls_pytorch.solve_batched_nnls_projected_gradient(
+                    image_data,
+                    basis,
+                    device='cuda',
+                    max_iter=self.torch_nnls_max_iter,
+                    tol=self.torch_nnls_tol,
+                    eps=eps,
+                    chunk_size=self.torch_nnls_chunk_size,
+                )
+                return np.maximum(abundance, eps).astype(np.float32, copy=False)
+            except Exception as exc:
+                logger.warning('PyTorch CUDA NNLS solver failed; falling back to SciPy NNLS. Error: %s', exc)
+
+        if self.prefer_torch_nnls and not nnls_pytorch.cuda_available():
+            if nnls_pytorch.torch_available():
+                logger.info('PyTorch is available but CUDA is not. Using SciPy NNLS fallback.')
+            elif nnls_pytorch.import_error() is not None:
+                logger.debug('PyTorch import unavailable: %s', nnls_pytorch.import_error())
+
+        return self._build_scipy_nnls_abundance_matrix(image_data, basis, eps)
+
+    def _get_cached_nnls_abundance_matrix(
+            self,
+            image_data: np.ndarray,
+            basis: np.ndarray,
+            component_to_basis: dict[int, int],
+            eps: float,
+            source_key: str,
+    ) -> np.ndarray:
+        backend_name = self._nnls_backend_name()
+        cache_key = self._make_nnls_cache_key(
+            basis,
+            component_to_basis,
+            source_key,
+            image_data.shape[0],
+            backend_name,
+        )
+        cached = self._nnls_abundance_cache.get(cache_key)
+        if cached is not None and cached.shape == (image_data.shape[0], basis.shape[1]):
+            logger.info('Reusing cached NNLS abundance matrix for %s data (%s).', source_key, backend_name)
+            return cached
+
+        abundance = self._build_nnls_abundance_matrix(image_data, basis, eps, source_key)
+        self._nnls_abundance_cache[cache_key] = abundance
+        return abundance
 
     def _estimate_selective_score_map(
             self,
@@ -220,7 +344,8 @@ class MultivariateAnalyzer(object):
             image_data: np.ndarray,
             component_index: int,
             prepared_target: np.ndarray,
-            eps: float
+            eps: float,
+            source_key: str,
     ) -> np.ndarray:
         basis, component_to_basis = self._get_seed_basis(eps=eps)
         if component_index not in component_to_basis:
@@ -228,26 +353,15 @@ class MultivariateAnalyzer(object):
                         component_index)
             return np.maximum(self._project_target_strength(image_data, prepared_target), eps)
 
-        working_data = np.asarray(image_data, dtype=np.float64)
-        working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
-        working_data = np.maximum(working_data, 0.0)
-
         target_basis_index = component_to_basis[component_index]
-        if basis.shape[1] == 1:
-            denom = float(np.dot(basis[:, 0], basis[:, 0])) + eps
-            abundance = np.maximum((working_data @ basis[:, 0]) / denom, eps)
-            return abundance
-
-        abundance = np.full(working_data.shape[0], eps, dtype=np.float64)
-        active_pixels = np.where(np.any(working_data > eps, axis=1))[0]
-        logger.info('Running NNLS abundance map for component %s on %s active pixels with %s seed spectra.',
-                    component_index, active_pixels.size, basis.shape[1])
-
-        for pixel_index in active_pixels:
-            coeffs, _ = nnls(basis, working_data[pixel_index])
-            abundance[pixel_index] = max(coeffs[target_basis_index], eps)
-
-        return abundance
+        abundance = self._get_cached_nnls_abundance_matrix(
+            image_data,
+            basis,
+            component_to_basis,
+            eps,
+            source_key,
+        )
+        return np.maximum(abundance[:, target_basis_index], eps)
 
     def standardize_and_reshape_data(self):
         """
@@ -342,6 +456,7 @@ class MultivariateAnalyzer(object):
         self.seed_H = np.zeros((self._n_components, self.raw_data_3d.shape[0]))
         self.seed_H_background_flag = np.zeros(self._n_components, dtype=bool)
         self.seed_W = np.zeros((self.data_2d.shape[0], self._n_components))
+        self._clear_nnls_abundance_cache()
 
     def set_H_seed(self, component: int, spectrum: np.array, flag_background:bool=False) -> None:
         if self.seed_H is None:
@@ -355,6 +470,7 @@ class MultivariateAnalyzer(object):
             raise ShapeError(self.raw_data_3d.shape[0], spectrum.shape)
 
         self._W_prepared = False
+        self._clear_nnls_abundance_cache()
 
 
     def set_W_seed_mode(self, mode: str):
@@ -465,6 +581,7 @@ class MultivariateAnalyzer(object):
         logger.info(f'added jitter to average component {i}')
         # rescale the curve such that its average equals the average of the data
         self.seed_H[i] = self.seed_H[i] * avg_intensity / np.mean(self.seed_H[i], axis=None)
+        self._clear_nnls_abundance_cache()
 
 
     def set_up_missing_W_seeds(self, skip_spectral_info=False, fill_H_seed: bool = True) -> bool:
@@ -503,6 +620,7 @@ class MultivariateAnalyzer(object):
             if self.seed_H_background_flag[cmp]:
                 logger.info(f'Component {cmp} is marked as background, using raw data for H seed estimation')
                 self.seed_H[cmp] = np.mean(self.data_2d, axis=1)
+                self._clear_nnls_abundance_cache()
                 return True
             self.set_up_random_H_seed(cmp)
         return True
@@ -715,7 +833,7 @@ class MultivariateAnalyzer(object):
             W_image = np.mean(self.data_2d, axis=1)
             return np.maximum(W_image, eps)
 
-        image_data = self._get_image_data_for_component(component_index, bgd=bgd)
+        image_data, source_key = self._get_image_data_and_source_key(component_index, bgd=bgd)
 
         n_pixels, n_bands = image_data.shape
 
@@ -723,7 +841,7 @@ class MultivariateAnalyzer(object):
         # 1) NEW SELECTIVE MODES
         # ------------------------------------------------------------------
         if self.w_seed_mode == 'nnls':
-            return self._estimate_nnls_abundance_map(image_data, component_index, prepared_target, eps)
+            return self._estimate_nnls_abundance_map(image_data, component_index, prepared_target, eps, source_key)
 
         if self.w_seed_mode == 'selective_score':
             return self._estimate_selective_score_map(image_data, component_index, prepared_target, eps)

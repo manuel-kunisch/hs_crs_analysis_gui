@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sys
 
 import numpy as np
@@ -295,6 +296,33 @@ class MainApplication(QtWidgets.QMainWindow):
             self.result_viewer_widget.make_color_state(index, state, color_states[index])
         logger.info('Loaded %s saved histogram color states from preset.', len(v_min_vmax_states))
 
+    def _try_load_preset_image(self, preset: dict, preset_file_path: str) -> bool:
+        img_path = preset.get("image_path", None)
+        if not img_path or not isinstance(img_path, str):
+            logger.info("Preset does not contain a valid image path. Continuing without TIFF.")
+            return False
+
+        preset_dir = os.path.dirname(preset_file_path)
+        fallback_path = os.path.join(preset_dir, os.path.basename(img_path))
+        candidates = []
+        for candidate in (img_path, fallback_path):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+
+        for candidate in candidates:
+            if not os.path.isfile(candidate):
+                logger.info("Preset image candidate not found: %s", candidate)
+                continue
+            try:
+                self.data_handler.loader_widget.load_tiff(candidate)
+                logger.info("Loaded preset image from %s", candidate)
+                return True
+            except Exception as exc:
+                logger.warning("Failed to load preset image from %s: %s", candidate, exc)
+
+        logger.warning("Could not resolve preset TIFF. Continuing with ROI/settings import only.")
+        return False
+
     def save_state(self):
         preset = {
             "image_path": self.data_handler.loader_widget.current_path,
@@ -350,14 +378,7 @@ class MainApplication(QtWidgets.QMainWindow):
 
         # ---- ORDER MATTERS ----
         # 1) load image (so n_frames/shape exist)
-        img_path = preset.get("image_path", None)
-        if img_path and isinstance(img_path, str):
-            try:
-                self.data_handler.loader_widget.load_tiff(img_path)
-            except Exception:
-                pass
-        elif preset.get("image", None) is not None:
-            self.data_handler.loader_widget.image = np.asarray(preset["image"])
+        image_loaded = self._try_load_preset_image(preset, path)
 
         # 2) binning (BEFORE ROIs)
         try:
@@ -406,7 +427,13 @@ class MainApplication(QtWidgets.QMainWindow):
         # 5) ROIs (after image+binning+wavenumbers exist)
         roi_state = preset.get("roi_manager", None)
         if roi_state and hasattr(self.data_widget.roi_manager, "import_state"):
-            self.data_widget.roi_manager.import_state(roi_state)
+            try:
+                self.data_widget.roi_manager.import_state(roi_state)
+            except Exception as exc:
+                if image_loaded:
+                    logger.warning("Failed to import ROI state from preset: %s", exc)
+                else:
+                    logger.warning("Preset image is missing; ROI import could not be restored: %s", exc)
 
         # 6) analysis settings + resonance table
         self.analysis_manager.num_components_spinbox.setValue(int(preset.get("num_components", 3)))

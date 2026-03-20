@@ -338,6 +338,8 @@ class MainApplication(QtWidgets.QMainWindow):
             "num_components": self.analysis_manager.num_components_spinbox.value(),
             "analysis_method": self.analysis_manager.mv_analyzer.analysis_method,
             "custom_model": self.analysis_manager.mv_analyzer.custom_nnmf_init,
+            "nnmf_solver": self.analysis_manager.mv_analyzer.nnmf_solver,
+            "nnmf_backend": self.analysis_manager.mv_analyzer.nnmf_backend_preference,
             "seed_init_settings": self.analysis_manager.export_seed_init_state(),
             "w_seed_settings": [self.analysis_manager.mv_analyzer.full_W_seed, self.analysis_manager.mv_analyzer.avg_W_seed,
                                 self.analysis_manager.mv_analyzer.H_weighted_W_seed],
@@ -438,6 +440,30 @@ class MainApplication(QtWidgets.QMainWindow):
         # 6) analysis settings + resonance table
         self.analysis_manager.num_components_spinbox.setValue(int(preset.get("num_components", 3)))
         self.analysis_manager.mv_analyzer.set_custom_nnmf_init(bool(preset.get("custom_model", True)))
+        nnmf_solver = str(preset.get("nnmf_solver", "mu")).lower()
+        if nnmf_solver not in {"cd", "mu"}:
+            nnmf_solver = "mu"
+        if self.analysis_manager.nnmf_solver_dropdown is not None:
+            solver_index = self.analysis_manager.nnmf_solver_dropdown.findData(nnmf_solver)
+            if solver_index >= 0:
+                self.analysis_manager.nnmf_solver_dropdown.setCurrentIndex(solver_index)
+            else:
+                self.analysis_manager.mv_analyzer.set_nnmf_solver("mu")
+        else:
+            self.analysis_manager.mv_analyzer.set_nnmf_solver(nnmf_solver)
+
+        nnmf_backend = str(preset.get("nnmf_backend", "auto")).lower()
+        if nnmf_backend not in {"auto", "cpu", "gpu"}:
+            nnmf_backend = "auto"
+        if self.analysis_manager.nnmf_backend_dropdown is not None:
+            backend_index = self.analysis_manager.nnmf_backend_dropdown.findData(nnmf_backend)
+            if backend_index >= 0:
+                self.analysis_manager.nnmf_backend_dropdown.setCurrentIndex(backend_index)
+            else:
+                self.analysis_manager.mv_analyzer.set_nnmf_backend_preference("auto")
+            self.analysis_manager._sync_nnmf_backend_controls()
+        else:
+            self.analysis_manager.mv_analyzer.set_nnmf_backend_preference(nnmf_backend)
         self.analysis_manager.import_seed_init_state(
             preset.get("seed_init_settings", preset.get("w_seed_settings"))
         )

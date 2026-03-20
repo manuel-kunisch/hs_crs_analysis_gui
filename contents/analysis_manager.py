@@ -76,6 +76,8 @@ class AnalysisManager(QtCore.QObject):
         self.w_seed_mode_dropdown: QtWidgets.QComboBox | None = None
         self.overwrite_W_from_H_check: QtWidgets.QCheckBox | None = None
         self.seed_pixel_mode_dropdown: QtWidgets.QComboBox | None = None
+        self.nnmf_solver_dropdown: QtWidgets.QComboBox | None = None
+        self.nnmf_backend_dropdown: QtWidgets.QComboBox | None = None
 
         # set up thread for analysis
         self.thread_analysis = QtCore.QThread()
@@ -225,8 +227,8 @@ class AnalysisManager(QtCore.QObject):
         self.num_components_spinbox.setFixedWidth(80)
         self.num_components_spinbox.valueChanged.connect(lambda n: self.mv_analyzer.update_components(n))
 
-        analysis_layout.addWidget(comp_label, 0, 1, 1, 1)
-        analysis_layout.addWidget(self.num_components_spinbox, 0, 2, 1, 1)
+        analysis_layout.addWidget(comp_label, 2, 1, 1, 1)
+        analysis_layout.addWidget(self.num_components_spinbox, 2, 2, 1, 1)
 
         # Custom init
         custom_init_check = QtWidgets.QCheckBox("Custom initialization (NNMF)")
@@ -236,7 +238,45 @@ class AnalysisManager(QtCore.QObject):
         custom_init_check.stateChanged.connect(self.mv_analyzer.set_custom_nnmf_init)
         self.mv_analyzer.set_custom_nnmf_init(custom_init_check.isChecked())
 
-        analysis_layout.addWidget(custom_init_check, 1, 1, 1, 2)
+        analysis_layout.addWidget(custom_init_check, 2, 3, 1, 2)
+
+        solver_label = QtWidgets.QLabel("NNMF solver:")
+        solver_label.setToolTip("Choose the scikit-learn NMF solver. 'cd' is usually faster on CPU; 'mu' is the legacy multiplicative-update path.")
+        self.nnmf_solver_dropdown = QtWidgets.QComboBox()
+        self.nnmf_solver_dropdown.addItem("Coordinate Descent (cd)", "cd")
+        self.nnmf_solver_dropdown.addItem("Multiplicative Updates (mu)", "mu")
+        self.nnmf_solver_dropdown.setToolTip(solver_label.toolTip())
+        self.nnmf_solver_dropdown.currentIndexChanged.connect(
+            lambda index: (
+                self.mv_analyzer.set_nnmf_solver(self.nnmf_solver_dropdown.itemData(index)),
+                self._sync_nnmf_backend_controls()
+            )
+        )
+        self.nnmf_solver_dropdown.setCurrentIndex(1)
+        self.mv_analyzer.set_nnmf_solver(self.nnmf_solver_dropdown.itemData(1))
+        analysis_layout.addWidget(solver_label, 0, 1, 1, 1)
+        analysis_layout.addWidget(self.nnmf_solver_dropdown, 0, 2, 1, 2)
+
+        backend_label = QtWidgets.QLabel("NNMF backend:")
+        backend_label.setToolTip(
+            "Controls GPU use for multiplicative-update NNMF. "
+            "'cd' always runs on the scikit-learn CPU backend."
+        )
+        self.nnmf_backend_dropdown = QtWidgets.QComboBox()
+        self.nnmf_backend_dropdown.addItem("Automatic", "auto")
+        self.nnmf_backend_dropdown.addItem("CPU only", "cpu")
+        self.nnmf_backend_dropdown.addItem("Prefer GPU", "gpu")
+        self.nnmf_backend_dropdown.setToolTip(backend_label.toolTip())
+        self.nnmf_backend_dropdown.currentIndexChanged.connect(
+            lambda index: self.mv_analyzer.set_nnmf_backend_preference(
+                self.nnmf_backend_dropdown.itemData(index)
+            )
+        )
+        self.nnmf_backend_dropdown.setCurrentIndex(0)
+        self.mv_analyzer.set_nnmf_backend_preference(self.nnmf_backend_dropdown.itemData(0))
+        analysis_layout.addWidget(backend_label, 1, 1, 1, 1)
+        analysis_layout.addWidget(self.nnmf_backend_dropdown, 1, 2, 1, 2)
+        self._sync_nnmf_backend_controls()
 
         top_row.addWidget(analysis_group_box)
 
@@ -618,6 +658,12 @@ class AnalysisManager(QtCore.QObject):
 
     def update_analysis_method(self, method):
         self.mv_analyzer.analysis_method = method
+
+    def _sync_nnmf_backend_controls(self):
+        if self.nnmf_backend_dropdown is None:
+            return
+        use_backend_selector = self.mv_analyzer.nnmf_solver == "mu"
+        self.nnmf_backend_dropdown.setEnabled(use_backend_selector)
 
     def get_analysis_data(self) -> (np.ndarray, np.ndarray):
         if self.pca_radio.isChecked():

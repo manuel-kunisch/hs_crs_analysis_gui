@@ -140,7 +140,7 @@ class PhysicalUnitsManager:
         logger.info(f"Image dimensions updated: {self.image_shape}")
         # recalculate the fov
         if self.image_shape is not None:
-            # image shape in the format (width, height)
+            # FOV is stored/displayed as (width, height).
             self.fov = (self.image_shape[1] * self.pixel_size, self.image_shape[0] * self.pixel_size)
             self.widget.fov_input.setText(f"{self.fov[0]:.2f}, {self.fov[1]:.2f}")
         else:
@@ -155,7 +155,7 @@ class PhysicalUnitsManager:
     def update_pixel_size(self, pixel_size: float):
         self.pixel_size = pixel_size
         if self.image_shape:
-            self.fov = tuple(dim * self.pixel_size for dim in self.image_shape)
+            self.fov = (self.image_shape[1] * self.pixel_size, self.image_shape[0] * self.pixel_size)
         self.widget.fov_input.setText(f"{self.fov[0]:.2f}, {self.fov[1]:.2f}")
         self.dimensions_updated()
 

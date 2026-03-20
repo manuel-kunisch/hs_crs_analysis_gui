@@ -11,6 +11,7 @@ from sklearn.decomposition import PCA, NMF
 
 from contents.custom_pyqt_objects import ImageViewYX
 from contents import nnls_pytorch
+from contents import torch_nmf
 
 d_type = '16bit'
 
@@ -45,6 +46,11 @@ class MultivariateAnalyzer(object):
         self.prepared = None
         self.resonance_data_2d = None
         self.analysis_method = method
+        self.nnmf_solver = 'mu'
+        self.nnmf_backend_preference = 'auto'
+        self.prefer_torch_nmf = True
+        self.torch_nmf_max_iter = 5000
+        self.torch_nmf_tol = 1e-4
         self.prefer_torch_nnls = True
         self.torch_nnls_max_iter = 250
         self.torch_nnls_tol = 1e-4
@@ -132,6 +138,142 @@ class MultivariateAnalyzer(object):
 
     def set_custom_nnmf_init(self, state):
         self.custom_nnmf_init = state
+
+    def set_nnmf_solver(self, solver: str):
+        solver = (solver or 'mu').strip().lower()
+        if solver not in {'cd', 'mu'}:
+            raise ValueError(f"Unsupported NMF solver '{solver}'. Expected 'cd' or 'mu'.")
+        self.nnmf_solver = solver
+        logger.info("NNMF solver updated to %s", self.nnmf_solver)
+
+    def set_nnmf_backend_preference(self, mode: str):
+        mode = (mode or 'auto').strip().lower()
+        if mode not in {'auto', 'cpu', 'gpu'}:
+            raise ValueError(f"Unsupported NMF backend preference '{mode}'. Expected 'auto', 'cpu', or 'gpu'.")
+        self.nnmf_backend_preference = mode
+        logger.info("NNMF backend preference updated to %s", self.nnmf_backend_preference)
+
+    def _resolve_torch_nmf_device(self) -> str | None:
+        """
+        Find the best available device for PyTorch NMF based on user preference and availability.
+        If user prefers GPU but it's unavailable, falls back to CPU with a warning. If PyTorch is unavailable, returns None.
+        If auto and GPU is available, returns 'cuda', otherwise 'cpu'.
+        """
+        if not self.prefer_torch_nmf:
+            return None
+
+        if self.nnmf_backend_preference == 'cpu':
+            return None
+
+        if not torch_nmf.torch_available():
+            return None
+
+        if self.nnmf_backend_preference == 'gpu':
+            if torch_nmf.cuda_available():
+                return 'cuda'
+            logger.info("NNMF backend is set to prefer GPU, but CUDA is unavailable. Falling back to CPU.")
+            return 'cpu'
+
+        if torch_nmf.cuda_available():
+            return 'cuda'
+        return 'cpu'
+
+    def _run_torch_mu_nmf(
+            self,
+            data: np.ndarray,
+            *,
+            w_init: np.ndarray | None = None,
+            h_init: np.ndarray | None = None,
+            device: str | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, dict]:
+        """
+        Run multiplicative updates NMF using the PyTorch backend
+        """
+        device = device or self._resolve_torch_nmf_device()
+        if device is None:
+            raise RuntimeError("PyTorch NMF backend is not available.")
+        logger.info("Running PyTorch MU-NMF on %s.", device)
+        return torch_nmf.solve_nmf_multiplicative_updates(
+            data,
+            n_components=self._n_components,
+            w_init=w_init,
+            h_init=h_init,
+            device=device,
+            max_iter=self.torch_nmf_max_iter,
+            tol=self.torch_nmf_tol,
+            eps=getattr(self, "nnmf_epsilon", 1e-8),
+            seed=0,
+        )
+
+    def _fit_nmf_backend(
+            self,
+            data: np.ndarray,
+            *,
+            init: str,
+            w_init: np.ndarray | None = None,
+            h_init: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, dict]:
+        """
+        Fit NMF to the data using the specified solver and backend preferences.
+         - If multiplicative updates (MU) solver is selected and PyTorch backend is available, it will attempt to use it.
+         - If PyTorch MU fails for any reason, it will log the error and fall back to scikit-learn's MU implementation.
+         - For coordinate descent (CD) solver or if CPU backend is preferred, it will use scikit-learn's implementation directly.
+         - Returns the factorized matrices W and H, along with an info dictionary containing metadata about the fit.
+         - The info dictionary includes the backend used, solver type, number of iterations, and model parameters.
+         - This method ensures that the best available computational resources are utilized while providing robust fallbacks.
+         - The input data is converted to float32 for compatibility with both backends.
+         - Custom initializations for W and H can be provided when using the 'custom' init mode.
+         - The method handles exceptions gracefully, ensuring that a failure in one backend does not prevent analysis from proceeding.
+         - Logging is used extensively to inform about which backend is being used and any issues encountered.
+        """
+        data_f32 = np.asarray(data, dtype=np.float32)
+
+        torch_device = self._resolve_torch_nmf_device() if self.nnmf_solver == 'mu' else None
+        if self.nnmf_solver == 'mu' and torch_device is not None:
+            # early return if PyTorch MU-NMF succeeds, otherwise log and fall back to CPU MU or CD as needed
+            try:
+                fixed_W, fixed_H, info = self._run_torch_mu_nmf(
+                    data_f32,
+                    w_init=w_init,
+                    h_init=h_init,
+                    device=torch_device,
+                )
+                info = dict(info)
+                info["backend"] = "torch"
+                return fixed_W, fixed_H, info
+            except Exception as exc:
+                if torch_nmf.import_error() is not None and not torch_nmf.torch_available():
+                    logger.info("PyTorch NMF unavailable; using scikit-learn MU fallback. Reason: %s", torch_nmf.import_error())
+                else:
+                    logger.warning("PyTorch NMF failed; falling back to scikit-learn MU. Error: %s", exc)
+        elif self.nnmf_solver == 'mu' and self.nnmf_backend_preference == 'cpu':
+            logger.info("NNMF backend preference is CPU only; using scikit-learn MU backend.")
+        # ====
+        # CPU fallback for MU or CD solver
+        # For 'cd' solver or if CPU backend is preferred, use scikit-learn's implementation directly
+        nnmf_model = NMF(
+            n_components=self._n_components,
+            init=init,
+            random_state=0,
+            max_iter=1000,
+            solver=self.nnmf_solver,
+        )
+        if init == 'custom':
+            fixed_W = nnmf_model.fit_transform(
+                data_f32,
+                H=np.asarray(h_init, dtype=np.float32),
+                W=np.asarray(w_init, dtype=np.float32),
+            )
+        else:
+            fixed_W = nnmf_model.fit_transform(data_f32)
+        fixed_H = nnmf_model.components_
+        info = {
+            "backend": "sklearn",
+            "solver": self.nnmf_solver,
+            "n_iter": int(nnmf_model.n_iter_),
+            "params": nnmf_model.get_params(),
+        }
+        return fixed_W, fixed_H, info
 
     @staticmethod
     def _has_seed_signal(spectrum: np.ndarray | None, eps: float = 1e-8) -> bool:
@@ -439,18 +581,20 @@ class MultivariateAnalyzer(object):
         self.pca_ready = True
 
     def randomNNMF(self) -> None:
-        nnmf_model = NMF(n_components=self._n_components, init='random', random_state=0, max_iter=1000, solver='mu')
         logger.info(f'{self.data_2d.shape =}')
-        self.fixed_W = nnmf_model.fit_transform(self.data_2d)
-        self.fixed_H = nnmf_model.components_
+        self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(self.data_2d, init='random')
         normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
         # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
         self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H * normalization_factor
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
         logger.info("Random NNMF outcome:")
-        logger.info("#Iter: {}".format(nnmf_model.n_iter_))
-        logger.info("Parameter: \n {}".format(nnmf_model.get_params))
+        logger.info("Backend: %s", fit_info.get("backend"))
+        logger.info("#Iter: %s", fit_info.get("n_iter"))
+        if fit_info.get("backend") == "sklearn":
+            logger.info("Parameter: \n %s", fit_info.get("params"))
+        else:
+            logger.info("Torch info: %s", fit_info)
 
     def reset_seeds(self):
         self.seed_H = np.zeros((self._n_components, self.raw_data_3d.shape[0]))
@@ -964,21 +1108,27 @@ class MultivariateAnalyzer(object):
 
         logger.info(f'{datetime.now()}: Starting NNMF with custom seeds')
 
-        nnmf_model = NMF(n_components=self._n_components, init='custom', random_state=0, max_iter=1000, solver='mu')
         logger.info(f'{self.data_2d.shape =}')
         # copy the seeds because otherwise the model will overwrite the seed values
 
         # check the dtype of the data and seeds to be all float32
 
-        self.fixed_W = nnmf_model.fit_transform(self.data_2d, H=self.seed_H.astype(np.float32), W=self.seed_W.astype(np.float32))
-        self.fixed_H = nnmf_model.components_
+        self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(
+            self.data_2d,
+            init='custom',
+            w_init=self.seed_W.astype(np.float32),
+            h_init=self.seed_H.astype(np.float32),
+        )
         normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
         # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
         self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
-        logger.info("Custom NNMF outcome: #Iter: {}".format(nnmf_model.n_iter_))
-        logger.info("Parameter: \n {}".format(nnmf_model.get_params))
+        logger.info("Custom NNMF outcome: backend=%s, #Iter=%s", fit_info.get("backend"), fit_info.get("n_iter"))
+        if fit_info.get("backend") == "sklearn":
+            logger.info("Parameter: \n %s", fit_info.get("params"))
+        else:
+            logger.info("Torch info: %s", fit_info)
         return True
 
     def reset_results(self):

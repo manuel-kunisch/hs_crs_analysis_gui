@@ -155,9 +155,8 @@ class MultivariateAnalyzer(object):
 
     def _resolve_torch_nmf_device(self) -> str | None:
         """
-        Find the best available device for PyTorch NMF based on user preference and availability.
-        If user prefers GPU but it's unavailable, falls back to CPU with a warning. If PyTorch is unavailable, returns None.
-        If auto and GPU is available, returns 'cuda', otherwise 'cpu'.
+        Resolve the PyTorch NMF device from the backend preference.
+        Returns None when the torch backend should not be used.
         """
         if not self.prefer_torch_nmf:
             return None
@@ -214,23 +213,15 @@ class MultivariateAnalyzer(object):
             h_init: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, dict]:
         """
-        Fit NMF to the data using the specified solver and backend preferences.
-         - If multiplicative updates (MU) solver is selected and PyTorch backend is available, it will attempt to use it.
-         - If PyTorch MU fails for any reason, it will log the error and fall back to scikit-learn's MU implementation.
-         - For coordinate descent (CD) solver or if CPU backend is preferred, it will use scikit-learn's implementation directly.
-         - Returns the factorized matrices W and H, along with an info dictionary containing metadata about the fit.
-         - The info dictionary includes the backend used, solver type, number of iterations, and model parameters.
-         - This method ensures that the best available computational resources are utilized while providing robust fallbacks.
-         - The input data is converted to float32 for compatibility with both backends.
-         - Custom initializations for W and H can be provided when using the 'custom' init mode.
-         - The method handles exceptions gracefully, ensuring that a failure in one backend does not prevent analysis from proceeding.
-         - Logging is used extensively to inform about which backend is being used and any issues encountered.
+        Fit NMF with the configured solver and backend preference.
+        For MU, the torch backend is tried first when enabled.
+        CD always uses the scikit-learn implementation.
         """
         data_f32 = np.asarray(data, dtype=np.float32)
 
         torch_device = self._resolve_torch_nmf_device() if self.nnmf_solver == 'mu' else None
         if self.nnmf_solver == 'mu' and torch_device is not None:
-            # early return if PyTorch MU-NMF succeeds, otherwise log and fall back to CPU MU or CD as needed
+            # Use the torch MU path when available; otherwise continue with sklearn below.
             try:
                 fixed_W, fixed_H, info = self._run_torch_mu_nmf(
                     data_f32,
@@ -248,9 +239,7 @@ class MultivariateAnalyzer(object):
                     logger.warning("PyTorch NMF failed; falling back to scikit-learn MU. Error: %s", exc)
         elif self.nnmf_solver == 'mu' and self.nnmf_backend_preference == 'cpu':
             logger.info("NNMF backend preference is CPU only; using scikit-learn MU backend.")
-        # ====
-        # CPU fallback for MU or CD solver
-        # For 'cd' solver or if CPU backend is preferred, use scikit-learn's implementation directly
+        # scikit-learn backend for CD and for the MU fallback path
         nnmf_model = NMF(
             n_components=self._n_components,
             init=init,
@@ -958,7 +947,7 @@ class MultivariateAnalyzer(object):
         """
         Estimate a *strictly positive* W seed for one component given its H seed.
 
-        The active method is controlled by ``self.w_seed_mode``:
+        The method is selected by ``self.w_seed_mode``:
         - ``nnls``: non-negative least-squares abundance map from all available H seeds
         - ``selective_score``: target projection weighted by its selectivity against competing H seeds
         - ``h_weighted``: legacy exponential H-weighted average
@@ -1147,9 +1136,9 @@ class MultivariateAnalyzer(object):
         self.seed_W = None
         self._W_prepared = False
 
-    # Optional matplotlib inspection helpers
+    # Optional matplotlib helpers for manual inspection.
     def plot_PCA_mpl(self):
-        # Convenience helper for offline inspection of PCA components.
+        # Plot PCA spectra and score images with matplotlib.
         for i in range(0, self._n_components):  # only plot the interesting components
             l, = plt.plot(self.PCs[i, :], label=f"PC {i:.0f}")
             # self.ax1_lines.append(l)
@@ -1171,7 +1160,7 @@ class MultivariateAnalyzer(object):
         plt.show()
 
     def plot_nnmf_mpl(self):
-        # Convenience helper for offline inspection of NNMF results.
+        # Plot NNMF spectra and component images with matplotlib.
         # loadings
         for i in range(0, self._n_components):  # only plot the interesting components
             l, = plt.plot(self.fixed_H[i, :], label=fr" H {i:.0f}")

@@ -108,9 +108,8 @@ def solve_nmf_multiplicative_updates(
         W     : (n_samples, n_components)
         H     : (n_components, n_features)
 
-    This is the GPU-friendly algorithm to try first in PyTorch. It is usually
-    slower to converge than sklearn's coordinate-descent NMF on CPU, but it maps
-    cleanly to CUDA because it consists of dense matrix multiplies and pointwise ops.
+    This implementation uses dense matrix products and pointwise updates, so it
+    can run on either CPU or CUDA through PyTorch.
     """
     if not torch_available():
         raise RuntimeError(f"PyTorch is not available: {_TORCH_IMPORT_ERROR}")
@@ -158,10 +157,8 @@ def solve_nmf_multiplicative_updates(
         update_h,
     )
 
-    """
-    Main loop: iteratively update W and H with multiplicative rules. 
-    Optionally track reconstruction error every few iterations and check for convergence based on relative improvement.
-    """
+    # Multiplicative updates for W and H. The reconstruction error is sampled
+    # every few iterations and used as the stopping criterion.
     for iteration in range(1, int(max_iter) + 1):
         # Update W: W_ij *= (X @ H^T)_ij / (W @ H @ H^T)_ij
         if update_w:
@@ -199,7 +196,7 @@ def solve_nmf_multiplicative_updates(
                     break
             prev_error = current_error
 
-    # Convert the final W and H matrices back to NumPy arrays on the CPU
+    # Return NumPy arrays for the rest of the analysis pipeline.
     w_out = w.detach().cpu().numpy().astype(np.float32, copy=False)
     h_out = h.detach().cpu().numpy().astype(np.float32, copy=False)
     final_error = reconstruction_error(x_np, w_out, h_out)

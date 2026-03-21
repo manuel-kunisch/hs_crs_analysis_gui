@@ -490,7 +490,7 @@ class MainApplication(QtWidgets.QMainWindow):
 
         hist = preset.get("histogram_states", None)
         if isinstance(hist, dict):
-            # best-effort: recreate color states immediately
+            # Restore saved color states when available.
             for k, st in hist.items():
                 try:
                     idx = int(k)

@@ -239,9 +239,8 @@ class CrossCorrelationStitcher:
         tile_process_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None
     ) -> np.ndarray:
         """
-        One-shot convenience method: parse filenames, load images, stitch.
-
-        This is the method you probably want to call from a QThread in the GUI.
+        Parse filenames, load images, and stitch them in one call.
+        Use this method from the GUI worker thread.
         """
         data, lookup_x, lookup_y = self.build_dataset_from_files(files, loader=loader, tile_process_fn=tile_process_fn)
         return self.stitch(data, lookup_x, lookup_y)

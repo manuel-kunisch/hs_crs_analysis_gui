@@ -66,6 +66,7 @@ class AnalysisManager(QtCore.QObject):
         self.z3D_data = None
         # add an attribute to store fixed W components for NNMF
         self._fixed_seed_W: dict[int, np.ndarray] = {}  # component -> (n_pixels,) float32
+        self._fixed_seed_W_counts: dict[int, int] = {}  # component -> number of fixed W maps averaged into the stored mean
         self.wavenumbers = None
 
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
@@ -78,6 +79,7 @@ class AnalysisManager(QtCore.QObject):
         self.seed_pixel_mode_dropdown: QtWidgets.QComboBox | None = None
         self.nnmf_solver_dropdown: QtWidgets.QComboBox | None = None
         self.nnmf_backend_dropdown: QtWidgets.QComboBox | None = None
+        self.custom_init_check: QtWidgets.QCheckBox | None = None
 
         # set up thread for analysis
         self.thread_analysis = QtCore.QThread()
@@ -225,7 +227,7 @@ class AnalysisManager(QtCore.QObject):
         )
         self.num_components_spinbox.setToolTip(comp_label.toolTip())
         self.num_components_spinbox.setFixedWidth(80)
-        self.num_components_spinbox.valueChanged.connect(lambda n: self.mv_analyzer.update_components(n))
+        self.num_components_spinbox.valueChanged.connect(self._handle_component_count_changed)
 
         analysis_layout.addWidget(comp_label, 2, 1, 1, 1)
         analysis_layout.addWidget(self.num_components_spinbox, 2, 2, 1, 1)
@@ -237,6 +239,7 @@ class AnalysisManager(QtCore.QObject):
         custom_init_check.setChecked(True)
         custom_init_check.stateChanged.connect(self.mv_analyzer.set_custom_nnmf_init)
         self.mv_analyzer.set_custom_nnmf_init(custom_init_check.isChecked())
+        self.custom_init_check = custom_init_check
 
         analysis_layout.addWidget(custom_init_check, 2, 3, 1, 2)
 
@@ -510,6 +513,74 @@ class AnalysisManager(QtCore.QObject):
         logger.info(f'{datetime.now()}: Analysis started')
         logger.info(f"{'-' * 50}")
 
+    def _handle_component_count_changed(self, n_components: int):
+        self.mv_analyzer.update_components(n_components)
+
+    def import_current_result_component(self, target: str, component_index: int) -> bool:
+        """
+        Main input point to set ROIs with dummy data for W and H in the ROI Manager.
+        Works with references of the NNMF result `fixed_W` and `fixed_H`.
+        These dummy ROIs will be evaluated during the subsequent seed generation process.
+        """
+        mode = (target or "").strip().lower()
+        if mode not in {"h", "w", "both"}:
+            logger.warning('Unknown result-to-seed target requested: %s', target)
+            return False
+
+        fixed_H = self.mv_analyzer.fixed_H
+        fixed_W = self.mv_analyzer.fixed_W
+        if fixed_H is None or fixed_W is None:
+            QtWidgets.QMessageBox.warning(
+                self.analysis_widget,
+                "No NNMF result available",
+                "Run NNMF first before copying the current result into the seed initialization.",
+            )
+            return False
+
+        expected_H_shape = (self.mv_analyzer.get_n_components(), self.mv_analyzer.raw_data_3d.shape[0])
+        expected_W_shape = (self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components())
+        fixed_H = np.asarray(fixed_H, dtype=np.float64)
+        fixed_W = np.asarray(fixed_W, dtype=np.float64)
+        if fixed_H.shape != expected_H_shape or fixed_W.shape != expected_W_shape:
+            QtWidgets.QMessageBox.warning(
+                self.analysis_widget,
+                "Result/seed shape mismatch",
+                "The current NNMF result no longer matches the loaded dataset or component count.",
+            )
+            logger.warning(
+                'Cannot promote current results to seeds because of shape mismatch: H %s vs %s, W %s vs %s.',
+                fixed_H.shape,
+                expected_H_shape,
+                fixed_W.shape,
+                expected_W_shape,
+            )
+            return False
+
+        if not 0 <= component_index < expected_H_shape[0]:
+            QtWidgets.QMessageBox.warning(
+                self.analysis_widget,
+                "Invalid component",
+                f"Component {component_index + 1} is outside the current NNMF result range.",
+            )
+            return False
+
+        if mode == "w":
+            spectrum_name = f"Result W{component_index}"
+        elif mode == "both":
+            spectrum_name = f"Result H+W {component_index}"
+        else:
+            spectrum_name = f"Result H{component_index}"
+        self.roi_manager.add_dummy_roi(
+            spectrum_data=fixed_H[component_index],
+            component_number=component_index + 1,
+            spectrum_name=spectrum_name,
+            fixed_W=fixed_W[:, component_index] if mode in {"w", "both"} else None,
+            seed_H_enabled=(mode != "w"),
+            result_seed_dummy=False,
+        )
+        logger.info('Imported NNMF result component %s as %s dummy ROI.', component_index, mode)
+        return True
+
     def make_all_seeds_from_inputs(self, show_seeds=True):
         """
         1. Reload H seeds from ROIs
@@ -528,6 +599,7 @@ class AnalysisManager(QtCore.QObject):
 
         """
         self._fixed_seed_W = {}  # reset fixed W seeds
+        self._fixed_seed_W_counts = {}
 
         self.reload_H_seeds_from_rois()     # reset all existing seeds and reload ROIs
         # make seeds from user inputs inside the roi manager (highest priority for H, and user inputs for W from the table)
@@ -611,21 +683,22 @@ class AnalysisManager(QtCore.QObject):
         seeds_list = self.roi_manager.get_roi_mean_curves()
         # TODO: Pass the seeds to the analyzer
         self.mv_analyzer.reset_seeds()
+        self._fixed_seed_W = {}
+        self._fixed_seed_W_counts = {}
+        # extract the fixed images that should serve as seed and set them fixed
+        for row, roi in enumerate(self.roi_manager.rois):
+            if not hasattr(roi, "fixed_W"):
+                continue
+            component_index = self.roi_manager.component_number_from_table_index(row)
+            if component_index is None:
+                continue
+            self.set_fixed_W_seed(component_index, roi.fixed_W)
+            logger.info(f'Setting fixed W seed for component {component_index} from ROI')
         for i, seed_dict in enumerate(seeds_list):
             component_number = int(seed_dict['resonance'].strip('Component '))
             component_index =  component_number - 1
 
-            # check for existing fixed_W seeds coming with the roi
-            rois = self.roi_manager.get_rois_from_component_indices(component_index)
-
-            for roi in rois:
-                if hasattr(roi, "fixed_W"):
-                    fixed_W = roi.fixed_W
-                    # fixed_W shape is checked always in the roi manager in update_data
-                    self.set_fixed_W_seed(component_index, fixed_W)
-                    logger.info(f'Setting fixed W seed for component {component_index} from ROI')
-
-            flag_bgd = self.roi_manager.roi_table.cellWidget(i, self.roi_manager.widget_columns['Background']).checkState()
+            flag_bgd = bool(seed_dict.get('is_background', False))
             if component_index >= self.mv_analyzer.get_n_components():
                 logger.error(
                     f'Component number {component_index} is out of bounds for {self.mv_analyzer.get_n_components()} components and is ignored.')
@@ -638,13 +711,29 @@ class AnalysisManager(QtCore.QObject):
 
     def set_fixed_W_seed(self, component: int, fixed_W: np.ndarray):
         """
-        Store a fixed W seed for a specific component.
+        Store a fixed W seed for a specific component for later analysis.
+
+        If multiple ROIs provide a fixed W seed for the same component, the
+        stored map is updated by a running mean and a warning is logged.
 
         Args:
             component (int): The component index.
             fixed_W (np.ndarray): The fixed W seed array of shape (n_pixels,).
         """
-        self._fixed_seed_W[component] = fixed_W
+        fixed_W = np.asarray(fixed_W, dtype=np.float64)
+        current_W_seed_cmp = self._fixed_seed_W.get(component, None)
+        if current_W_seed_cmp is None:
+            self._fixed_seed_W[component] = fixed_W
+            self._fixed_seed_W_counts[component] = 1
+        else:
+            count = self._fixed_seed_W_counts.get(component, 1)
+            # Repeatedly using (old + new) / 2 would bias the mean toward the most recent ROI.
+            cmp_avg = (current_W_seed_cmp * count + fixed_W) / (count + 1)
+            self._fixed_seed_W[component] = cmp_avg
+            self._fixed_seed_W_counts[component] = count + 1
+            logger.warning(f"Component {component} has multiple fixed W seeds from different ROIs."
+                           f" Averaging them together. This may indicate overlapping ROIs with different spatial seed maps.")
+
 
     def analysis_completed(self, analysis_method):
         logger.info(f"{datetime.now()}: {analysis_method} finished ")
@@ -885,6 +974,7 @@ class AnalysisManager(QtCore.QObject):
     def show_W_seeds(self):
         """Open a temporary viewer for inspecting the current W maps."""
         self._fixed_seed_W = {}
+        self._fixed_seed_W_counts = {}
         self.reload_H_seeds_from_rois()
         _, _, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True, debug_mode=False)
         self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
@@ -1119,8 +1209,12 @@ class AnalysisManager(QtCore.QObject):
 
     def _make_W_seeds_from_spectral_info(self, make_H_seeds=True, debug_mode=True) -> Tuple[np.ndarray, np.ndarray, dict[int, tuple[np.ndarray, np.ndarray]]]:
         """
-        Creates W seeds from the spectral information in the resonance table. Takes into account the ROI definitions in the ROI manager for H seeds.
+        Creates W seeds from the spectral information in the resonance table.
+        Takes into account the ROI definitions in the ROI manager for H seeds.
         The created seeds are passed to the MV analyzer.
+
+        If a fixed seed of W, i.e. an image, is present in a dummy roi, all spectral
+        information is disregarded and the input image will always be treated as fixed seed.
 
         Important! This function cannot be moved to the MV analyzer, as it depends on the GUI elements for spectral info and ROIs.
 
@@ -1137,11 +1231,13 @@ class AnalysisManager(QtCore.QObject):
         # get the spectral information from the table
         # convert the wavenumber to indices
         seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()))
+        fixed_w_components = set()
 
         if self._fixed_seed_W:
             for comp, fixed_W in self._fixed_seed_W.items():
                 if comp < seed_W.shape[1] and fixed_W.shape[0] == seed_W.shape[0]:
                     seed_W[:, comp] = fixed_W
+                    fixed_w_components.add(comp)
                     logger.info(f'Setting fixed W seed for component {comp} from ROI')
                 else:
                     logger.warning(f'Fixed W seed for component {comp} has incompatible shape and is ignored.')
@@ -1152,6 +1248,12 @@ class AnalysisManager(QtCore.QObject):
             info_dict_list = self.get_spectral_infos(i)
             if not info_dict_list:
                 logger.info(f'No spectral info found for component W[{i}], skipping W seed creation for now.')
+                continue
+            if i in fixed_w_components:
+                logger.info(
+                    'Skipping spectral-info W seed creation for component %s because a fixed W seed is present.',
+                    i,
+                )
                 continue
 
             # collect all resonance indices for this component, slices where resonance is expected

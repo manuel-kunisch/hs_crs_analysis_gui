@@ -41,6 +41,7 @@ class CompositeImageViewWidget(QMainWindow):
         (255, 192, 203),  # Pink
     ]
     color_changed_signal = pyqtSignal(int, QColor)
+    import_result_component_signal = pyqtSignal(str, int)
     def __init__(self, img:np.ndarray = None, spectral_cmps: np.ndarray|None = None,
                  color_manager: ComponentColorManager=None):
         super().__init__()
@@ -53,6 +54,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectral_cmps_seed = None
         self.wavenumbers = None
         self.axis_labels = None
+        self.result_mode = None
         self.fiji_saver = FIJISaver(self.img, f'{os.path.join(os.getcwd(), "result.tif")}',
                                     colors=self.colormap_colors, dtype=np.uint16)
         self.custom_model = False
@@ -78,6 +80,11 @@ class CompositeImageViewWidget(QMainWindow):
                 background-color: #383838;
                 border: 1px solid #4a4a4a;
                 border-radius: 8px;
+            }
+            QWidget#resultSubpanel {
+                background-color: #323232;
+                border: 1px solid #505050;
+                border-radius: 6px;
             }
             QLabel[role="sectionTitle"] {
                 color: #f0f0f0;
@@ -134,6 +141,29 @@ class CompositeImageViewWidget(QMainWindow):
         save_seed_mode_label = QLabel("Mode:")
         save_seeds_button.clicked.connect(lambda: self.save_preset(mode=save_seed_mode_combobox.currentText().lower()))
 
+        promote_seed_button = QPushButton("Import Result")
+        promote_seed_button.setToolTip("Import one NNMF result component into the ROI manager as a dummy seed ROI.")
+        promote_seed_button.setEnabled(False)
+        promote_seed_target_combobox = QComboBox()
+        promote_seed_target_combobox.addItem("H", "h")
+        promote_seed_target_combobox.addItem("W", "w")
+        promote_seed_target_combobox.addItem("H + W", "both")
+        promote_seed_target_label = QLabel("Target:")
+        promote_seed_component_label = QLabel("Component:")
+        promote_seed_component_spinbox = QSpinBox()
+        promote_seed_component_spinbox.setMinimum(1)
+        promote_seed_component_spinbox.setMaximum(1)
+        promote_seed_component_spinbox.setValue(1)
+        promote_seed_button.clicked.connect(
+            lambda: self.import_result_component_signal.emit(
+                promote_seed_target_combobox.currentData(),
+                promote_seed_component_spinbox.value() - 1,
+            )
+        )
+        self.promote_seed_button = promote_seed_button
+        self.promote_seed_target_combobox = promote_seed_target_combobox
+        self.promote_seed_component_spinbox = promote_seed_component_spinbox
+
         save_H_as_csv_button = QPushButton("Save H as CSV")
         save_H_as_csv_button.clicked.connect(self.save_components)
 
@@ -187,7 +217,8 @@ class CompositeImageViewWidget(QMainWindow):
         self.show_seeds_check.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         for widget in [save_tiff_button, save_seeds_button, save_H_as_csv_button, reset_levels_button,
-                       save_seed_mode_combobox, self.channel_spinbox, self.color_button, autoscale_button]:
+                       save_seed_mode_combobox, promote_seed_button, promote_seed_target_combobox, promote_seed_component_spinbox,
+                       self.channel_spinbox, self.color_button, autoscale_button]:
             widget.setMinimumHeight(28)
 
         composite_header = QWidget()
@@ -223,6 +254,38 @@ class CompositeImageViewWidget(QMainWindow):
         composite_controls_layout.addWidget(save_H_as_csv_button)
         composite_controls_layout.addWidget(reset_levels_button)
 
+        import_seed_title = QLabel("Import Into ROI Manager")
+        import_seed_title.setProperty("role", "sectionTitle")
+        import_seed_meta = QLabel("Create a dummy ROI row from one NNMF result component.")
+        import_seed_meta.setProperty("role", "sectionMeta")
+        import_seed_meta.setWordWrap(True)
+
+        import_seed_header = QWidget()
+        import_seed_header_layout = QVBoxLayout(import_seed_header)
+        import_seed_header_layout.setContentsMargins(0, 0, 0, 0)
+        import_seed_header_layout.setSpacing(2)
+        import_seed_header_layout.addWidget(import_seed_title)
+        import_seed_header_layout.addWidget(import_seed_meta)
+
+        import_seed_controls = QWidget()
+        import_seed_controls_layout = QHBoxLayout(import_seed_controls)
+        import_seed_controls_layout.setContentsMargins(0, 0, 0, 0)
+        import_seed_controls_layout.setSpacing(8)
+        import_seed_controls_layout.addWidget(promote_seed_component_label)
+        import_seed_controls_layout.addWidget(promote_seed_component_spinbox)
+        import_seed_controls_layout.addWidget(promote_seed_target_label)
+        import_seed_controls_layout.addWidget(promote_seed_target_combobox)
+        import_seed_controls_layout.addWidget(promote_seed_button)
+        import_seed_controls_layout.addStretch(1)
+
+        import_seed_panel = QWidget()
+        import_seed_panel.setObjectName("resultSubpanel")
+        import_seed_panel_layout = QVBoxLayout(import_seed_panel)
+        import_seed_panel_layout.setContentsMargins(10, 10, 10, 10)
+        import_seed_panel_layout.setSpacing(8)
+        import_seed_panel_layout.addWidget(import_seed_header)
+        import_seed_panel_layout.addWidget(import_seed_controls)
+
         composite_panel = QWidget()
         composite_panel.setObjectName("resultPanel")
         composite_panel_layout = QVBoxLayout(composite_panel)
@@ -231,6 +294,7 @@ class CompositeImageViewWidget(QMainWindow):
         composite_panel_layout.addWidget(composite_header)
         composite_panel_layout.addWidget(self.composite_view, stretch=1)
         composite_panel_layout.addWidget(composite_controls_widget)
+        composite_panel_layout.addWidget(import_seed_panel)
 
         channel_controls_widget = QWidget()
         channel_controls_layout = QGridLayout(channel_controls_widget)
@@ -355,6 +419,20 @@ class CompositeImageViewWidget(QMainWindow):
         self.refresh_label_overlay(component_number)  # Optional: Re-render or update something
         self.fiji_saver.labels = self.custom_labels
 
+    def set_result_mode(self, mode: str | None):
+        self.result_mode = mode
+        is_nnmf = mode == "NNMF"
+        if hasattr(self, "promote_seed_button"):
+            self.promote_seed_button.setEnabled(is_nnmf)
+            self.promote_seed_component_spinbox.setEnabled(is_nnmf)
+            self.promote_seed_target_combobox.setEnabled(is_nnmf)
+            if is_nnmf:
+                self.promote_seed_button.setToolTip(
+                    "Import one NNMF result component into the ROI manager as a dummy seed ROI."
+                )
+            else:
+                self.promote_seed_button.setToolTip("Result import is only available for NNMF results.")
+
     def plot_components(self, spectral_components: np.ndarray):
         """
 
@@ -430,6 +508,7 @@ class CompositeImageViewWidget(QMainWindow):
                      custom_model: bool = False,
                      update_gamma_curve=False):
         """
+        Update the data with new multivariate results of shape (y, x, z)
         Args:
             img_file: np.ndarray
                 Img file with order (y, x, z).
@@ -468,6 +547,11 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectral_cmps = spectral_cmps
         self.spectral_cmps_seed = spectral_cmps_seed
         self.custom_model = custom_model
+        result_components = 1
+        if spectral_cmps is not None:
+            result_components = max(1, int(spectral_cmps.shape[0]))
+        self.promote_seed_component_spinbox.setMaximum(result_components)
+        self.promote_seed_component_spinbox.setValue(min(self.promote_seed_component_spinbox.value(), result_components))
         if spectral_cmps is not None:
             self.plot_components(spectral_cmps)
         self.timeout_callbacks = False
@@ -577,6 +661,11 @@ class CompositeImageViewWidget(QMainWindow):
         self.channel_spinbox.blockSignals(True)
         self.channel_spinbox.setValue(channel_index)
         self.channel_spinbox.blockSignals(False)
+        # sync the channel spinbox and the promote seed spinbox for convenience
+        if hasattr(self, "promote_seed_component_spinbox"):
+            self.promote_seed_component_spinbox.blockSignals(True)
+            self.promote_seed_component_spinbox.setValue(min(channel_index + 1, self.promote_seed_component_spinbox.maximum()))
+            self.promote_seed_component_spinbox.blockSignals(False)
         logger.debug(f'{channel_index =}, {colormap_color =}')
         # Set the color of the ColorButton to match the current colormap color
         self.color_widget.blockSignals(True)

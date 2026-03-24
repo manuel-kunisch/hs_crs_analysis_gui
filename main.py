@@ -59,12 +59,13 @@ class MainApplication(QtWidgets.QMainWindow):
         self.analysis_manager = analysis_manager.AnalysisManager(roi_manager=self.data_widget.roi_manager)  # multivariate analysis manager
         self.data_widget.roi_manager.processed_data_signal.connect(self.analysis_manager.update_modified_data)
         self.data_widget.roi_manager.preset_load_signal.connect(self.preset_loaded)
-        self.analysis_manager.worker.finished.connect(lambda: self.tab_widget.setCurrentIndex(1))
+        self.analysis_manager.worker.finished.connect(self._show_results_after_analysis)
 
         # Create a CompositeImageViewWidget widget to showcase the results
         self.result_viewer_widget = CompositeImageViewWidget(color_manager=self.color_manager)  # Create CompositeImageViewWidget widget
         # pass the label names to the result viewer
         self.data_widget.roi_manager.label_change_signal.connect(self.result_viewer_widget.update_label)
+        self.result_viewer_widget.import_result_component_signal.connect(self.import_displayed_result_component)
         # on macos the widget has to be moved to the main thread to be able to open file dialogs etc.
         self.result_viewer_widget.moveToThread(self.thread())
 
@@ -150,6 +151,7 @@ class MainApplication(QtWidgets.QMainWindow):
         # Create and configure the DockArea for the CompositeImageViewWidget in the result section
 
         d1 = Dock("Multivariate Analysis Images", size=(1, 1))
+        self.result_dock = d1
         # Put orientation of dock handle
         self.parent_dock_area.addDock(d1, 'top')
         d1.addWidget(self.result_viewer_widget)  # Add the CompositeImageViewWidget widget to the dock
@@ -158,6 +160,19 @@ class MainApplication(QtWidgets.QMainWindow):
 
 
 
+
+    def _show_results_after_analysis(self):
+        result_dock = getattr(self, "result_dock", None)
+        if result_dock is not None:
+            dock_area = getattr(result_dock, "area", None)
+            if dock_area is not None and getattr(dock_area, "temporary", False):
+                floating_window = getattr(dock_area, "win", None)
+                if floating_window is not None:
+                    floating_window.showNormal()
+                    floating_window.raise_()
+                    floating_window.activateWindow()
+                    return
+        self.tab_widget.setCurrentIndex(1)
 
     def get_dock_state_widget(self) -> (Dock, callable):
         d1 = Dock("Dock Manager", size=(25, 25))
@@ -280,14 +295,19 @@ class MainApplication(QtWidgets.QMainWindow):
         return self.data_handler.loader_widget.image
 
     def update_results(self):
-        # TODO move to update thread
+        # TODO move to update thread, only required for very larged HS images
         spectral_cmps, analyzed_img = self.analysis_manager.get_analysis_data()
         logger.info(f'Results data {analyzed_img.shape = }')
+        is_nnmf = self.analysis_manager.nnmf_radio.isChecked()
+        self.result_viewer_widget.set_result_mode("NNMF" if is_nnmf else "PCA")
         self.result_viewer_widget.update_image(analyzed_img,
                                                spectral_cmps=spectral_cmps[: self.analysis_manager.mv_analyzer._n_components],
-                                               spectral_cmps_seed=self.analysis_manager.mv_analyzer.seed_H,
-                                               custom_model=self.analysis_manager.mv_analyzer.custom_nnmf_init,
+                                               spectral_cmps_seed=self.analysis_manager.mv_analyzer.seed_H if is_nnmf else None,
+                                               custom_model=self.analysis_manager.mv_analyzer.custom_nnmf_init if is_nnmf else False,
                                                spectral_axis=0)
+
+    def import_displayed_result_component(self, target: str, component_index: int):
+        self.analysis_manager.import_current_result_component(target, component_index)
 
     def preset_loaded(self, n_components: int, v_min_vmax_states: list, color_states: list):
         self.analysis_manager.num_components_spinbox.setValue(n_components)

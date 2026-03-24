@@ -10,6 +10,7 @@ from pyqtgraph.dockarea import Dock
 from scipy.ndimage import gaussian_filter1d, gaussian_filter, label, maximum_filter
 
 from composite_image import max_dtype_val, CompositeImageViewWidget as ci
+from contents.custom_pyqt_objects import ImageViewYX
 from contents.hs_image_view import ROITableDelegate, ColorButton
 from contents.spectrum_loader import SpectrumLoader
 
@@ -79,6 +80,7 @@ class ROIManager(QtCore.QObject):
         self.subtracted_data = None
         self.spectrum_loaders = dict()
         self.auto_roi_settings = AutoROISuggestionSettings()
+        self.fixed_w_seed_view = None
         # Creating a dock
         # Set up the ROI table and add it to the ROI table dock
         self.roi_table_dock = Dock("Seed ROIs", size=(810, 1000))
@@ -532,7 +534,45 @@ class ROIManager(QtCore.QObject):
         row = self._row_for_table_widget(widget)
         if row is None:
             return
+        # handle dummy rois with only W data
+        roi = self.rois[row] if 0 <= row < len(self.rois) else None
+        if roi is not None and hasattr(roi, "fixed_W"):
+            self._show_fixed_w_seed(roi)
+            return
         self._show_roi_by_row(row)
+
+    def _show_fixed_w_seed(self, roi: pg.ROI):
+        fixed_W = getattr(roi, "fixed_W", None)
+        if fixed_W is None or self.raw_data is None or np.ndim(self.raw_data) < 3:
+            return
+
+        _, height, width = self.raw_data.shape
+        if np.size(fixed_W) != height * width:
+            logger.warning(
+                "Cannot show fixed W seed for ROI %s because shape %s does not match image size (%s, %s).",
+                roi,
+                np.shape(fixed_W),
+                height,
+                width,
+            )
+            return
+
+        w_image = np.asarray(fixed_W, dtype=float).reshape(height, width)
+        if self.fixed_w_seed_view is None:
+            self.fixed_w_seed_view = ImageViewYX()
+            self.fixed_w_seed_view.ui.roiBtn.hide()
+            self.fixed_w_seed_view.ui.menuBtn.hide()
+
+        color = self._get_roi_base_color(roi)
+        cmap = pg.ColorMap(
+            pos=np.array([0.0, 1.0]),
+            color=np.array([[0, 0, 0, 255], [color.red(), color.green(), color.blue(), 255]]),
+        )
+        self.fixed_w_seed_view.setColorMap(cmap)
+        self.fixed_w_seed_view.setImage(w_image)
+        self.fixed_w_seed_view.setWindowTitle(f"{roi.label} W Seed")
+        self.fixed_w_seed_view.show()
+        self.fixed_w_seed_view.raise_()
 
     def _component_from_table_widget(self, widget: QtWidgets.QWidget | None) -> int | None:
         row = self._row_for_table_widget(widget)
@@ -1702,7 +1742,16 @@ class ROIManager(QtCore.QObject):
         logger.debug(roi)
         type_item.currentTextChanged.connect(lambda shape, combo=type_item: self._handle_shape_changed(combo, shape))
         type_item.setEnabled(not dummy)
-        show_button.setEnabled(not dummy)
+        has_fixed_w = hasattr(roi, "fixed_W")
+        show_button.setEnabled((not dummy) or has_fixed_w)
+        # Modify show button text depending on ROI type (dummys from other results have special treatment)
+        if has_fixed_w:
+            show_button.setText("Show W")
+            show_button.setToolTip("Show the stored W seed image for this row.")
+        if not getattr(roi, "seed_H_enabled", True):
+            plot_checkbox.setChecked(False)
+            plot_checkbox.setEnabled(False)
+            plot_checkbox.setToolTip("This row carries only a W seed and does not plot an H spectrum.")
 
         state = False
         # set checked state based on the component number
@@ -1925,7 +1974,9 @@ class ROIManager(QtCore.QObject):
 
     def add_dummy_roi(self, spectrum_data: np.ndarray, component_number: int, spectrum_name: str = "",
                       is_background:bool = False,
-                      fixed_W: np.ndarray = None) -> str:
+                      fixed_W: np.ndarray = None,
+                      seed_H_enabled: bool = True,
+                      result_seed_dummy: bool = False) -> str:
         """
         Add a DummyROI with the given spectrum data and properties. Pretends to be a loaded ROI with a spectrum.
         Parameters
@@ -1940,12 +1991,19 @@ class ROIManager(QtCore.QObject):
             Whether this ROI is marked as background in the table.
         fixed_W: np.ndarray, optional
             If provided, assigns fixed W values to the DummyROI. These will be passed with the ROI.
+        seed_H_enabled: bool
+            Whether this DummyROI should be considered as an H seed for reconstruction.
+        result_seed_dummy: bool
+            Whether this DummyROI is created from promoted NNMF results. This flag is used to identify
+            and remove these rows later when new results are promoted.
         Returns
         -------
         str
             The unique ID of the created DummyROI object.
         """
         roi = DummyROI(spectrum_name, spectrum_data)
+        roi.seed_H_enabled = bool(seed_H_enabled)
+        roi.is_result_seed_dummy = bool(result_seed_dummy)
 
         # Calculate pen color (component_number - 1 converts 1-based index to 0-based for color list)
         comp_idx = component_number - 1
@@ -2084,6 +2142,11 @@ class ROIManager(QtCore.QObject):
 
         """
         roi_idx = self.roi_id_idx.get(str(roi))
+        if roi_idx is None:
+            return
+        if not getattr(roi, "seed_H_enabled", True):
+            self.plot_roi(roi, np.array([]), '')
+            return
         if self.roi_table.cellWidget(roi_idx, self.widget_columns['Plot']).isChecked():
             signal = self.get_roi_average(roi)
         else:
@@ -2347,6 +2410,9 @@ class ROIManager(QtCore.QObject):
     def is_component_defined(self, component, return_index=False):
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component:
+                roi = self.rois[idx] if idx < len(self.rois) else None
+                if roi is not None and not getattr(roi, "seed_H_enabled", True):
+                    continue
                 if return_index:
                     return True, idx
                 return True
@@ -2427,6 +2493,8 @@ class ROIManager(QtCore.QObject):
         # find all resonances
         for idx in range(self.roi_table.rowCount()):
             roi = self.rois[idx]
+            if not getattr(roi, "seed_H_enabled", True):
+                continue
             # get the resonance of the current ROI
             resonance = self.roi_table.cellWidget(idx, self.widget_columns['Resonance']).currentText()
             # find all ROIs with the same resonance
@@ -2436,15 +2504,25 @@ class ROIManager(QtCore.QObject):
         mean_curves = []
         for resonance in resonances:
             curves = []
+            res_index = None
             for idx in range(self.roi_table.rowCount()):
                 roi = self.rois[idx]
+                if not getattr(roi, "seed_H_enabled", True):
+                    continue
                 if self.roi_table.cellWidget(idx, self.widget_columns['Resonance']).currentText() == resonance:
                     xy_avg = self.get_roi_average(roi)
                     curves.append(xy_avg)
                     res_index = idx
+            if not curves or res_index is None:
+                continue
             # average the curves and add them to the list of dictionaries where 'H' stores the mean curve, 'resonance' the resonance and 'label' the user defined label
             logger.info(f"Averaging {len(curves)} curves for  H[{resonance}]]")
-            mean_curves.append({'H': np.mean(curves, axis=0), 'resonance': resonance, 'label': self.roi_table.cellWidget(res_index, self.widget_columns['Name']).text()})
+            mean_curves.append({
+                'H': np.mean(curves, axis=0),
+                'resonance': resonance,
+                'label': self.roi_table.cellWidget(res_index, self.widget_columns['Name']).text(),
+                'is_background': bool(self.roi_table.cellWidget(res_index, self.widget_columns['Background']).isChecked()),
+            })
         return mean_curves
 
     def subtract_background(self, roi: pg.ROI , refill=True):
@@ -2538,6 +2616,9 @@ class ROIManager(QtCore.QObject):
         if idx is not None and 0 <= idx < len(self.rois):
             roi = self.rois[idx]
             if roi is not None:
+                if not getattr(roi, "seed_H_enabled", True):
+                    self.plot_roi(roi, np.array([]), '')
+                    return
                 xy_avg = self.get_roi_average(roi, apply_scale=scale, apply_smoothing=smooth, apply_offset=offset,
                                               clip_negative=True)
                 # Check if the checkbox is checked before emitting the signal
@@ -2603,6 +2684,8 @@ class ROIManager(QtCore.QObject):
             if self.component_number_from_table_index(idx) != component:
                 continue
             roi = self.rois[idx] if idx < len(self.rois) else None
+            if roi is not None and not getattr(roi, "seed_H_enabled", True):
+                continue
             if roi is not None and not getattr(roi, "is_gaussian_model", False):
                 return self.get_roi_average(roi)
 
@@ -2729,6 +2812,8 @@ class ROIManager(QtCore.QObject):
             if is_dummy:
                 row_state["spectrum_name"] = getattr(roi, "spectrum_name", row_state["name"])
                 row_state["spectrum_data"] = roi.spectrum_data.tolist()
+                row_state["seed_H_enabled"] = bool(getattr(roi, "seed_H_enabled", True))
+                row_state["result_seed_dummy"] = bool(getattr(roi, "is_result_seed_dummy", False))
             else:
                 row_state["pos"] = [float(roi.pos()[0]), float(roi.pos()[1])]
                 row_state["size"] = [float(roi.size()[0]), float(roi.size()[1])]
@@ -2769,6 +2854,8 @@ class ROIManager(QtCore.QObject):
                     spectrum_name=str(entry.get("spectrum_name", "")),
                     is_background=bool(entry.get("background", False)),
                     fixed_W=np.asarray(entry["fixed_W"], dtype=float) if entry.get("fixed_W") is not None else None,
+                    seed_H_enabled=bool(entry.get("seed_H_enabled", True)),
+                    result_seed_dummy=bool(entry.get("result_seed_dummy", False)),
                 )
                 roi_obj = self.rois[self.roi_id_idx[roi_id]]
                 row = self.roi_id_idx[roi_id]

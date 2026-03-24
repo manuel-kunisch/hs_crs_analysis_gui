@@ -325,12 +325,8 @@ class AnalysisManager(QtCore.QObject):
         self.resonance_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         # restrict to single row selection
         self.resonance_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        # self.resonance_table.horizontalHeader().setStretchLastSection(True)
-        self.resonance_table.resizeColumnsToContents()
-
-        # Keep your widths where you really want them
-        self.resonance_table.setColumnWidth(self.res_settings_widget_columns["Component"], 110)
-        self.resonance_table.setColumnWidth(self.res_settings_widget_columns["Width"], 50)
+        self._refresh_resonance_table_layout()
+        QtCore.QTimer.singleShot(0, self._refresh_resonance_table_layout)
 
         left_layout.addWidget(self.resonance_table, 1)
 
@@ -673,6 +669,58 @@ class AnalysisManager(QtCore.QObject):
             analysis_method = "NNMF"
             return self.mv_analyzer.fixed_H, self.mv_analyzer.fixed_W_2D
 
+    def _refresh_resonance_table_layout(self):
+        header = self.resonance_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
+        auto_widths = getattr(self, "_resonance_table_auto_widths", {})
+        checkbox_columns = {"Use subtracted data", "Use Gaussian"}
+        indicator_width = self.resonance_table.style().pixelMetric(QtWidgets.QStyle.PM_IndicatorWidth) + 16
+
+        default_widths = {
+            "Component": 130,
+            "Wavenumber": 120,
+            "# Seed Pixels": 120,
+            "Amplitude": 110,
+            "Color": 64,
+            "Width": 72,
+            "Use subtracted data": 136,
+            "Use Gaussian": 110,
+            "Remove": 88,
+        }
+        for name, width in default_widths.items():
+            if name in self.res_settings_widget_columns:
+                column = self.res_settings_widget_columns[name]
+                desired_width = width
+                if name in checkbox_columns:
+                    header_item = self.resonance_table.horizontalHeaderItem(column)
+                    header_text = header_item.text() if header_item is not None else name
+                    desired_width = max(header.fontMetrics().horizontalAdvance(header_text) + 12, indicator_width)
+
+                current_width = self.resonance_table.columnWidth(column)
+                previous_auto_width = auto_widths.get(column)
+                if previous_auto_width is None or abs(current_width - previous_auto_width) <= 2 or current_width < desired_width:
+                    self.resonance_table.setColumnWidth(column, desired_width)
+                    auto_widths[column] = desired_width
+
+        flexible_columns = [
+            self.res_settings_widget_columns[name]
+            for name in ("Component", "Wavenumber", "# Seed Pixels", "Amplitude")
+            if name in self.res_settings_widget_columns
+        ]
+        available_width = self.resonance_table.viewport().width()
+        current_width = sum(self.resonance_table.columnWidth(col) for col in range(self.resonance_table.columnCount()))
+        extra_width = available_width - current_width
+        if extra_width > 0 and flexible_columns:
+            extra_per_column, remainder = divmod(extra_width, len(flexible_columns))
+            for index, column in enumerate(flexible_columns):
+                new_width = self.resonance_table.columnWidth(column) + extra_per_column + (1 if index < remainder else 0)
+                self.resonance_table.setColumnWidth(column, new_width)
+                auto_widths[column] = new_width
+
+        self.resonance_table.resizeRowsToContents()
+        self._resonance_table_auto_widths = auto_widths
+
     def add_resonance_settings(self):
         # Add a row to the table
         row_position = self.resonance_table.rowCount()
@@ -762,8 +810,7 @@ class AnalysisManager(QtCore.QObject):
             item = self.resonance_table.cellWidget(row_position, cell)
             item.valueChanged.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
         self.callback_res_settings(row_position)
-        # if not row_position:
-        #     self.resonance_table.resizeColumnsToContents()
+        self._refresh_resonance_table_layout()
 
     def reload_colors(self):
         if self.color_manager is None:
@@ -776,6 +823,7 @@ class AnalysisManager(QtCore.QObject):
 
     def remove_res_settings(self, row):
         self.resonance_table.removeRow(row)
+        self._refresh_resonance_table_layout()
         self.callback_res_settings(row)
 
     def adjust_npixels(self):

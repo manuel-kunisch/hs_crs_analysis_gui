@@ -232,6 +232,16 @@ class ImageLoader(QtWidgets.QWidget):
                 tuned_min_nm = meta.get("tuned_min_nm")
                 tuned_max_nm = meta.get("tuned_max_nm")
                 tuned_step_nm = meta.get("tuned_step_nm")
+                spectral_unit = meta.get("spectral_unit", meta.get("unit"))
+
+                if spectral_unit is not None:
+                    spectral_unit = str(spectral_unit).strip().lower()
+                    if spectral_unit in {"nm", "nanometer", "nanometers", "wavelength"}:
+                        spectral_unit = "nm"
+                    elif spectral_unit in {"cm-1", "cm^-1", "1/cm", "cm⁻¹", "wavenumber", "raman"}:
+                        spectral_unit = "cm⁻¹"
+                    else:
+                        raise ValueError("spectral_unit must be 'nm' or 'cm⁻¹'")
 
                 if tuned_min_nm is None and tuned_max_nm is None and tuned_step_nm is None:
                     raise ValueError(
@@ -244,6 +254,7 @@ class ImageLoader(QtWidgets.QWidget):
                     "tuned_min_nm": float(tuned_min_nm) if tuned_min_nm is not None else None,
                     "tuned_max_nm": float(tuned_max_nm) if tuned_max_nm is not None else None,
                     "tuned_step_nm": float(tuned_step_nm) if tuned_step_nm is not None else None,
+                    "spectral_unit": spectral_unit,
                 }
 
                 logger.info(f"Loaded wavelength metadata from {meta_path}")

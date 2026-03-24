@@ -265,6 +265,7 @@ class MainApplication(QtWidgets.QMainWindow):
     def update_binning(self, binning_factor: int):
         old_binning = self.data_handler.get_current_binning()
         self.data_handler.set_binning(binning_factor)
+        self.data_widget.sync_binning_ui(binning_factor)
         scale = old_binning / binning_factor
         self.data_widget.roi_manager.move_and_scale_all_rois(scale)
 
@@ -314,11 +315,14 @@ class MainApplication(QtWidgets.QMainWindow):
                 logger.info("Preset image candidate not found: %s", candidate)
                 continue
             try:
+                self.data_handler._suspend_custom_axis_warning = True
                 self.data_handler.loader_widget.load_tiff(candidate)
                 logger.info("Loaded preset image from %s", candidate)
                 return True
             except Exception as exc:
                 logger.warning("Failed to load preset image from %s: %s", candidate, exc)
+            finally:
+                self.data_handler._suspend_custom_axis_warning = False
 
         logger.warning("Could not resolve preset TIFF. Continuing with ROI/settings import only.")
         return False
@@ -399,15 +403,13 @@ class MainApplication(QtWidgets.QMainWindow):
             pass
 
         # 4) wavenumbers (this updates data_widget + analysis_manager + result viewer)
-        # only matters when no image is loaded yet
-        if preset.get("wavenumbers", None) is not None:
-            wav = np.asarray(preset["wavenumbers"], dtype=float)
-            self.data_handler.wavenumber_widget.wavenumbers = wav
-            self.update_wavenum_changed(wav)
-
+        wav_warning = None
         wav_state = preset.get("wavenumber_widget", None)
         if isinstance(wav_state, dict):
-            self.data_handler.wavenumber_widget.import_state(wav_state)
+            wav_warning = self.data_handler.wavenumber_widget.import_state(
+                wav_state,
+                preserve_current_n_frames=bool(image_loaded),
+            )
         else:
             # legacy fallback (old preset format)
             if preset.get("lambda_min", None) is not None:
@@ -418,14 +420,28 @@ class MainApplication(QtWidgets.QMainWindow):
                 self.data_handler.wavenumber_widget.beam_mode = preset["mode"]
 
             if preset.get("wavenumbers", None) is not None:
-                self.data_handler.wavenumber_widget.custom_wavenumbers = np.asarray(preset["wavenumbers"],
-                                                                                    dtype=np.float32)
-                self.data_handler.wavenumber_widget.source_combo.setCurrentIndex(1)  # custom
-                self.data_handler.wavenumber_widget.stack.setCurrentIndex(1)
+                custom_wavenumbers = np.asarray(preset["wavenumbers"], dtype=np.float32)
+                current_frames = int(self.data_handler.wavenumber_widget.n_frames)
+                if image_loaded and len(custom_wavenumbers) != current_frames:
+                    wav_warning = (
+                        f"Preset custom spectral axis has {len(custom_wavenumbers)} points, "
+                        f"but the current dataset has {current_frames} frames. "
+                        f"Falling back to calculated axis."
+                    )
+                    self.data_handler.wavenumber_widget.custom_wavenumbers = None
+                    self.data_handler.wavenumber_widget.custom_axis_labels = None
+                    self.data_handler.wavenumber_widget.source_combo.setCurrentIndex(0)
+                    self.data_handler.wavenumber_widget.stack.setCurrentIndex(0)
+                else:
+                    self.data_handler.wavenumber_widget.custom_wavenumbers = custom_wavenumbers
+                    self.data_handler.wavenumber_widget.source_combo.setCurrentIndex(1)  # custom
+                    self.data_handler.wavenumber_widget.stack.setCurrentIndex(1)
 
             self.data_handler.wavenumber_widget.update_wavenums()
 
         self.change_spectral_units(self.data_handler.wavenumber_widget.custom_unit_combo.currentText())
+        if wav_warning:
+            QtWidgets.QMessageBox.warning(self, "Preset Wavenumbers Adjusted", wav_warning)
         # 5) ROIs (after image+binning+wavenumbers exist)
         roi_state = preset.get("roi_manager", None)
         if roi_state and hasattr(self.data_widget.roi_manager, "import_state"):

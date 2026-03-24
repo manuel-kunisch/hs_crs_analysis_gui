@@ -88,7 +88,7 @@ class RamanImageView(ImageViewLineRoi):
             self.frame_label.setText(f'Frame: {frame}')
         if self.view is not None and self.axis_labels is not None and 0 <= frame < len(self.axis_labels):
             self.view.setTitle(f'Frame: {frame} @ {self.axis_labels[frame]}')
-        elif self.view is not None and self.wavenumber is not None:
+        elif self.view is not None and self.wavenumber is not None and 0 <= frame < len(self.wavenumber):
             self.view.setTitle(f'Frame: {frame} @ {self.wavenumber[self.currentIndex]:.1f} {self.unit}')
 
     def roiChanged(self, *args, plot_widget=None):

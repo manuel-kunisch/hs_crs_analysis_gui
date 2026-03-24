@@ -464,8 +464,16 @@ class DataWidget(QtWidgets.QWidget):
         if roi_id in self.roi_avg_lines and self.roi_avg_lines[roi_id]:
             line_item = self.roi_avg_lines[roi_id]
             self.roi_avg_plot_wid.removeItem(line_item)
-        # Plot the z_data in the new plot
-        l = self.roi_avg_plot_wid.plot(self.raman_raw_image_view.wavenumber, z_data, pen=roi_pen, name=label)
+        # Plot against the spectral axis only if it matches the data length.
+        x_values = self.raman_raw_image_view.wavenumber
+        if x_values is None or len(x_values) != len(z_data):
+            logger.warning(
+                "ROI plot axis length mismatch (%s vs %s). Falling back to channel indices.",
+                None if x_values is None else len(x_values),
+                len(z_data),
+            )
+            x_values = np.arange(len(z_data))
+        l = self.roi_avg_plot_wid.plot(x_values, z_data, pen=roi_pen, name=label)
 
         self.roi_avg_lines[roi_id] = l
         # Add any additional configurations you need
@@ -478,11 +486,23 @@ class DataWidget(QtWidgets.QWidget):
         # requests to bin the image and adjusts the view range accordingly
         view = self.raman_raw_image_view.getView()
         view_range = view.viewRange()
+        old_binning = self._binning_factor
         self.request_binning_signal.emit(binning_factor)
-        scale = self._binning_factor / binning_factor
-        self._binning_factor = binning_factor
+        scale = old_binning / binning_factor
+        self.sync_binning_ui(binning_factor)
         view.setXRange(view_range[0][0] * scale, view_range[0][1] * scale)
         view.setYRange(view_range[1][0] * scale, view_range[1][1] * scale)
+
+    def sync_binning_ui(self, binning_factor: int):
+        self._binning_factor = int(binning_factor)
+        if self.binning_combo_box is None:
+            return
+
+        bin_text = str(self._binning_factor)
+        with QtCore.QSignalBlocker(self.binning_combo_box):
+            if self.binning_combo_box.findText(bin_text) < 0:
+                self.binning_combo_box.addItem(bin_text)
+            self.binning_combo_box.setCurrentText(bin_text)
 
     def remove_plot_roi(self, roi_id):
         if roi_id in self.roi_avg_lines and self.roi_avg_lines[roi_id]:
@@ -877,6 +897,27 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.n_frames = int(n_frames)
         self.update_wavenums()
 
+    def is_custom_source_active(self) -> bool:
+        return self.source_combo.currentIndex() == 1
+
+    def has_custom_source_data(self) -> bool:
+        return self.custom_wavenumbers is not None or self.custom_axis_labels is not None
+
+    def warn_and_switch_from_custom_source(self, parent: QtWidgets.QWidget | None = None) -> bool:
+        if not self.is_custom_source_active() or not self.has_custom_source_data():
+            return False
+
+        QtWidgets.QMessageBox.warning(
+            parent or self,
+            "Custom Spectral Axis Disabled",
+            "A new dataset was loaded while 'Custom / Manual' spectral-axis mode was active.\n\n"
+            "Custom points are dataset-specific and may not match the new data. "
+            "The spectral axis was switched back to 'Calculated (Pump/Stokes)'.\n\n"
+            "Reload or edit custom points again if this dataset needs a manual axis.",
+        )
+        self.source_combo.setCurrentIndex(0)
+        return True
+
     def update_wavenums(self):
         channels = max(1, int(self.n_frames))
         is_custom = (self.source_combo.currentIndex() == 1)
@@ -980,6 +1021,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         tuned_max = meta.get("tuned_max_nm")
         tuned_step = meta.get("tuned_step_nm")
         fixed_nm = meta.get("fixed_beam_nm")
+        spectral_unit = meta.get("spectral_unit")
 
         desired_mode = 0 if tuned_beam == "pump" else 1
         if self.beam_mode != desired_mode:
@@ -988,6 +1030,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.n_frames = int(n_frames)
 
         widgets = [
+            self.custom_unit_combo,
             self.min_wavelength_entry,
             self.max_wavelength_entry,
             self.stepsize_entry,
@@ -997,6 +1040,11 @@ class WavenumberWidget(QtWidgets.QWidget):
         ]
         for w in widgets:
             w.blockSignals(True)
+
+        if spectral_unit is not None:
+            unit_index = self.custom_unit_combo.findText(str(spectral_unit))
+            if unit_index >= 0:
+                self.custom_unit_combo.setCurrentIndex(unit_index)
 
         if fixed_nm is not None:
             self.fixed_entry.setValue(float(fixed_nm))
@@ -1050,10 +1098,10 @@ class WavenumberWidget(QtWidgets.QWidget):
             "custom_labels": None if self.custom_axis_labels is None else list(self.custom_axis_labels),
         }
 
-    def import_state(self, state: dict):
+    def import_state(self, state: dict, preserve_current_n_frames: bool = False) -> str | None:
         """Restore spectral-axis UI state. Calls update_wavenums() exactly once at the end."""
         if not isinstance(state, dict) or not state:
-            return
+            return None
 
         # Backward-compat
         if "lambda_min" in state and "min_nm" not in state:
@@ -1071,6 +1119,9 @@ class WavenumberWidget(QtWidgets.QWidget):
                 "custom_values": None,
             }
 
+        warning_message = None
+        effective_frame_count = int(self.n_frames)
+
         # --- block widget signals while restoring ---
         blockers = [
             QtCore.QSignalBlocker(self.source_combo),
@@ -1084,14 +1135,41 @@ class WavenumberWidget(QtWidgets.QWidget):
         ]
 
         # restore frame count (only matters if no image is loaded yet)
-        try:
-            self.n_frames = int(state.get("n_frames", self.n_frames))
-        except Exception:
-            pass
+        if not preserve_current_n_frames:
+            try:
+                effective_frame_count = int(state.get("n_frames", self.n_frames))
+            except Exception:
+                effective_frame_count = int(self.n_frames)
+        self.n_frames = int(effective_frame_count)
+
+        custom_vals = state.get("custom_values", None)
+        custom_labels = state.get("custom_labels", None)
+        custom_length = None
+        if custom_vals is not None:
+            try:
+                custom_length = len(custom_vals)
+            except Exception:
+                custom_length = None
+        elif custom_labels is not None:
+            try:
+                custom_length = len(custom_labels)
+            except Exception:
+                custom_length = None
+
+        source_index = int(state.get("source_index", 0))
+        if custom_length is not None and custom_length != self.n_frames:
+            warning_message = (
+                f"Preset custom spectral axis has {custom_length} points, "
+                f"but the current dataset has {self.n_frames} frames. "
+                f"Falling back to calculated axis."
+            )
+            custom_vals = None
+            custom_labels = None
+            source_index = 0
 
         # restore source + unit
-        self.source_combo.setCurrentIndex(int(state.get("source_index", 0)))
-        self.stack.setCurrentIndex(int(state.get("source_index", 0)))
+        self.source_combo.setCurrentIndex(source_index)
+        self.stack.setCurrentIndex(source_index)
 
         unit = str(state.get("unit", "cm⁻¹"))
         uidx = self.custom_unit_combo.findText(unit)
@@ -1133,8 +1211,6 @@ class WavenumberWidget(QtWidgets.QWidget):
             self.stepsize_entry.setEnabled(False)
 
         # restore custom array
-        custom_vals = state.get("custom_values", None)
-        custom_labels = state.get("custom_labels", None)
         if custom_vals is None and custom_labels is None:
             self.custom_wavenumbers = None
             self.custom_axis_labels = None
@@ -1149,6 +1225,7 @@ class WavenumberWidget(QtWidgets.QWidget):
 
         # compute + emit once
         self.update_wavenums()
+        return warning_message
 
 
 class DataHandler(QtWidgets.QWidget):
@@ -1172,6 +1249,7 @@ class DataHandler(QtWidgets.QWidget):
 
         self._binning_factor = default_binning
         self._binned_image = None   # the raw image is always available in the loader widget
+        self._suspend_custom_axis_warning = False
 
     def new_image_loaded(self, image: np.ndarray):
         logger.info('New image loaded')
@@ -1204,6 +1282,9 @@ class DataHandler(QtWidgets.QWidget):
         # --- wavelength / wavenumber handling ---
         n_frames = self._binned_image.shape[0]
         wavelength_meta = self.loader_widget.wavelength_meta
+
+        if not self._suspend_custom_axis_warning:
+            self.wavenumber_widget.warn_and_switch_from_custom_source(parent=self)
 
         if wavelength_meta is not None:
             logger.info("Applying wavelength metadata to WavenumberWidget")

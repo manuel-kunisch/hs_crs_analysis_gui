@@ -442,7 +442,6 @@ class CompositeImageViewWidget(QMainWindow):
             None
         """
         self.timeout_callbacks = True
-        first_result_load = self.img is None
         self.img = img_file
         if spectral_axis is not None:
             if spectral_axis != -1:
@@ -472,9 +471,10 @@ class CompositeImageViewWidget(QMainWindow):
         if spectral_cmps is not None:
             self.plot_components(spectral_cmps)
         self.timeout_callbacks = False
-        if first_result_load:
-            self.composite_view.getView().autoRange(padding=0.02)
-            self.channel_view.getView().autoRange(padding=0.02)
+        # A genuinely new result image should recentre both views, while ordinary
+        # channel changes and LUT edits keep the user's current zoom.
+        self.composite_view.getView().autoRange(padding=0.02)
+        self.channel_view.getView().autoRange(padding=0.02)
         # print('Updated Channel View')
 
 

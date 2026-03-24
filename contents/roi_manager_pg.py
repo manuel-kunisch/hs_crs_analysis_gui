@@ -1,12 +1,13 @@
 import logging
 import sys
+from dataclasses import dataclass
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtGui import QColor
 from pyqtgraph.dockarea import Dock
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, gaussian_filter, label, maximum_filter
 
 from composite_image import max_dtype_val, CompositeImageViewWidget as ci
 from contents.hs_image_view import ROITableDelegate, ColorButton
@@ -14,7 +15,40 @@ from contents.spectrum_loader import SpectrumLoader
 
 logger = logging.getLogger('ROI Manager')
 
+
+@dataclass(slots=True)
+class AutoROISuggestionSettings:
+    projection_mode: str = "Average image"
+    use_processed_data: bool = False
+    local_background_sigma: float = 8.0
+    spatial_bin_factor: int = 1
+    smoothing_sigma: float = 2
+    threshold_ratio: float = 0.40
+    peak_region_ratio: float = 0.72
+    peak_window: int = 5
+    min_group_area: int = 6
+    min_roi_diagonal_px: int = 0
+    max_groups_per_component: int = 4
+    max_rois_per_group: int = 2
+    candidate_pool_factor: int = 6
+    padding_px: int = 4
+    merge_similar_spectra: bool = True
+    spectral_similarity_threshold: float = 0.9
+    spectral_smoothing_sigma: float = 1.0
+    replace_previous_auto: bool = True
+
+
+@dataclass(slots=True)
+class AutoROISuggestion:
+    component: int
+    y: int
+    x: int
+    height: int
+    width: int
+    score: float
+
 class ROIManager(QtCore.QObject):
+    max_component_slots = 9
     default_colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255),
                       (255, 255, 255), (128, 128, 128), (128, 0, 0), (128, 128, 0), (0, 128, 0), (128, 0, 128),
                       (0, 128, 128), (0, 0, 128)]
@@ -33,43 +67,98 @@ class ROIManager(QtCore.QObject):
         self.rois = []  # list that stores each roi object sorted by index
         self.gaussian_specs_by_component: dict[int, list[tuple[float, float, float]]] = {}
         self.roi_region_change_signals = {}
+        self.roi_click_signals = {}
         self.active_roi = None
         self.fill_roi = None
         self.subtract_signal = None
         self.wavenumbers = None
         self.roi_id_idx = {}
+        self._selection_sync_in_progress = False
+        self._highlighted_table_row = None
         self.raw_data = self.image_view.getImageItem().image
         self.subtracted_data = None
         self.spectrum_loaders = dict()
+        self.auto_roi_settings = AutoROISuggestionSettings()
         # Creating a dock
         # Set up the ROI table and add it to the ROI table dock
         self.roi_table_dock = Dock("Seed ROIs", size=(810, 1000))
         self.roi_table = QtWidgets.QTableWidget()
         cols = ['Name', 'Color', 'Resonance', 'Background', 'Subtract', 'Scale', 'Offset', 'Gaussian σ', 'Export',
-                'ROI Shape', 'Live Update', 'Plot', 'Remove']
+                'ROI Shape', 'Live Update', 'Plot', 'Show', 'Remove']
         self.widget_columns = dict(**{col: idx for idx, col in enumerate(cols)})
         self.roi_table.setColumnCount(len(cols))
         self.roi_table.setHorizontalHeaderLabels(cols)
+        self.roi_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.roi_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
 
         self.color_manager = color_manager
 
         # Connect the selection changed signal of the table to a slot
-        self.roi_table.itemSelectionChanged.connect(self.update_selected_roi)
+        self.roi_table.currentCellChanged.connect(self.update_selected_roi)
         self.roi_table.setItemDelegateForColumn(3, ROITableDelegate(self.roi_table))
+        button_style = self.roi_table.style()
+
+        def themed_button_icon(theme_names, fallback):
+            for theme_name in theme_names:
+                icon = QtGui.QIcon.fromTheme(theme_name)
+                if not icon.isNull():
+                    return icon
+            return button_style.standardIcon(fallback)
+
+        def plus_button_icon():
+            icon = QtGui.QIcon.fromTheme("list-add")
+            if not icon.isNull():
+                return icon
+            size = 16
+            pixmap = QtGui.QPixmap(size, size)
+            pixmap.fill(QtCore.Qt.transparent)
+            painter = QtGui.QPainter(pixmap)
+            painter.setRenderHint(QtGui.QPainter.Antialiasing)
+            pen = QtGui.QPen(self.roi_table.palette().color(QtGui.QPalette.ButtonText), 2)
+            pen.setCapStyle(QtCore.Qt.RoundCap)
+            painter.setPen(pen)
+            margin = 4
+            center = size // 2
+            painter.drawLine(center, margin, center, size - margin)
+            painter.drawLine(margin, center, size - margin, center)
+            painter.end()
+            return QtGui.QIcon(pixmap)
 
         # Create a button for adding a line ROI
         add_line_roi_button = QtWidgets.QPushButton("Add ROI")
+        add_line_roi_button.setIcon(plus_button_icon())
         add_line_roi_button.clicked.connect(lambda: self.add_roi())
 
+        remove_all_rois_button = QtWidgets.QPushButton("Clear ROIs")
+        trash_icon = button_style.standardIcon(
+            getattr(QtWidgets.QStyle, "SP_TrashIcon", QtWidgets.QStyle.SP_DialogDiscardButton)
+        )
+        remove_all_rois_button.setIcon(trash_icon)
+        remove_all_rois_button.setToolTip("Remove all ROIs from the image and ROI table")
+        remove_all_rois_button.clicked.connect(self.remove_all_rois)
+
+        suggest_rois_button = QtWidgets.QPushButton("Suggest ROIs")
+        suggest_rois_button.setIcon(
+            themed_button_icon(
+                ["system-search", "edit-find", "help-hint", "dialog-question"],
+                QtWidgets.QStyle.SP_MessageBoxQuestion,
+            )
+        )
+        suggest_rois_button.clicked.connect(self.suggest_rois_from_image)
+
         load_spectra_button = QtWidgets.QPushButton("Load Spectrum from File")
+        load_spectra_button.setIcon(button_style.standardIcon(QtWidgets.QStyle.SP_DialogOpenButton))
         load_spectra_button.clicked.connect(self.load_spectra)
         
         load_preset_button = QtWidgets.QPushButton("Load Lookup Table and Spectra Preset")
+        load_preset_button.setIcon(button_style.standardIcon(QtWidgets.QStyle.SP_FileIcon))
         load_preset_button.clicked.connect(self.load_presets)
 
         # add buttons on top of the table
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addWidget(add_line_roi_button, alignment=QtCore.Qt.AlignCenter)
+        button_layout.addWidget(remove_all_rois_button, alignment=QtCore.Qt.AlignCenter)
+        button_layout.addWidget(suggest_rois_button, alignment=QtCore.Qt.AlignCenter)
         button_layout.addWidget(load_spectra_button, alignment=QtCore.Qt.AlignCenter)
         button_layout.addWidget(load_preset_button, alignment=QtCore.Qt.AlignCenter)
         button_widget = QtWidgets.QWidget()
@@ -79,14 +168,9 @@ class ROIManager(QtCore.QObject):
         self.roi_table_dock.addWidget(self.roi_table)
         # bind shortcut on del press to remove the selected row / ROI
         del_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Del"), self.roi_table)
-        del_shortcut.activated.connect(lambda: self.remove_roi(self.rois[self.roi_table.currentRow()]))
-        self.roi_table.resizeColumnsToContents()
-        # add extra space to the resonance column
-        self.roi_table.setColumnWidth(self.widget_columns['Resonance'], 120)
-        self.roi_table.setColumnWidth(self.widget_columns['Name'], 100)
-        self.roi_table.setColumnWidth(self.widget_columns['ROI Shape'], 70)
-        self.roi_table.setColumnWidth(self.widget_columns['Scale'], 70)
-        self.roi_table.setColumnWidth(self.widget_columns['Offset'], 70)
+        del_shortcut.activated.connect(self._remove_selected_or_active_roi)
+        self._refresh_roi_table_layout()
+        QtCore.QTimer.singleShot(0, self._refresh_roi_table_layout)
 
         # %% ROI plot
         self.roi_plot_dock= Dock("ROI Average Plot", size=(400, 300), closable=False)
@@ -158,16 +242,464 @@ class ROIManager(QtCore.QObject):
         except Exception as e:
             logger.error(f"Error while replotting ROIs after wavenumber update: {e}. Data must still be updated")
 
-    def component_prompt(self) -> int:
-        roi_number = len(self.rois)
-        # Prompt the user to enter the component number
-        component_number, ok = QtWidgets.QInputDialog.getInt(None, "Component Number", "Enter the component number",
-                                                             roi_number + 1)
+    def eventFilter(self, watched, event):
+        """
+        Intercept events on ROI table widgets to synchronize selection with the image view.
+        """
+        if not self._selection_sync_in_progress and event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.FocusIn):
+            row = self._row_for_table_widget(watched)
+            if row is not None:
+                QtCore.QTimer.singleShot(
+                    0,
+                    lambda row=row: self._select_roi_by_row(
+                        row,
+                        ensure_image_visible=False,
+                        ensure_table_visible=False,
+                        sync_table_selection=False,
+                    ),
+                )
+        return super().eventFilter(watched, event)
+
+    def _register_table_selection_widget(self, widget: QtWidgets.QWidget | None):
+        """
+        Install event filters on the given widget and all its child widgets to synchronize selection with the image view.
+        """
+        if widget is None:
+            return
+        for child in [widget, *widget.findChildren(QtWidgets.QWidget)]:
+            if child.property("roi_selection_filter_installed"):
+                continue
+            child.setProperty("roi_selection_filter_installed", True)
+            child.installEventFilter(self)
+
+    def _row_for_table_widget(self, widget: QtCore.QObject | None) -> int | None:
+        current = widget
+        while isinstance(current, QtCore.QObject):
+            for row in range(self.roi_table.rowCount()):
+                for col in range(self.roi_table.columnCount()):
+                    if self.roi_table.cellWidget(row, col) is current:
+                        return row
+            current = current.parent() if hasattr(current, "parent") else None
+        return None
+
+    def _refresh_roi_table_layout(self):
+        """
+        Adjust column widths based on content and available space, with special handling for checkbox columns.
+        """
+        header = self.roi_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
+        auto_widths = getattr(self, "_roi_table_auto_widths", {})
+        checkbox_columns = {"Background", "Subtract", "Live Update", "Plot"}
+        indicator_width = self.roi_table.style().pixelMetric(QtWidgets.QStyle.PM_IndicatorWidth) + 16
+
+        default_widths = {
+            "Name": 140,
+            "Resonance": 160,
+            "Color": 58,
+            "Background": 40,
+            "Subtract": 40,
+            "Scale": 72,
+            "Offset": 58,
+            "Gaussian σ": 86,
+            "Export": 70,
+            "ROI Shape": 122,
+            "Live Update": 96,
+            "Plot": 52,
+            "Show": 64,
+            "Remove": 84,
+        }
+        for name, width in default_widths.items():
+            if name in self.widget_columns:
+                column = self.widget_columns[name]
+                desired_width = width
+                if name in checkbox_columns:
+                    # adjust checkbox column to fit the header text if it's wider than the indicator
+                    header_item = self.roi_table.horizontalHeaderItem(column)
+                    header_text = header_item.text() if header_item is not None else name
+                    desired_width = max(header.fontMetrics().horizontalAdvance(header_text) + 12, indicator_width)
+
+                current_width = self.roi_table.columnWidth(column)
+                previous_auto_width = auto_widths.get(column)
+                if previous_auto_width is None or abs(current_width - previous_auto_width) <= 2 or current_width < desired_width:
+                    self.roi_table.setColumnWidth(column, desired_width)
+                    auto_widths[column] = desired_width
+
+        # ...........
+        # After setting default widths, distribute any remaining space to the "Name" and "Resonance" columns
+        flexible_columns = [
+            self.widget_columns[name]
+            for name in ("Name", "Resonance")
+            if name in self.widget_columns
+        ]
+        available_width = self.roi_table.viewport().width()
+        current_width = sum(self.roi_table.columnWidth(col) for col in range(self.roi_table.columnCount()))
+        extra_width = available_width - current_width
+        if extra_width > 0 and flexible_columns:
+            extra_per_column, remainder = divmod(extra_width, len(flexible_columns))
+            for index, column in enumerate(flexible_columns):
+                new_width = self.roi_table.columnWidth(column) + extra_per_column + (1 if index < remainder else 0)
+                self.roi_table.setColumnWidth(column, new_width)
+                auto_widths[column] = new_width
+
+        self.roi_table.resizeRowsToContents()
+        self._roi_table_auto_widths = auto_widths
+
+    def _remove_selected_or_active_roi(self):
+        """
+        Remove the selected or active ROI highlight from the image view, if possible.
+        """
+        if self.active_roi in self.rois:
+            self.remove_roi(self.active_roi)
+            return
+        row = self.roi_table.currentRow()
+        if 0 <= row < len(self.rois):
+            self.remove_roi(self.rois[row])
+
+    def _select_table_row(
+        self,
+        row: int,
+        ensure_visible: bool = False,
+    ):
+        if not 0 <= row < self.roi_table.rowCount():
+            return
+
+        model_index = self.roi_table.model().index(row, 0)
+        self.roi_table.clearSelection()
+        self.roi_table.setCurrentIndex(model_index)
+        self.roi_table.selectRow(row)
+        if ensure_visible:
+            self.roi_table.scrollTo(model_index, QtWidgets.QAbstractItemView.PositionAtCenter)
+
+    def _apply_table_row_highlight(self, row: int, highlighted: bool):
+        """
+        Apply or remove highlight styling to the 'Name' widget of the specified table row if selected.
+        """
+        if not 0 <= row < self.roi_table.rowCount():
+            return
+
+        name_widget = self.roi_table.cellWidget(row, self.widget_columns['Name'])
+        if name_widget is None:
+            return
+
+        base_style = name_widget.property("roi_base_style")
+        if base_style is None:
+            base_style = name_widget.styleSheet()
+            name_widget.setProperty("roi_base_style", base_style)
+
+        if highlighted:
+            highlight_style = (
+                f"{base_style}\n"
+                "QLineEdit {"
+                " border: 2px solid rgb(255, 215, 64);"
+                " background-color: rgba(255, 215, 64, 0.12);"
+                " }"
+            )
+            name_widget.setStyleSheet(highlight_style)
+        else:
+            name_widget.setStyleSheet(str(base_style))
+            name_widget.style().unpolish(name_widget)
+            name_widget.style().polish(name_widget)
+            name_widget.update()
+        self.roi_table.resizeRowToContents(row)
+
+    def _set_table_row_highlight(self, row: int | None):
+        previous_row = self._highlighted_table_row
+        if previous_row is not None and previous_row != row:
+            self._apply_table_row_highlight(previous_row, highlighted=False)
+
+        if row is None or not 0 <= row < self.roi_table.rowCount():
+            self._highlighted_table_row = None
+            return
+
+        self._apply_table_row_highlight(row, highlighted=True)
+        self._highlighted_table_row = row
+
+    def _ensure_roi_visible(self, roi: pg.ROI, always_center: bool = False):
+        """
+        Adjust the view to ensure the given ROI is fully visible.
+        """
+        if roi is None or isinstance(roi, DummyROI):
+            return
+
+        bounds = roi.mapRectToParent(roi.boundingRect())
+        if not bounds.isValid() or bounds.isNull():
+            return
+
+        view = self.image_view.getView()
+        view_box = view.getViewBox() if hasattr(view, "getViewBox") else view
+        x_range, y_range = view_box.viewRange()
+        x0, x1 = sorted((float(x_range[0]), float(x_range[1])))
+        y0, y1 = sorted((float(y_range[0]), float(y_range[1])))
+
+        fully_visible = (
+            bounds.left() >= x0
+            and bounds.right() <= x1
+            and bounds.top() >= y0
+            and bounds.bottom() <= y1
+        )
+        if fully_visible and not always_center:
+            return
+
+        view_width = max(1.0, x1 - x0, float(bounds.width()) * 1.15)
+        view_height = max(1.0, y1 - y0, float(bounds.height()) * 1.15)
+        center = bounds.center()
+        center_x = float(center.x())
+        center_y = float(center.y())
+
+        image = self.raw_data if self.raw_data is not None else self.image_view.getImageItem().image
+        if image is not None:
+            image_shape = np.shape(image)
+            if len(image_shape) >= 2:
+                image_height = float(image_shape[-2])
+                image_width = float(image_shape[-1])
+                if view_width < image_width:
+                    center_x = float(np.clip(center_x, view_width / 2.0, image_width - view_width / 2.0))
+                else:
+                    center_x = image_width / 2.0
+                if view_height < image_height:
+                    center_y = float(np.clip(center_y, view_height / 2.0, image_height - view_height / 2.0))
+                else:
+                    center_y = image_height / 2.0
+
+        target_x = (center_x - view_width / 2.0, center_x + view_width / 2.0)
+        target_y = (center_y - view_height / 2.0, center_y + view_height / 2.0)
+        if hasattr(view_box, "setRange"):
+            view_box.setRange(xRange=target_x, yRange=target_y, padding=0.0)
+        else:
+            view_box.setXRange(*target_x, padding=0.0)
+            view_box.setYRange(*target_y, padding=0.0)
+
+    def _select_roi(
+        self,
+        roi: pg.ROI | None,
+        ensure_image_visible: bool = False,
+        ensure_table_visible: bool = False,
+        sync_table_selection: bool = True,
+    ):
+        """
+        Select the given ROI, update the table selection and highlight, and optionally ensure visibility in the image view and table.
+        """
+        row = self.roi_id_idx.get(str(roi)) if roi is not None else None
+        if row is None or not 0 <= row < len(self.rois):
+            self.active_roi = None
+            for other_roi in self.rois:
+                self.set_roi_highlight(other_roi, highlighted=False)
+            self._set_table_row_highlight(None)
+            return
+
+        self.active_roi = roi
+        if sync_table_selection:
+            self._selection_sync_in_progress = True
+            try:
+                self._select_table_row(
+                    row,
+                    ensure_visible=ensure_table_visible,
+                )
+            finally:
+                self._selection_sync_in_progress = False
+
+        for other_roi in self.rois:
+            self.set_roi_highlight(other_roi, highlighted=other_roi == roi)
+        self._set_table_row_highlight(row)
+
+        if ensure_image_visible:
+            self._ensure_roi_visible(roi)
+
+    def _select_roi_by_row(
+        self,
+        row: int,
+        ensure_image_visible: bool = False,
+        ensure_table_visible: bool = False,
+        sync_table_selection: bool = True,
+    ):
+        if not 0 <= row < len(self.rois):
+            return
+        self._select_roi(
+            self.rois[row],
+            ensure_image_visible=ensure_image_visible,
+            ensure_table_visible=ensure_table_visible,
+            sync_table_selection=sync_table_selection,
+        )
+
+    def _show_roi_by_row(self, row: int):
+        if not 0 <= row < len(self.rois):
+            return
+        self._select_roi_by_row(row, ensure_image_visible=False, ensure_table_visible=True)
+        self._ensure_roi_visible(self.rois[row], always_center=True)
+
+    def _show_roi_for_table_widget(self, widget: QtWidgets.QWidget | None):
+        row = self._row_for_table_widget(widget)
+        if row is None:
+            return
+        self._show_roi_by_row(row)
+
+    def _component_from_table_widget(self, widget: QtWidgets.QWidget | None) -> int | None:
+        row = self._row_for_table_widget(widget)
+        if row is None:
+            return None
+        return self.component_number_from_table_index(row)
+
+    def _set_component_color(self, component_number: int | None, qcolor: QtGui.QColor, emit_signal: bool = True):
+        """
+        Helper method to set the color for a given component number, update the default colors,
+        and optionally emit a signal to the color manager.
+        """
+        if component_number is None:
+            return
+        rgb = qcolor.getRgb()[:-1]
+        self.default_colors[component_number % len(self.default_colors)] = rgb
+        if self.color_manager is None:
+            return
+        if emit_signal:
+            self.color_manager.set_color_rgb(component_number, rgb)
+            return
+        blocker = QtCore.QSignalBlocker(self.color_manager)
+        self.color_manager.set_color_rgb(component_number, rgb)
+        del blocker
+
+    def _emit_component_color_updates(self, component_numbers):
+        """
+        Send color update signals for the specified component numbers to ensure all listeners are updated with the current colors.
+        """
+        if self.color_manager is None:
+            return
+        seen = set()    # make sure each component number only emits one signal, even if it appears multiple times in the list (e.g. multiple ROIs with same component)
+        for component_number in component_numbers:
+            if component_number is None or component_number in seen:
+                continue
+            seen.add(component_number)
+            self.color_manager.sigColorChanged.emit(component_number, self.color_manager.get_qcolor(component_number))
+
+    def _apply_row_color(self, row: int, qcolor: QtGui.QColor, update_widget: bool = True):
+        if not 0 <= row < len(self.rois):
+            return
+        roi = self.rois[row]
+        label_widget = self.roi_table.cellWidget(row, self.widget_columns['Name'])
+        label_text = label_widget.text() if label_widget is not None else getattr(roi, "label", f"ROI {row + 1}")
+        self.set_roi_properties(roi, qcolor, label_text)
+        color_widget: ColorButton | None = self.roi_table.cellWidget(row, self.widget_columns['Color'])
+        if update_widget and color_widget is not None:
+            color_widget.setColor(qcolor)
+        self.update_roi_plot(roi)
+        component_number = self.component_number_from_table_index(row)
+        if component_number is not None:
+            self.roi_plotter.update_component_fallback(component_number)
+
+    def _handle_color_button_changed(self, widget: QtWidgets.QWidget | None, qcolor: QtGui.QColor):
+        """
+        Set the component color based on the color button change, update the ROI color, and emit signals to update the color manager if applicable.
+        """
+        row = self._row_for_table_widget(widget)
+        if row is None:
+            return
+        component_number = self.component_number_from_table_index(row)
+        if self.color_manager is not None and component_number is not None:
+            self.update_roi_color(row, qcolor, emit_signal=False)
+            self._set_component_color(component_number, qcolor, emit_signal=True)
+            return
+        self.update_roi_color(row, qcolor)
+
+    def _handle_component_changed(self, widget: QtWidgets.QWidget | None):
+        row = self._row_for_table_widget(widget)
+        if row is None or not 0 <= row < len(self.rois):
+            return
+        self.roi_plotter.roi_component_changed(str(self.rois[row]), self.component_number_from_table_index(row))
+
+    def _handle_shape_changed(self, widget: QtWidgets.QWidget | None, roi_shape: str):
+        row = self._row_for_table_widget(widget)
+        if row is None:
+            return
+        self.change_roi_type(roi_shape, row)
+
+    def _row_and_roi_for_table_widget(self, widget: QtWidgets.QWidget | None) -> tuple[int | None, pg.ROI | None]:
+        row = self._row_for_table_widget(widget)
+        if row is None or not 0 <= row < len(self.rois):
+            return None, None
+        return row, self.rois[row]
+
+    def _handle_name_changed(self, widget: QtWidgets.QWidget | None, text: str):
+        row, roi = self._row_and_roi_for_table_widget(widget)
+        if roi is None:
+            return
+        self.set_roi_properties(
+            roi,
+            self._get_roi_base_color(roi),
+            text,
+            replot=True,
+        )
+        component_number = self.component_number_from_table_index(row)
+        if component_number is not None:
+            self.label_change_signal.emit(component_number, text)
+
+    def _handle_remove_button_clicked(self, widget: QtWidgets.QWidget | None):
+        _, roi = self._row_and_roi_for_table_widget(widget)
+        if roi is None:
+            return
+        self.remove_roi(roi)
+
+    def _handle_roi_update_widget_changed(self, widget: QtWidgets.QWidget | None):
+        _, roi = self._row_and_roi_for_table_widget(widget)
+        if roi is None:
+            return
+        self.update_roi(roi)
+
+    def _handle_export_button_clicked(self, widget: QtWidgets.QWidget | None):
+        _, roi = self._row_and_roi_for_table_widget(widget)
+        if roi is None:
+            return
+        self.export_roi(roi)
+
+    def _handle_subtract_toggled(self, widget: QtWidgets.QWidget | None, state: bool):
+        _, roi = self._row_and_roi_for_table_widget(widget)
+        if roi is None:
+            return
+        if state:
+            self.subtract_background(roi)
+        else:
+            self.remove_subtraction(roi)
+
+    def _handle_plot_toggled(self, widget: QtWidgets.QWidget | None, state: bool):
+        _, roi = self._row_and_roi_for_table_widget(widget)
+        if roi is None:
+            return
+        self.hide_roi(roi, state)
+
+    def _handle_live_update_toggled(self, widget: QtWidgets.QWidget | None, state: bool):
+        _, roi = self._row_and_roi_for_table_widget(widget)
+        if roi is None:
+            return
+        self.connect_signals_to_roi(roi, state)
+
+    def _handle_background_toggled(self, widget: QtWidgets.QWidget | None, state: bool):
+        _, roi = self._row_and_roi_for_table_widget(widget)
+        if roi is None:
+            return
+        self.sync_components(roi, state)
+
+    def _on_roi_clicked(self, roi: pg.ROI, *_):
+        self._select_roi(roi, ensure_image_visible=False, ensure_table_visible=True)
+
+    def component_prompt(self) -> int | None:
+        default_component_number = self._suggest_component_number()
+        component_number, ok = QtWidgets.QInputDialog.getInt(
+            None,
+            "Component Number",
+            "Enter the component number",
+            default_component_number,
+            1,
+            self.max_component_slots,
+            1,
+        )
         if not ok:
-            component_number = roi_number + 1
+            return None
         return component_number
 
     def add_roi(self, user_prompt=True):
+        component_number = self.component_prompt() if user_prompt else self._suggest_component_number()
+        if component_number is None:
+            return
+
         # get the center position of the image view
         view_range = self.image_view.getView().viewRange()
         center = np.array(view_range)
@@ -180,7 +712,6 @@ class ROIManager(QtCore.QObject):
         # Assuming a RectROI for simplicity, adjust as needed for other ROI types
         roi = pg.RectROI(center - np.array(roi_size) / 2, roi_size, pen=(0, 9))
         roi_number = len(self.rois)
-        component_number = self.component_prompt() if user_prompt else roi_number
         color = self.color_manager.get_color_rgb(component_number-1) if self.color_manager else self.default_colors[
             roi_number % len(self.default_colors)]
         label = "ROI {}".format(roi_number + 1)
@@ -196,6 +727,872 @@ class ROIManager(QtCore.QObject):
                                     on_region_change=self.roi_table.cellWidget(cur_index, self.widget_columns['Live Update']).isChecked())
         self.request_plot_avg_intensity(roi_id)
         self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
+
+
+    # ------------------------------------
+    # ROI Auto Suggestion Methods
+    # ------------------------------------
+    def add_rect_roi_from_bounds(
+        self,
+        component_number: int,
+        pos: tuple[float, float],
+        size: tuple[float, float],
+        label_text: str | None = None,
+        auto_suggested: bool = False,
+        score: float | None = None,
+    ) -> str:
+        """
+        Add a rectangular ROI to the image view based on specified position and size, with optional labeling and auto-suggestion metadata.
+        """
+        component_number = int(component_number)
+        color = self.color_manager.get_color_rgb(component_number) if self.color_manager else self.default_colors[
+            component_number % len(self.default_colors)
+        ]
+        roi = pg.RectROI(pos, size, pen=pg.mkPen(color), movable=True)
+        label_text = label_text or f"ROI {len(self.rois) + 1}"
+        self.set_roi_properties(roi, color, label_text)
+        if auto_suggested:
+            roi.is_auto_suggested = True
+            roi.auto_suggestion_score = float(score if score is not None else 0.0)
+
+        self.image_view.getView().addItem(roi)
+        self.rois.append(roi)
+        roi_id = str(roi)
+        self.roi_id_idx[roi_id] = len(self.rois) - 1
+        cur_index = self.add_last_roi_to_table(
+            new_roi_id=roi_id,
+            component_number=component_number,
+            roi_name=label_text,
+        )
+        self.connect_signals_to_roi(
+            roi,
+            on_region_change=self.roi_table.cellWidget(cur_index, self.widget_columns['Live Update']).isChecked(),
+        )
+        self.request_plot_avg_intensity(roi_id)
+        self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
+        return roi_id
+
+    def clear_auto_suggested_rois(self) -> int:
+        """
+        Remove all ROIs that were marked as auto-suggested and return the count of removed ROIs.
+        """
+        rois_to_remove = [roi for roi in list(self.rois) if getattr(roi, "is_auto_suggested", False)]
+        for roi in rois_to_remove[::-1]:
+            self.remove_roi(roi)
+        return len(rois_to_remove)
+
+    def suggest_rois_from_image(self):
+        if self.raw_data is None:
+            QtWidgets.QMessageBox.information(None, "Suggest ROIs", "Load an image stack first.")
+            return
+
+        settings = self._prompt_auto_roi_settings()
+        if settings is None:
+            return
+
+        removed = 0
+        if settings.replace_previous_auto:
+            removed = self.clear_auto_suggested_rois()
+
+        # Stage 1: collapse the spectral stack into one spatial response map.
+        response_map = self._build_spatial_response_map(settings)
+        if response_map is None or response_map.size == 0 or float(np.max(response_map)) <= 0:
+            QtWidgets.QMessageBox.information(
+                None,
+                "Suggest ROIs",
+                "No usable image projection could be built from the current stack.",
+            )
+            return
+        # response map is a 2D numpy array with the selected projection method
+
+        # ignore already occupied ROI areas
+        occupied_mask = self._spatial_roi_mask(include_auto=True)
+        if occupied_mask.any():
+            response_map = response_map.copy()
+            response_map[occupied_mask] = 0.0
+
+        # Stage 2: find localized bright spatial candidates from that map alone.
+        raw_suggestions = self._extract_suggestions_from_response_map(response_map, settings)
+        if not raw_suggestions:
+            QtWidgets.QMessageBox.information(
+                None,
+                "Suggest ROIs",
+                "No peak groups were found. Try lowering the threshold or the local-background sigma.",
+            )
+            return
+
+        available_components = self._available_component_numbers()
+        if not available_components:
+            QtWidgets.QMessageBox.information(
+                None,
+                "Suggest ROIs",
+                f"All {self.max_component_slots} component slots are already used. Remove or reassign ROIs first.",
+            )
+            return
+
+        requested_groups = max(1, int(settings.max_groups_per_component))
+        target_group_count = min(requested_groups, len(available_components))
+        # Stage 3: merge spatial candidates whose mean spectra suggest the same
+        # underlying component, then assign the surviving groups to free component
+        # slots in descending score order.
+        grouped_suggestions = self._group_suggestions_by_spectrum(
+            raw_suggestions,
+            settings,
+            target_group_count=target_group_count,
+            max_members_per_group=int(settings.max_rois_per_group),
+        )
+
+        # put the final ROIS in the ImageView
+        created = []
+        for component, grouped in zip(available_components[:len(grouped_suggestions)], grouped_suggestions):
+            for suggestion in grouped:
+                suggestion_out = AutoROISuggestion(
+                    component=component,
+                    y=suggestion.y,
+                    x=suggestion.x,
+                    height=suggestion.height,
+                    width=suggestion.width,
+                    score=suggestion.score,
+                )
+                created.append(suggestion_out)
+                self.add_rect_roi_from_bounds(
+                    component_number=component,
+                    pos=(suggestion_out.x, suggestion_out.y),
+                    size=(suggestion_out.width, suggestion_out.height),
+                    label_text=self._next_auto_roi_label(component),
+                    auto_suggested=True,
+                    score=suggestion_out.score,
+                )
+
+        message_lines = [
+            f"Detected {len(raw_suggestions)} candidate regions.",
+            f"Merged them into {len(grouped_suggestions)} spectral groups.",
+            f"Created {len(created)} ROI suggestions across {len(grouped_suggestions)} suggested components.",
+        ]
+        accepted_suggestions = sum(len(group) for group in grouped_suggestions)
+        skipped_within_group = max(0, len(raw_suggestions) - accepted_suggestions)
+        if skipped_within_group:
+            message_lines.append(
+                f"Left {skipped_within_group} extra candidate regions unused after spectral grouping and limit application."
+            )
+        if removed:
+            message_lines.append(f"Removed {removed} previous auto ROI suggestions.")
+        if requested_groups > len(grouped_suggestions):
+            message_lines.append(
+                f"Requested {requested_groups} spectral groups, but only {len(grouped_suggestions)} distinct populated groups were found."
+            )
+        if requested_groups > len(available_components):
+            message_lines.append(
+                f"{requested_groups - len(available_components)} requested spectral groups could not be assigned because only {len(available_components)} component slots were free."
+            )
+        QtWidgets.QMessageBox.information(None, "ROI suggestions created", "\n".join(message_lines))
+
+    def _prompt_auto_roi_settings(self) -> AutoROISuggestionSettings | None:
+        dialog = QtWidgets.QDialog()
+        dialog.setWindowTitle("Suggest ROIs")
+        dialog.setModal(True)
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setSpacing(10)
+
+        hint = QtWidgets.QLabel(
+            "Scans the image stack without any resonance input. "
+            "It builds a 2D projection, enhances local peaks, groups bright regions, and adds one ROI per suggestion. "
+            "Balanced stack scan normalizes each frame first so one dominant resonance does not hide weaker groups."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QtWidgets.QFormLayout()
+        form.setLabelAlignment(QtCore.Qt.AlignRight)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(8)
+
+        def add_tooltip_row(label_text: str, widget: QtWidgets.QWidget, tooltip: str):
+            label = QtWidgets.QLabel(label_text)
+            label.setToolTip(tooltip)
+            widget.setToolTip(tooltip)
+            form.addRow(label, widget)
+
+        projection_combo = QtWidgets.QComboBox()
+        projection_combo.addItems(["Balanced stack scan", "Average image", "Maximum projection", "Current frame"])
+        projection_combo.setCurrentText(self.auto_roi_settings.projection_mode)
+        projection_tooltip = (
+            "Chooses how the image stack is collapsed into one 2D scan image. "
+            "Balanced stack scan rescales each frame first so one dominant resonance does not hide weaker groups."
+        )
+
+        processed_check = QtWidgets.QCheckBox("Use processed image when available")
+        processed_check.setChecked(bool(self.auto_roi_settings.use_processed_data and self.subtracted_data is not None))
+        processed_check.setEnabled(self.subtracted_data is not None)
+        processed_tooltip = (
+            "Uses the processed or background-subtracted stack instead of the raw stack, if that processed data exists."
+        )
+
+        background_sigma_spin = QtWidgets.QDoubleSpinBox()
+        background_sigma_spin.setRange(0.0, 100.0)
+        background_sigma_spin.setDecimals(1)
+        background_sigma_spin.setSingleStep(0.5)
+        background_sigma_spin.setValue(float(self.auto_roi_settings.local_background_sigma))
+        background_sigma_tooltip = (
+            "Subtracts a blurred copy of the projection to emphasize local bright structures. "
+            "Higher values remove broader background variation."
+        )
+
+        binning_combo = QtWidgets.QComboBox()
+        for factor in (1, 2, 4, 8):
+            binning_combo.addItem(str(factor), factor)
+        binning_index = binning_combo.findData(int(self.auto_roi_settings.spatial_bin_factor))
+        if binning_index >= 0:
+            binning_combo.setCurrentIndex(binning_index)
+        binning_tooltip = (
+            "Downsamples the scan image before peak finding. "
+            "Higher binning is faster and more robust to noise, but can miss very small regions."
+        )
+
+        smoothing_spin = QtWidgets.QDoubleSpinBox()
+        smoothing_spin.setRange(0.0, 10.0)
+        smoothing_spin.setDecimals(1)
+        smoothing_spin.setSingleStep(0.2)
+        smoothing_spin.setValue(float(self.auto_roi_settings.smoothing_sigma))
+        smoothing_tooltip = (
+            "Applies spatial smoothing before peak detection. "
+            "Increase this to suppress pixel noise; decrease it to preserve sharper structures."
+        )
+
+        threshold_spin = QtWidgets.QDoubleSpinBox()
+        threshold_spin.setRange(10.0, 95.0)
+        threshold_spin.setDecimals(0)
+        threshold_spin.setSingleStep(5.0)
+        threshold_spin.setSuffix(" %")
+        threshold_spin.setValue(float(self.auto_roi_settings.threshold_ratio * 100.0))
+        threshold_tooltip = (
+            "Controls how bright a candidate region must be relative to the response map. "
+            "Lower values find more regions, including weaker ones."
+        )
+
+        min_area_spin = QtWidgets.QSpinBox()
+        min_area_spin.setRange(1, 500)
+        min_area_spin.setValue(int(self.auto_roi_settings.min_group_area))
+        min_area_tooltip = (
+            "Smallest connected bright region that is allowed to become a suggestion. "
+            "Increase this to ignore tiny speckles."
+        )
+
+        min_diagonal_spin = QtWidgets.QSpinBox()
+        min_diagonal_spin.setRange(0, 5000)
+        min_diagonal_spin.setSingleStep(2)
+        min_diagonal_spin.setSuffix(" px")
+        min_diagonal_spin.setValue(int(self.auto_roi_settings.min_roi_diagonal_px))
+        min_diagonal_tooltip = (
+            "Minimum diagonal length of the final suggested ROI box in image pixels. "
+            "Use this when you want the suggester to prefer larger structures and ignore small localized objects."
+        )
+
+        max_rois_spin = QtWidgets.QSpinBox()
+        max_rois_spin.setRange(1, self.max_component_slots)
+        max_rois_spin.setValue(int(self.auto_roi_settings.max_groups_per_component))
+        max_groups_tooltip = (
+            "Maximum number of distinct spectral groups/components to suggest in one scan."
+        )
+
+        max_per_group_spin = QtWidgets.QSpinBox()
+        max_per_group_spin.setRange(1, 25)
+        max_per_group_spin.setValue(int(self.auto_roi_settings.max_rois_per_group))
+        max_per_group_tooltip = (
+            "Limits how many separate spatial ROIs can be created inside one spectral group/component."
+        )
+
+        merge_spectra_check = QtWidgets.QCheckBox("Merge spectrally similar regions")
+        merge_spectra_check.setChecked(bool(self.auto_roi_settings.merge_similar_spectra))
+        merge_duplicates_tooltip = (
+            "Keeps detection image-based, but merges regions whose mean spectra are nearly identical so they share one component."
+        )
+
+        spectral_threshold_spin = QtWidgets.QDoubleSpinBox()
+        spectral_threshold_spin.setRange(70.0, 100.0)
+        spectral_threshold_spin.setDecimals(0)
+        spectral_threshold_spin.setSingleStep(1.0)
+        spectral_threshold_spin.setSuffix(" %")
+        spectral_threshold_spin.setValue(float(self.auto_roi_settings.spectral_similarity_threshold * 100.0))
+        spectral_threshold_spin.setEnabled(merge_spectra_check.isChecked())
+        merge_spectra_check.toggled.connect(spectral_threshold_spin.setEnabled)
+        similarity_tooltip = (
+            "Similarity required to treat two ROI mean spectra as the same group. "
+            "Higher values merge fewer regions; lower values merge more aggressively."
+        )
+
+        replace_auto_check = QtWidgets.QCheckBox("Replace previous auto ROI suggestions")
+        replace_auto_check.setChecked(bool(self.auto_roi_settings.replace_previous_auto))
+        replace_auto_tooltip = (
+            "If enabled, previously auto-generated ROI suggestions are removed before creating new ones."
+        )
+
+        add_tooltip_row("Projection:", projection_combo, projection_tooltip)
+        add_tooltip_row("Processed data:", processed_check, processed_tooltip)
+        add_tooltip_row("Local background sigma:", background_sigma_spin, background_sigma_tooltip)
+        add_tooltip_row("Spatial binning:", binning_combo, binning_tooltip)
+        add_tooltip_row("Peak smoothing:", smoothing_spin, smoothing_tooltip)
+        add_tooltip_row("Peak threshold:", threshold_spin, threshold_tooltip)
+        add_tooltip_row("Min group area:", min_area_spin, min_area_tooltip)
+        add_tooltip_row("Min ROI diagonal:", min_diagonal_spin, min_diagonal_tooltip)
+        add_tooltip_row("Max suggested groups:", max_rois_spin, max_groups_tooltip)
+        add_tooltip_row("Max ROIs per group:", max_per_group_spin, max_per_group_tooltip)
+        add_tooltip_row("Merge duplicates:", merge_spectra_check, merge_duplicates_tooltip)
+        add_tooltip_row("Similarity threshold:", spectral_threshold_spin, similarity_tooltip)
+        replace_auto_check.setToolTip(replace_auto_tooltip)
+        layout.addLayout(form)
+        layout.addWidget(replace_auto_check)
+
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return None
+
+        self.auto_roi_settings = AutoROISuggestionSettings(
+            projection_mode=str(projection_combo.currentText()),
+            use_processed_data=bool(processed_check.isChecked()),
+            local_background_sigma=float(background_sigma_spin.value()),
+            spatial_bin_factor=int(binning_combo.currentData()),
+            smoothing_sigma=float(smoothing_spin.value()),
+            threshold_ratio=float(threshold_spin.value()) / 100.0,
+            peak_region_ratio=float(self.auto_roi_settings.peak_region_ratio),
+            peak_window=int(self.auto_roi_settings.peak_window),
+            min_group_area=int(min_area_spin.value()),
+            min_roi_diagonal_px=int(min_diagonal_spin.value()),
+            max_groups_per_component=int(max_rois_spin.value()),
+            max_rois_per_group=int(max_per_group_spin.value()),
+            candidate_pool_factor=int(self.auto_roi_settings.candidate_pool_factor),
+            padding_px=int(self.auto_roi_settings.padding_px),
+            merge_similar_spectra=bool(merge_spectra_check.isChecked()),
+            spectral_similarity_threshold=float(spectral_threshold_spin.value()) / 100.0,
+            spectral_smoothing_sigma=float(self.auto_roi_settings.spectral_smoothing_sigma),
+            replace_previous_auto=bool(replace_auto_check.isChecked()),
+        )
+        return self.auto_roi_settings
+
+    @staticmethod
+    def _normalize_projection_response(
+        projection: np.ndarray,
+        background_sigma: float,
+    ) -> np.ndarray:
+        """
+        Convert a 2D image into a dimensionless "response map" for ROI finding.
+
+        The physical picture is: first remove the slow, broad background so only
+        local contrast remains, then scale the result into a comparable 0..1 range.
+        Downstream thresholds are therefore applied to "how unusually bright is this
+        spot locally?" rather than to raw detector counts.
+        """
+        projection = np.asarray(projection, dtype=float)
+        projection = np.nan_to_num(projection, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if background_sigma > 0:
+            local_background = gaussian_filter(projection, sigma=float(background_sigma))
+            projection = projection - local_background
+
+        projection[projection < 0] = 0.0
+        positive_values = projection[projection > 0]
+        if positive_values.size == 0:
+            return np.zeros_like(projection, dtype=np.float32)
+
+        scale = float(np.percentile(positive_values, 99.5))
+        if not np.isfinite(scale) or scale <= 0:
+            scale = float(np.max(positive_values))
+        if scale > 0:
+            projection = np.clip(projection / scale, 0.0, 1.0)
+
+        return projection.astype(np.float32, copy=False)
+
+    @classmethod
+    def _build_balanced_stack_projection(
+        cls,
+        stack: np.ndarray,
+        background_sigma: float,
+    ) -> np.ndarray:
+        """
+        Build a projection in which strong and weak spectral slices contribute more
+        equally.
+
+        In practical terms, each frame is normalized on its own before the strongest
+        few responses are averaged per pixel.  This helps weak slice-specific
+        structure survive when a plain average image would be dominated by only a
+        few very bright resonances.
+        """
+        if stack.ndim == 2:
+            return cls._normalize_projection_response(stack, background_sigma)
+
+        frame_responses = [
+            cls._normalize_projection_response(frame, background_sigma)
+            for frame in stack
+        ]
+        if not frame_responses:
+            return np.zeros(stack.shape[1:], dtype=np.float32)
+
+        normalized_stack = np.stack(frame_responses, axis=0)
+        top_k = min(3, normalized_stack.shape[0])
+        kth_index = max(0, normalized_stack.shape[0] - top_k)
+        top_responses = np.partition(normalized_stack, kth_index, axis=0)[kth_index:, ...]
+        projection = np.mean(top_responses, axis=0)
+        return projection.astype(np.float32, copy=False)
+
+    def _build_spatial_response_map(self, settings: AutoROISuggestionSettings) -> np.ndarray | None:
+        """
+        Collapse the full spectral stack into one 2D map that answers:
+        "where in the field of view is there likely a localized object worth drawing
+        an ROI around?"
+
+        Different projection modes encode different physical assumptions.  Average
+        image favors structures that stay bright across many slices, whereas
+        balanced stack scan tries harder to rescue features that are prominent only
+        in a smaller subset of slices.
+        """
+        stack = self.subtracted_data if settings.use_processed_data and self.subtracted_data is not None else self.raw_data
+        if stack is None or not np.size(stack):
+            return None
+
+        stack = np.asarray(stack, dtype=float)
+        if stack.ndim == 2:
+            return self._normalize_projection_response(stack, background_sigma=float(settings.local_background_sigma))
+
+        projection_mode = settings.projection_mode.lower()
+        if projection_mode == "balanced stack scan":
+            return self._build_balanced_stack_projection(
+                stack,
+                background_sigma=float(settings.local_background_sigma),
+            )
+        if projection_mode == "maximum projection":
+            projection = np.max(stack, axis=0)
+        elif projection_mode == "current frame":
+            frame_index = int(np.clip(self.image_view.currentIndex, 0, stack.shape[0] - 1))
+            projection = stack[frame_index, ...]
+        else:
+            projection = np.mean(stack, axis=0)
+
+        return self._normalize_projection_response(
+            projection,
+            background_sigma=float(settings.local_background_sigma),
+        )
+
+    def _spatial_roi_mask(self, include_auto: bool = True) -> np.ndarray:
+        """
+        Return a boolean mask of the same height and width as the image, where pixels covered by any existing ROI are True.
+        """
+        if self.raw_data is None:
+            return np.zeros((0, 0), dtype=bool)
+
+        mask = np.zeros(self.raw_data.shape[1:], dtype=bool)
+        for roi in self.rois:
+            if isinstance(roi, DummyROI):
+                continue
+            if getattr(roi, "is_gaussian_model", False):
+                continue
+            if not include_auto and getattr(roi, "is_auto_suggested", False):
+                continue
+            pixels = self.get_pixels_in_roi(roi)
+            mask[pixels[1].astype(int), pixels[0].astype(int)] = True
+        return mask
+
+    def _available_component_numbers(self) -> list[int]:
+        """
+        Return all 0-based indices that have an underlying ROI.
+        """
+        used_components = set()
+        for row in range(self.roi_table.rowCount()):
+            component = self.component_number_from_table_index(row)
+            if component is not None:
+                used_components.add(component)
+        return [component for component in range(self.max_component_slots) if component not in used_components]
+
+    def _suggest_component_number(self) -> int:
+        available_components = self._available_component_numbers()
+        if available_components:
+            return available_components[0] + 1
+        return self.max_component_slots
+
+    def _group_suggestions_by_spectrum(
+        self,
+        suggestions: list[AutoROISuggestion],
+        settings: AutoROISuggestionSettings,
+        target_group_count: int | None = None,
+        max_members_per_group: int | None = None,
+    ) -> list[list[AutoROISuggestion]]:
+        """
+        Merge spatially separate candidate boxes if their mean spectra look like the
+        same underlying component.
+
+        The detection step is image-driven first: find bright localized structures.
+        This step is spectrum-driven second: decide which of those structures are
+        probably manifestations of the same chemistry or morphology.
+        """
+        if not suggestions:
+            return []
+        target_group_count = max(
+            1,
+            int(settings.max_groups_per_component if target_group_count is None else target_group_count),
+        )
+        max_members_per_group = max(
+            1,
+            int(settings.max_rois_per_group if max_members_per_group is None else max_members_per_group),
+        )
+        ranked_suggestions = sorted(suggestions, key=lambda suggestion: suggestion.score, reverse=True)
+
+        if self.raw_data is None or not settings.merge_similar_spectra:
+            return [[suggestion] for suggestion in ranked_suggestions[:target_group_count]]
+
+        threshold = float(np.clip(settings.spectral_similarity_threshold, 0.0, 1.0))
+        grouped: list[dict[str, object]] = []
+
+        for suggestion in ranked_suggestions:
+            # Use the mean spectrum inside each candidate box as a compact spectral
+            # fingerprint for deciding whether two spatially distant ROIs should be
+            # treated as one component.
+            spectrum = self._spectrum_for_bounds(suggestion)
+            vector = self._normalize_spectrum_for_similarity(
+                spectrum,
+                sigma=float(settings.spectral_smoothing_sigma),
+            )
+
+            if vector is None:
+                if len(grouped) >= target_group_count:
+                    if all(
+                        len(existing_group["members"]) >= max_members_per_group
+                        for existing_group in grouped
+                    ):
+                        break
+                    continue
+                grouped.append({"prototype": None, "vectors": [], "members": [suggestion]})
+                continue
+
+            best_index = None
+            best_similarity = -1.0
+            for group_index, group in enumerate(grouped):
+                prototype = group["prototype"]
+                if prototype is None:
+                    continue
+                # Cosine similarity compares spectral shape more than absolute
+                # brightness, which is what we want for "same component?" logic.
+                similarity = float(np.dot(vector, prototype))   # cosine similarity without norm
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_index = group_index
+
+            if best_index is not None and best_similarity >= threshold:
+                group = grouped[best_index]
+                members = group["members"]
+                if len(members) >= max_members_per_group:
+                    if len(grouped) >= target_group_count and all(
+                        len(existing_group["members"]) >= max_members_per_group
+                        for existing_group in grouped
+                    ):
+                        break
+                    continue
+                members.append(suggestion)
+                vectors = group["vectors"]
+                if vector is not None:
+                    vectors.append(vector)
+                    stacked = np.vstack(vectors)
+                    prototype = np.mean(stacked, axis=0)
+                    norm = np.linalg.norm(prototype)
+                    group["prototype"] = prototype / norm if norm > 0 else prototype
+                if len(grouped) >= target_group_count and all(
+                    len(existing_group["members"]) >= max_members_per_group
+                    for existing_group in grouped
+                ):
+                    break
+                continue
+
+            if len(grouped) >= target_group_count:
+                if all(
+                    len(existing_group["members"]) >= max_members_per_group
+                    for existing_group in grouped
+                ):
+                    break
+                continue
+
+            grouped.append({"prototype": vector, "vectors": [vector], "members": [suggestion]})
+            if len(grouped) >= target_group_count and all(
+                len(existing_group["members"]) >= max_members_per_group
+                for existing_group in grouped
+            ):
+                break
+
+        grouped.sort(
+            key=lambda group: max(member.score for member in group["members"]),
+            reverse=True,
+        )
+        return [
+            sorted(group["members"], key=lambda member: member.score, reverse=True)
+            for group in grouped
+        ]
+
+    def _spectrum_for_bounds(self, suggestion: AutoROISuggestion) -> np.ndarray | None:
+        if self.raw_data is None:
+            return None
+
+        y0 = max(0, int(np.floor(suggestion.y)))
+        x0 = max(0, int(np.floor(suggestion.x)))
+        y1 = min(self.raw_data.shape[1], int(np.ceil(suggestion.y + suggestion.height)))
+        x1 = min(self.raw_data.shape[2], int(np.ceil(suggestion.x + suggestion.width)))
+        if y1 <= y0 or x1 <= x0:
+            return None
+
+        block = self.raw_data[:, y0:y1, x0:x1]
+        if block.size == 0:
+            return None
+        # Averaging over the candidate footprint suppresses single-pixel noise and
+        # gives a representative spectrum of that spatial island.
+        return np.mean(block, axis=(1, 2))
+
+    @staticmethod
+    def _normalize_spectrum_for_similarity(spectrum: np.ndarray | None, sigma: float = 0.0) -> np.ndarray | None:
+        if spectrum is None:
+            return None
+
+        vector = np.asarray(spectrum, dtype=float)
+        if vector.ndim != 1 or vector.size == 0:
+            return None
+
+        vector = np.nan_to_num(vector, nan=0.0, posinf=0.0, neginf=0.0)
+        if sigma > 0:
+            vector = gaussian_filter1d(vector, sigma=float(sigma))
+
+        # Remove a weak baseline before normalization so the comparison is driven by
+        # spectral shape, not by a constant offset.
+        baseline = float(np.percentile(vector, 10))
+        vector = vector - baseline
+        vector[vector < 0] = 0.0
+        norm = float(np.linalg.norm(vector))
+        if norm <= 0:
+            return None
+        return vector / norm
+
+    def _next_auto_roi_label(self, component: int) -> str:
+        count = 0
+        for row in range(self.roi_table.rowCount()):
+            if self.component_number_from_table_index(row) != component:
+                continue
+            if getattr(self.rois[row], "is_auto_suggested", False):
+                count += 1
+        return f"Auto ROI C{component + 1}.{count + 1}"
+
+    @staticmethod
+    def _coarsen_image(image: np.ndarray, factor: int) -> np.ndarray:
+        factor = max(1, int(factor))
+        if factor == 1:
+            return image.copy()
+
+        height, width = image.shape
+        coarse_height = height // factor
+        coarse_width = width // factor
+        if coarse_height == 0 or coarse_width == 0:
+            return image.copy()
+
+        cropped = image[: coarse_height * factor, : coarse_width * factor]
+        return cropped.reshape(coarse_height, factor, coarse_width, factor).mean(axis=(1, 3))
+
+    @staticmethod
+    def _bbox_iou(first_box: tuple[int, int, int, int], second_box: tuple[int, int, int, int]) -> float:
+        y0 = max(first_box[0], second_box[0])
+        x0 = max(first_box[1], second_box[1])
+        y1 = min(first_box[2], second_box[2])
+        x1 = min(first_box[3], second_box[3])
+
+        if y1 <= y0 or x1 <= x0:
+            return 0.0
+
+        intersection = float((y1 - y0) * (x1 - x0))
+        first_area = float(max(0, first_box[2] - first_box[0]) * max(0, first_box[3] - first_box[1]))
+        second_area = float(max(0, second_box[2] - second_box[0]) * max(0, second_box[3] - second_box[1]))
+        union = first_area + second_area - intersection
+        if union <= 0:
+            return 0.0
+        return intersection / union
+
+    @classmethod
+    def _extract_suggestions_from_response_map(
+        cls,
+        response_map: np.ndarray,
+        settings: AutoROISuggestionSettings,
+    ) -> list[AutoROISuggestion]:
+        """
+        Turn the 2D response map into concrete ROI box proposals.
+
+        The logic is intentionally multi-stage: coarsen and smooth the map, sweep
+        through several thresholds, label connected bright regions, then place boxes
+        around local maxima inside those regions.  Using several thresholds makes
+        the method less brittle: strong compact peaks and weaker broader objects can
+        both survive the first pass.
+        """
+        response_map = np.asarray(response_map, dtype=float)
+        if response_map.size == 0:
+            return []
+
+        factor = max(1, int(settings.spatial_bin_factor))
+        coarse_map = cls._coarsen_image(response_map, factor)   # apply binning if desired
+        if coarse_map.size == 0:
+            return []
+
+        if settings.smoothing_sigma > 0:
+            # Smooth on the coarse map because this is the scale on which candidate
+            # boxes are proposed.  It reduces pixel noise without pretending to know
+            # sub-pixel structure.
+            coarse_map = gaussian_filter(coarse_map, sigma=float(settings.smoothing_sigma))
+        coarse_map = np.nan_to_num(coarse_map, nan=0.0, posinf=0.0, neginf=0.0)
+        coarse_map[coarse_map < 0] = 0.0
+
+        positive_values = coarse_map[coarse_map > 0]
+        if positive_values.size == 0:
+            return []
+
+        max_value = float(np.max(positive_values))
+        if max_value <= 0:
+            return []
+
+        peak_window = max(3, int(settings.peak_window))
+        if peak_window % 2 == 0:
+            peak_window += 1
+        local_maxima = coarse_map == maximum_filter(coarse_map, size=peak_window, mode="nearest")
+
+        suggestions: list[AutoROISuggestion] = []
+        seen_boxes: list[tuple[int, int, int, int]] = []
+        min_group_area = max(1, int(settings.min_group_area))
+        # define the upper limit of ROIs to look out for
+        target_candidates = (
+            max(1, int(settings.max_groups_per_component))
+            * max(1, int(settings.max_rois_per_group))
+            * max(2, int(settings.candidate_pool_factor))
+        )
+        # try to scale actual number by pool factor since later candidates may merge to the same group
+
+        # define 5 search levels relative to the global max to find also weaker resonances
+        high_ratio = float(np.clip(settings.threshold_ratio, 0.05, 0.99))
+        low_ratio = max(0.12, high_ratio * 0.35)    # clip low ratio to 1/e or at least 12 %
+        threshold_ratios = np.linspace(high_ratio, low_ratio, num=5)
+        percentile_levels = np.linspace(85.0, 50.0, num=5)  # stop percentile at median to avoid too much noise
+
+        for threshold_ratio, percentile_level in zip(threshold_ratios, percentile_levels):
+            robust_floor = float(np.percentile(positive_values, percentile_level))
+            threshold = max(max_value * float(threshold_ratio), robust_floor)
+            candidate_mask = coarse_map >= threshold
+            if not candidate_mask.any():
+                continue
+
+            # Connected-component labeling turns the thresholded response map into
+            # separate candidate objects that can each host one or several peaks.
+            labeled_regions, n_regions = label(candidate_mask)
+            for region_index in range(1, n_regions + 1):
+                # find bright blobs instead of just bright pixels
+                region_mask = labeled_regions == region_index
+                if int(region_mask.sum()) < min_group_area:
+                    # skip regions where the is not enough pixels above threshold to even draw a box
+                    continue
+
+                peak_coords = np.argwhere(local_maxima & region_mask)
+                if peak_coords.size == 0:
+                    coords = np.argwhere(region_mask)
+                    if coords.size == 0:
+                        continue
+                    peak_coords = np.array([coords[np.argmax(coarse_map[coords[:, 0], coords[:, 1]])]])
+
+                peak_coords = sorted(
+                    peak_coords.tolist(),
+                    key=lambda coord: coarse_map[coord[0], coord[1]],
+                    reverse=True,
+                )
+
+                local_boxes: list[tuple[int, int, int, int]] = []
+                for peak_y, peak_x in peak_coords:
+                    peak_value = float(coarse_map[peak_y, peak_x])
+                    if peak_value <= 0:
+                        continue
+
+                    # Try to draw islands based on peaks with the scipy label method
+                    # connect continuous regions to form a candidate
+                    local_threshold = max(threshold, peak_value * float(settings.peak_region_ratio))
+                    local_mask = region_mask & (coarse_map >= local_threshold)
+                    local_labels, _ = label(local_mask)
+                    label_value = int(local_labels[peak_y, peak_x]) if local_labels.size else 0
+                    coords = np.argwhere(local_labels == label_value) if label_value > 0 else np.argwhere(region_mask)
+                    if coords.size == 0:
+                        # ignore
+                        continue
+
+                    y0, x0 = coords.min(axis=0)
+                    y1, x1 = coords.max(axis=0) + 1
+                    coarse_box = (int(y0), int(x0), int(y1), int(x1))
+                    if any(cls._bbox_iou(coarse_box, other_box) >= 0.85 for other_box in local_boxes):
+                        continue
+                    if any(cls._bbox_iou(coarse_box, other_box) >= 0.75 for other_box in seen_boxes):
+                        continue
+
+                    # At this point the suggestion is purely spatial: "there is a
+                    # localized bright object here."  The later spectral grouping
+                    # step decides whether several such boxes should share one
+                    # component label.
+                    scaled_suggestion = cls._scale_suggestion_to_full_resolution(
+                        AutoROISuggestion(
+                            component=-1,
+                            y=int(y0),
+                            x=int(x0),
+                            height=int(y1 - y0),
+                            width=int(x1 - x0),
+                            score=peak_value,
+                        ),
+                        full_shape=response_map.shape,
+                        factor=factor,
+                        padding_px=int(settings.padding_px),
+                    )
+
+                    # final check: is the ROI smaller than desired? If yes, continue searching
+                    min_diagonal_px = max(0.0, float(settings.min_roi_diagonal_px))
+                    if min_diagonal_px > 0:
+                        diagonal_px = float(np.hypot(scaled_suggestion.width, scaled_suggestion.height))
+                        if diagonal_px < min_diagonal_px:
+                            continue
+
+                    local_boxes.append(coarse_box)
+                    seen_boxes.append(coarse_box)
+                    suggestions.append(scaled_suggestion)
+
+                    if len(suggestions) >= target_candidates:
+                        break
+
+                if len(suggestions) >= target_candidates:
+                    break
+
+            if len(suggestions) >= target_candidates:
+                break
+
+        suggestions.sort(key=lambda suggestion: suggestion.score, reverse=True)
+        return suggestions[:target_candidates]
+
+    @staticmethod
+    def _scale_suggestion_to_full_resolution(
+        suggestion: AutoROISuggestion,
+        full_shape: tuple[int, int],
+        factor: int,
+        padding_px: int,
+    ) -> AutoROISuggestion:
+        factor = max(1, int(factor))
+        padding_px = max(0, int(padding_px))
+
+        y0 = max(0, suggestion.y * factor - padding_px)
+        x0 = max(0, suggestion.x * factor - padding_px)
+        y1 = min(full_shape[0], (suggestion.y + suggestion.height) * factor + padding_px)
+        x1 = min(full_shape[1], (suggestion.x + suggestion.width) * factor + padding_px)
+
+        return AutoROISuggestion(
+            component=suggestion.component,
+            y=int(y0),
+            x=int(x0),
+            height=max(1, int(y1 - y0)),
+            width=max(1, int(x1 - x0)),
+            score=float(suggestion.score),
+        )
 
 
     def add_last_roi_to_table(self, new_roi_id=None, component_number=None, dummy: bool = False,
@@ -216,82 +1613,96 @@ class ROIManager(QtCore.QObject):
 
         if roi_name is not None:
             roi.label = roi_name
-            self.set_roi_properties(roi, roi.pen.color(), roi_name)
+            self.set_roi_properties(roi, self._get_roi_base_color(roi), roi_name)
         label_item = QtWidgets.QLineEdit(roi.label)
-        label_item.textChanged.connect(lambda text, roi_item=roi: self.set_roi_properties(roi_item, roi_item.pen.color(), text, replot=True))
-        label_item.textChanged.connect(lambda text: self.label_change_signal.emit(component_number, text))
+        base_name_style = (
+            "QLineEdit {"
+            " border: 2px solid transparent;"
+            " background-color: transparent;"
+            " padding: 0px 2px;"
+            " }"
+        )
+        label_item.setStyleSheet(base_name_style)
+        label_item.setProperty("roi_base_style", base_name_style)
+        label_item.textChanged.connect(lambda text, widget=label_item: self._handle_name_changed(widget, text))
         # check for label item text changes
         # label_item.cellChanged.connect(lambda text, roi_item=roi: self.update_roi_plot(roi_item))
-        color_button = ColorButton(roi.pen.color())
-        color_button.color_changed.connect(lambda col: self.color_manager.set_color_rgb(self.component_number_from_table_index(new_row_idx), col))
+        color_button = ColorButton(self._get_roi_base_color(roi))
+        color_button.color_changed.connect(lambda col, button=color_button: self._handle_color_button_changed(button, col))
 
-        max_cmp_number = 9
+        max_cmp_number = self.max_component_slots
         resonance_combobox = QtWidgets.QComboBox()
         resonance_combobox.addItems("Compontent %i" % i for i in range(1, max_cmp_number+1))
         index = new_row_idx
         if component_number is not None:
             index = component_number
         resonance_combobox.setCurrentIndex(index % max_cmp_number)
-        resonance_combobox.currentIndexChanged.connect(lambda idx: self.roi_plotter.roi_component_changed(str(roi), int(idx)))
+        resonance_combobox.currentIndexChanged.connect(lambda idx, combo=resonance_combobox: self._handle_component_changed(combo))
         remove_button = QtWidgets.QPushButton("Remove")
-        remove_button.clicked.connect(lambda state: self.remove_roi(roi))
+        remove_button.clicked.connect(lambda state, button=remove_button: self._handle_remove_button_clicked(button))
+
+        show_button = QtWidgets.QPushButton("Show")
+        show_button.setToolTip("Center the image view on this ROI.")
+        show_button.clicked.connect(lambda state, button=show_button: self._show_roi_for_table_widget(button))
 
         smooth_spinbox = QtWidgets.QDoubleSpinBox()
         smooth_spinbox.setValue(0)
         smooth_spinbox.setRange(0, 100)
         smooth_spinbox.setSingleStep(.5)
-        smooth_spinbox.valueChanged.connect(lambda value: self.update_roi(roi))
+        smooth_spinbox.valueChanged.connect(lambda value, widget=smooth_spinbox: self._handle_roi_update_widget_changed(widget))
 
         export_button = QtWidgets.QPushButton("Export")
-        export_button.clicked.connect(lambda state: self.export_roi(roi))
+        export_button.clicked.connect(lambda state, button=export_button: self._handle_export_button_clicked(button))
 
         type_item = QtWidgets.QComboBox()
         type_item.addItems(["LineROI", "RectROI", "EllipseROI", "RotatableRectROI"])
         type_item.setCurrentText("LineROI" if isinstance(roi, pg.LineROI) else "RectROI")
-        type_item.setMaximumWidth(75)
+        type_item.setMinimumContentsLength(len("RotatableRectROI"))
+        type_item.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        type_item.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
 
         subtract_button = QtWidgets.QCheckBox()
         subtract_button.setChecked(False)
-        subtract_button.clicked.connect(lambda state, roi_idx=new_row_idx: self.subtract_background(roi) if state else self.remove_subtraction(roi))
+        subtract_button.clicked.connect(lambda state, widget=subtract_button: self._handle_subtract_toggled(widget, state))
 
         # Create a checkbox for the "Plot" column
         plot_checkbox = QtWidgets.QCheckBox()
         plot_checkbox.setChecked(True)
-        plot_checkbox.stateChanged.connect(lambda state: self.hide_roi(roi, state))
+        plot_checkbox.stateChanged.connect(lambda state, widget=plot_checkbox: self._handle_plot_toggled(widget, state))
 
         update_checkbox = QtWidgets.QCheckBox()
         update_checkbox.setChecked(True)
         # only emit the roi_changed signal on region change finish or on region change depending on the checkbox state
-        update_checkbox.stateChanged.connect(lambda state: self.connect_signals_to_roi(roi, state))
+        update_checkbox.stateChanged.connect(lambda state, widget=update_checkbox: self._handle_live_update_toggled(widget, state))
 
         background_checkbox = QtWidgets.QCheckBox()
-        background_checkbox.stateChanged.connect(lambda state: self.sync_components(roi, state))
+        background_checkbox.stateChanged.connect(lambda state, widget=background_checkbox: self._handle_background_toggled(widget, state))
         background_checkbox.setChecked(is_background)
 
         scale_spinbox = QtWidgets.QDoubleSpinBox()
         scale_spinbox.setValue(1)
         scale_spinbox.setRange(1e-2, 10)
         scale_spinbox.setSingleStep(.05)
-        scale_spinbox.valueChanged.connect(lambda value: self.update_roi(roi))
+        scale_spinbox.valueChanged.connect(lambda value, widget=scale_spinbox: self._handle_roi_update_widget_changed(widget))
 
         offset_spinbox = QtWidgets.QDoubleSpinBox()
         offset_spinbox.setValue(0)
         offset_spinbox.setRange(-max_dtype_val, max_dtype_val)
         offset_spinbox.setSingleStep(500)
-        offset_spinbox.valueChanged.connect(lambda value: self.update_roi(roi))
+        offset_spinbox.valueChanged.connect(lambda value, widget=offset_spinbox: self._handle_roi_update_widget_changed(widget))
 
         self.roi_table.setCellWidget(new_row_idx, 0, label_item)
+        self._register_table_selection_widget(label_item)
         roi_table_items = [color_button, resonance_combobox, background_checkbox, subtract_button, scale_spinbox, offset_spinbox,
-                           smooth_spinbox, export_button, type_item, update_checkbox, plot_checkbox, remove_button]
+                           smooth_spinbox, export_button, type_item, update_checkbox, plot_checkbox, show_button, remove_button]
         for col, item in enumerate(roi_table_items):
             self.roi_table.setCellWidget(new_row_idx, col + 1, item)
+            self._register_table_selection_widget(item)
         # adjust cell widths to contents
-
-
-        color_button.color_changed.connect(lambda color, roi_idx=new_row_idx: self.update_roi_color(roi_idx, color))
         logger.debug(roi)
-        type_item.currentTextChanged.connect(lambda shape, row=new_row_idx: self.change_roi_type(shape, row))
+        type_item.currentTextChanged.connect(lambda shape, combo=type_item: self._handle_shape_changed(combo, shape))
         type_item.setEnabled(not dummy)
+        show_button.setEnabled(not dummy)
 
         state = False
         # set checked state based on the component number
@@ -300,6 +1711,7 @@ class ROIManager(QtCore.QObject):
             state = self.roi_table.cellWidget(idx, self.widget_columns['Background']).isChecked()
         background_checkbox.setChecked(state)
 
+        self._refresh_roi_table_layout()
         return new_row_idx
 
     from contents.spectrum_loader import SpectrumLoader
@@ -496,6 +1908,8 @@ class ROIManager(QtCore.QObject):
         # Iterate over the loaded spectra and create an ROI for each one
         for i in range(len(spec_loader.target_spectra)):
             component_number = self.component_prompt()
+            if component_number is None:
+                break
 
             # Call the preparation function, passing the specific index 'i'
             self.prepare_roi_from_external_spectrum(spec_loader, component_number, index=i)
@@ -591,6 +2005,10 @@ class ROIManager(QtCore.QObject):
         # This populates spectrum_loader.target_spectra
         spectrum_loader.prepare_spectrum()
 
+        preset_components = list(range(len(colormap_colors)))
+        for idx, color in enumerate(colormap_colors):
+            self._set_component_color(idx, QColor(*color), emit_signal=False)
+
         # 4. Loop through the resulting target spectra and create ROIs
         for idx in range(len(spectrum_loader.target_spectra)):
             # Component number for the ROI table (starts at 1)
@@ -599,11 +2017,8 @@ class ROIManager(QtCore.QObject):
             # FIX: Call the updated prepare_roi function with the required index
             self.prepare_roi_from_external_spectrum(spectrum_loader, component_number, index=idx)
 
-            # Load the colormap color from the preset.
-            # Use idx (0-based) for the colormap_colors list, but component_number (1-based) for the lookup.
-            self.update_roi_color(component_number - 1, QColor(*colormap_colors[idx]))
-
-        self.preset_load_signal.emit(len(seeds), vmin_vmax, colormap_colors)
+        self.reload_colors()
+        self._emit_component_color_updates(preset_components)
 
         self.preset_load_signal.emit(len(seeds), vmin_vmax, colormap_colors)
 
@@ -620,6 +2035,9 @@ class ROIManager(QtCore.QObject):
             component_number % len(self.default_colors)] + (255,)
 
     def component_number_from_table_index(self, idx: int) -> int | None:
+        """
+        Returns the 0-based index of the component, i.e. the first component "Component 1" will return 0.
+        """
         col = self.widget_columns['Resonance']
 
         # Try as a widget (QComboBox)
@@ -648,6 +2066,13 @@ class ROIManager(QtCore.QObject):
             signal = self.get_roi_average(roi)
         self.plot_roi_signal.emit(roi_id, signal, label)
         self.roi_plotter.plot_roi_average(roi_id, signal, label)
+
+    @staticmethod
+    def _get_roi_base_color(roi: pg.ROI) -> QtGui.QColor:
+        base_pen = getattr(roi, "base_pen", None)
+        if base_pen is not None:
+            return base_pen.color()
+        return roi.pen.color()
 
     def update_roi_plot(self, roi):
         """
@@ -678,8 +2103,16 @@ class ROIManager(QtCore.QObject):
         roi.fixed_W = W
 
     def set_roi_properties(self, roi, color, label, replot=False):
-        roi.setPen(pg.mkPen(color))
+        base_pen = pg.mkPen(color, width=2)
+        base_pen.setCosmetic(True)
+        base_hover_pen = pg.mkPen(color, width=3)
+        base_hover_pen.setCosmetic(True)
+        roi.base_pen = base_pen
+        roi.base_hover_pen = base_hover_pen
+        if not hasattr(roi, "base_z_value"):
+            roi.base_z_value = roi.zValue()
         roi.label = label
+        self.set_roi_highlight(roi, highlighted=roi == self.active_roi)
         if replot:
             self.update_roi_plot(roi)
 
@@ -706,7 +2139,11 @@ class ROIManager(QtCore.QObject):
     def remove_roi(self, roi: pg.ROI):
         roi_id = str(roi)
         index = self.roi_id_idx.get(roi_id)
+        if index is None:
+            logger.error("ROI %s not found in roi_id_idx mapping, cannot remove."%roi_id)
+            return
         if 0 <= index < len(self.rois):
+            was_active = roi == self.active_roi
             # check if the roi has been subtracted from the image
             if self.fill_roi is not None:
                 # check if the table index has the subtract checkbox checked
@@ -726,6 +2163,9 @@ class ROIManager(QtCore.QObject):
             if roi_id in self.roi_region_change_signals:
                 self.disconnect(self.roi_region_change_signals[roi_id])
                 del self.roi_region_change_signals[roi_id]
+            if roi_id in self.roi_click_signals:
+                self.disconnect(self.roi_click_signals[roi_id])
+                del self.roi_click_signals[roi_id]
 
             if roi_id in self.spectrum_loaders:
                 del self.spectrum_loaders[roi_id]
@@ -739,6 +2179,7 @@ class ROIManager(QtCore.QObject):
 
 
             self.roi_table.removeRow(index)
+            self._refresh_roi_table_layout()
 
 
             new_cmp = False
@@ -752,7 +2193,21 @@ class ROIManager(QtCore.QObject):
             if not new_cmp:
                 # if no other roi exists for this component, set back to default name
                 self.label_change_signal.emit(index, f"Component {index}")
+            if self.active_roi in self.rois:
+                self._select_roi(self.active_roi, ensure_image_visible=False, ensure_table_visible=False)
+            elif was_active:
+                self.active_roi = None
+                if self.rois:
+                    self._select_roi_by_row(min(index, len(self.rois) - 1), ensure_image_visible=False, ensure_table_visible=True)
+                else:
+                    self._set_table_row_highlight(None)
             logger.info(f"Removed ROI {index}")
+
+    def remove_all_rois(self):
+        if not self.rois:
+            return
+        for roi in reversed(self.rois.copy()):  # make a hard copy to not reverse the initial list
+            self.remove_roi(roi)
 
 
     def hide_roi(self, roi: pg.ROI, state: bool):
@@ -766,22 +2221,15 @@ class ROIManager(QtCore.QObject):
         # finding the component in the table
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component_number:
-                self.color_manager.set_color_rgb(component_number, color.getRgb())
-                self.default_colors[component_number % len(self.default_colors)] = color.getRgb()
+                self._set_component_color(component_number, color, emit_signal=False)
                 logger.debug(f'Updating color of component {component_number} at index {idx} to {color.getRgb()}')
                 self.update_roi_color(idx, color, emit_signal=False)  # do not emit the signal to avoid infinite loop
 
     def update_roi_color(self, roi_idx, qcolor: QtGui.QColor, emit_signal=True):
         logger.debug('Color update', qcolor)
-        roi = self.rois[roi_idx]
-        roi.setPen(pg.mkPen(qcolor))
-        # TODO: send update to plot
-        self.update_roi_plot(roi)
+        self._apply_row_color(roi_idx, qcolor, update_widget=True)
         if emit_signal:
             self.color_change_signal.emit(roi_idx, qcolor.getRgb()[:-1])
-        # update the color widget in the table
-        color_widget: pg.ColorButton = self.roi_table.cellWidget(roi_idx, self.widget_columns['Color'])
-        color_widget.setColor(qcolor)
 
     def reload_colors(self):
         if self.color_manager:
@@ -789,25 +2237,26 @@ class ROIManager(QtCore.QObject):
                 component_number = self.component_number_from_table_index(idx)
                 qcolor = self.color_manager.get_qcolor(component_number)
                 self.update_roi_color(idx, qcolor, emit_signal=False)
+            self.roi_plotter.refresh_all_component_fallbacks()
 
-    def update_selected_roi(self):
-        selected_items = self.roi_table.selectedItems()
-        if not selected_items:
+    def update_selected_roi(self, *_):
+        if self._selection_sync_in_progress:
+            return
+        selected_row = self.roi_table.currentRow()
+        if selected_row < 0:
             return
         logger.debug('New ROI selected in Table')
-        selected_row = selected_items[0].row()
-        if 0 <= selected_row < len(self.rois):
-            selected_roi = self.rois[selected_row]
-            self.active_roi = selected_roi
-            # Highlight the selected ROI (change its color or style)
-            for roi in self.rois:
-                if roi == selected_roi:
-                    self.set_roi_highlight(roi)
-                else:
-                    self.set_roi_highlight(roi, highlighted=False)
+        self._select_roi_by_row(
+            selected_row,
+            ensure_image_visible=False,
+            ensure_table_visible=False,
+            sync_table_selection=False,
+        )
 
     def change_roi_type(self, roi_shape, row_idx):
         old_roi = self.rois[row_idx]
+        old_roi_id = str(old_roi)
+        was_active = old_roi == self.active_roi
         new_roi = None
 
         if roi_shape == 'RectROI':
@@ -826,15 +2275,36 @@ class ROIManager(QtCore.QObject):
         if new_roi:
             new_roi.label = old_roi.label
             new_roi.setZValue(old_roi.zValue())
+            for attr_name in ("is_auto_suggested", "auto_suggestion_score", "base_z_value"):
+                if hasattr(old_roi, attr_name):
+                    setattr(new_roi, attr_name, getattr(old_roi, attr_name))
+            if hasattr(old_roi, "base_pen"):
+                new_roi.base_pen = pg.mkPen(old_roi.base_pen)
+            if hasattr(old_roi, "base_hover_pen"):
+                new_roi.base_hover_pen = pg.mkPen(old_roi.base_hover_pen)
             self.image_view.removeItem(old_roi)
             self.remove_roi_plot_signal.emit(str(old_roi))
             self.roi_plotter.remove_plot_roi(str(old_roi))
             self.image_view.addItem(new_roi)
         row_idx = self.rois.index(old_roi)
         self.rois[row_idx] = new_roi
+        if old_roi_id in self.roi_id_idx:
+            del self.roi_id_idx[old_roi_id]
         self.roi_id_idx[str(new_roi)] = row_idx
-        self.connect_signals_to_roi(new_roi)
+        if old_roi_id in self.roi_region_change_signals:
+            self.disconnect(self.roi_region_change_signals[old_roi_id])
+            del self.roi_region_change_signals[old_roi_id]
+        if old_roi_id in self.roi_click_signals:
+            self.disconnect(self.roi_click_signals[old_roi_id])
+            del self.roi_click_signals[old_roi_id]
+        self.connect_signals_to_roi(
+            new_roi,
+        )
         self.request_plot_avg_intensity(str(new_roi))
+        if was_active:
+            self._select_roi(new_roi, ensure_image_visible=False, ensure_table_visible=True)
+        else:
+            self.set_roi_highlight(new_roi, highlighted=False)
 
     def connect_signals_to_roi(self, roi: pg.ROI, on_region_change=True):
         roi_id = str(roi)
@@ -846,6 +2316,13 @@ class ROIManager(QtCore.QObject):
             sig = roi.sigRegionChangeFinished.connect(lambda: self.request_plot_avg_intensity(roi_id))
             logger.warning(f'Switched to region change finished for {roi_id}')
         self.roi_region_change_signals[roi_id] = sig
+        if not isinstance(roi, DummyROI) and hasattr(roi, "sigClicked"):
+            roi.setAcceptedMouseButtons(QtCore.Qt.LeftButton)
+            if roi_id in self.roi_click_signals:
+                self.disconnect(self.roi_click_signals[roi_id])
+            self.roi_click_signals[roi_id] = roi.sigClicked.connect(
+                lambda clicked_roi, event, roi_item=roi: self._on_roi_clicked(roi_item, event)
+            )
 
     def sync_components(self, roi: pg.ROI, state: bool):
         """
@@ -908,19 +2385,41 @@ class ROIManager(QtCore.QObject):
             roi: (pg.ROI) The ROI object to be highlighted
             highlighted: (bool) If True, the ROI will be highlighted, otherwise it will be unhighlighted
         """
+        if roi is None or isinstance(roi, DummyROI):
+            return
+
         roi_idx = self.roi_id_idx.get(str(roi))
-        if highlighted:
-            pen = pg.mkPen((255, 255, 0), width=5)
-        else:
-            # get the original pen of the ROI from the table
+        if not hasattr(roi, "base_pen"):
+            # load the color from the widget if no base pen has been assigned yet
             if roi_idx is not None:
-                pen = pg.mkPen(self.roi_table.cellWidget(roi_idx, self.widget_columns['Color']).color.getRgb())
+                color_widget = self.roi_table.cellWidget(roi_idx, self.widget_columns['Color'])
+                color = color_widget.color if color_widget is not None else roi.pen.color()
             else:
-                pen = pg.mkPen(roi.pen.color().getRgb())
+                color = roi.pen.color()
+            roi.base_pen = pg.mkPen(color, width=2)
+            roi.base_pen.setCosmetic(True)
+            roi.base_hover_pen = pg.mkPen(color, width=3)
+            roi.base_hover_pen.setCosmetic(True)
+        if not hasattr(roi, "base_z_value"):
+            roi.base_z_value = roi.zValue()
+
+        if highlighted:
+            pen = pg.mkPen((255, 235, 120), width=4)
+            pen.setCosmetic(True)
+            roi.hoverPen = pg.mkPen((255, 255, 255), width=5)
+            roi.hoverPen.setCosmetic(True)
+            roi.setZValue(float(roi.base_z_value) + 1000.0)
+        else:
+            pen = pg.mkPen(roi.base_pen)
+            roi.hoverPen = pg.mkPen(getattr(roi, "base_hover_pen", roi.base_pen))
+            roi.setZValue(float(roi.base_z_value))
 
         roi.setPen(pen)
         # replot the ROI with the correct pen
-        self.plot_roi(roi, label=self.roi_table.cellWidget(roi_idx, self.widget_columns['Name']).text())
+        if roi_idx is not None:
+            name_widget = self.roi_table.cellWidget(roi_idx, self.widget_columns['Name'])
+            if name_widget is not None:
+                self.plot_roi(roi, label=name_widget.text())
 
     def get_roi_mean_curves(self) -> list[dict]:
         # iterate over all entries in the table, sort them by their resonance given in the combobox and average identical resonances together
@@ -1211,7 +2710,7 @@ class ROIManager(QtCore.QObject):
 
             row_state = {
                 "name": self.roi_table.cellWidget(row, self.widget_columns["Name"]).text(),
-                "color": list(roi.pen.color().getRgb()),  # [r,g,b,a]
+                "color": list(getattr(roi, "base_pen", roi.pen).color().getRgb()),  # [r,g,b,a]
                 "component": int(self.component_number_from_table_index(row) or 0),
                 "resonance_index": int(self.roi_table.cellWidget(row, self.widget_columns["Resonance"]).currentIndex()),
                 "background": bool(self.roi_table.cellWidget(row, self.widget_columns["Background"]).isChecked()),
@@ -1255,6 +2754,7 @@ class ROIManager(QtCore.QObject):
 
         rois = state.get("rois", []) if isinstance(state, dict) else []
         subtract_row_to_apply = None
+        imported_component_colors: dict[int, QtGui.QColor] = {}
 
         for entry in rois:
             dummy = bool(entry.get("dummy", False))
@@ -1301,19 +2801,19 @@ class ROIManager(QtCore.QObject):
             live_cb = self.roi_table.cellWidget(row, self.widget_columns["Live Update"])
             plot_cb = self.roi_table.cellWidget(row, self.widget_columns["Plot"])
 
-            # add signal blockers
+            # add signal blockers for all widgets to prevent signals from firing while we set their values
             blockers = [QtCore.QSignalBlocker(w) for w in
-                        [name_w, res_cb, bg_cb, sub_cb, sc_sb, off_sb, sm_sb, shape_cb, live_cb, plot_cb] if
+                        [name_w, color_w, res_cb, bg_cb, sub_cb, sc_sb, off_sb, sm_sb, shape_cb, live_cb, plot_cb] if
                         w is not None]
 
             if name_w is not None:
                 name_w.setText(str(entry.get("name", "")))
 
+            entry_qcolor = None
             if color_w is not None:
                 color = entry.get("color", [255, 0, 0, 255])
-                qcolor = QtGui.QColor(color[0], color[1], color[2], color[3])
-                color_w.setColor(qcolor)
-                roi_obj.setPen(pg.mkPen(qcolor))
+                entry_qcolor = QtGui.QColor(color[0], color[1], color[2], color[3])
+                color_w.setColor(entry_qcolor)
 
             if res_cb is not None:
                 res_cb.setCurrentIndex(int(entry.get("resonance_index", 0)))
@@ -1360,6 +2860,12 @@ class ROIManager(QtCore.QObject):
                 except Exception:
                     pass
 
+            if entry_qcolor is not None:
+                component_number = self.component_number_from_table_index(row)
+                if component_number is not None:
+                    imported_component_colors[component_number] = QtGui.QColor(entry_qcolor)
+                self._apply_row_color(row, entry_qcolor, update_widget=True)
+
             # ensure plots reflect imported settings
             try:
                 self.update_roi(self.rois[row])
@@ -1373,6 +2879,13 @@ class ROIManager(QtCore.QObject):
                 self.subtract_background(self.rois[subtract_row_to_apply], refill=True)
             except Exception:
                 pass
+
+        for component_number, qcolor in imported_component_colors.items():
+            self._set_component_color(component_number, qcolor, emit_signal=False)
+
+        if imported_component_colors:
+            self.reload_colors()
+            self._emit_component_color_updates(imported_component_colors.keys())
 
         try:
             self.replot_all_rois()
@@ -1484,9 +2997,17 @@ class ROIPlotter(pg.PlotWidget):
         if roi_id in self.roi_avg_lines and self.roi_avg_lines[roi_id]:
             line_item = self.roi_avg_lines[roi_id]
             self.removeItem(line_item)
-        # Plot the z_data in the new plot
+        # Plot against the spectral axis only if it matches the ROI signal length.
+        x_values = self.roi_manager.wavenumbers
+        if x_values is None or len(x_values) != len(z_data):
+            logger.warning(
+                "ROI manager plot axis length mismatch (%s vs %s). Falling back to channel indices.",
+                None if x_values is None else len(x_values),
+                len(z_data),
+            )
+            x_values = np.arange(len(z_data))
         l = self.plot(
-            self.roi_manager.wavenumbers,
+            x_values,
             z_data,
             pen=roi_pen,
             name=label,
@@ -1580,6 +3101,7 @@ class ROIPlotter(pg.PlotWidget):
             line = self.component_gaussian_lines[component_number]
             line.setData(self.roi_manager.wavenumbers, z_data)
             line.setName(label)
+            line.setPen(pg.mkPen(self.roi_manager.get_color_rgba(component_number)))
             return
 
         # New line

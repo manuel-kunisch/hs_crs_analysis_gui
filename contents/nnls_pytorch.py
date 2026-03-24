@@ -46,15 +46,24 @@ def solve_batched_nnls_projected_gradient(
         use_acceleration: bool = True,
 ) -> np.ndarray:
     """
-    Approximate batched non-negative least squares using projected gradient / FISTA.
+    Solve the fixed-H NNMF subproblem for W with a batched PyTorch NNLS solver.
 
-    Solves:
-        min_{A >= 0} ||X - A B^T||_F^2
+    With the hyperspectral data matrix X and seeded spectra H kept fixed, this
+    estimates the non-negative abundance matrix W by solving
 
-    where:
-        X: (n_pixels, n_bands)
-        B: (n_bands, n_components)
-        A: (n_pixels, n_components)
+        W = argmin_{W >= 0} ||X - W H||_F^2 .
+
+    This is the same NNLS problem as in the SciPy backend, but solved in
+    batches with projected-gradient updates and optional FISTA acceleration.
+
+    For each pixel spectrum x_p, the abundance vector w_p is obtained from
+
+        w_p = argmin_{w_p >= 0} ||x_p - w_p H||_2^2 .
+
+    In the implementation, ``basis`` stores the seeded spectra as columns, so
+    ``basis = H^T`` and the solved form is
+
+        w_p = argmin_{w_p >= 0} ||basis @ w_p - x_p||_2^2 .
     """
     if not torch_available():
         raise RuntimeError(f"PyTorch is not available: {_TORCH_IMPORT_ERROR}")

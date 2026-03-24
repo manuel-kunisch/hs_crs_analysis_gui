@@ -364,6 +364,24 @@ class MultivariateAnalyzer(object):
             basis: np.ndarray,
             eps: float,
     ) -> np.ndarray:
+        """
+        Solve a SciPy NNLS abundance fit for every active pixel.
+
+        Each pixel spectrum is modeled as a non-negative linear combination of
+        the seeded component spectra in `basis`. The result is an abundance
+        matrix whose entry abundance[p, j] is the fitted coefficient of basis
+        spectrum j at pixel p.
+
+        SciPy solves this pixel by pixel. For each pixel spectrum x_p, it computes the
+        non-negative abundance vector w_p from
+
+            w_p = argmin_{w_p >= 0} ||x_p - w_p H||_2^2 .
+
+        In the implementation, ``basis`` stores the seeded spectra as columns, so
+        ``basis = H^T`` and SciPy is called on the equivalent problem
+
+            w_p = argmin_{w_p >= 0} ||basis @ w_p - x_p||_2^2 .
+        """
         working_data = np.asarray(image_data, dtype=np.float64)
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
         working_data = np.maximum(working_data, 0.0)
@@ -387,6 +405,30 @@ class MultivariateAnalyzer(object):
             eps: float,
             source_key: str,
     ) -> np.ndarray:
+        """
+        Solve the fixed-H NNMF subproblem for W via a non-negative least-squares formulation.
+
+        With the hyperspectral data matrix X and seeded spectra H kept fixed, we estimate
+        the non-negative abundance matrix W by solving
+
+            W = argmin_{W >= 0} ||X - W H||_F^2 .
+
+        This method is the general NNLS entry point for that solve. Depending on the
+        number of seeded spectra and the available backend, it either
+
+        - uses the closed-form one-component solution,
+        - solves the NNLS problem with SciPy, or
+        - uses the optional PyTorch/CUDA NNLS backend.
+
+        For each pixel spectrum x_p, the corresponding abundance vector w_p is obtained from
+
+            w_p = argmin_{w_p >= 0} ||x_p - w_p H||_2^2 .
+
+        In the implementation, ``basis`` stores the seed spectra as columns, so
+        ``basis = H^T`` and the backend solves the equivalent form
+
+            w_p = argmin_{w_p >= 0} ||basis @ w_p - x_p||_2^2 .
+        """
         if basis.shape[1] == 1:
             working_data = np.asarray(image_data, dtype=np.float64)
             working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
@@ -452,6 +494,19 @@ class MultivariateAnalyzer(object):
             prepared_target: np.ndarray,
             eps: float
     ) -> np.ndarray:
+        """
+        Estimate a positive score map for component i from its prepared seed spectrum by projection of the spectrum.
+
+        For each pixel, compute the non-negative projection onto the prepared target
+        spectrum. If competing seeded spectra exist, down-weight that projection by a
+        selectivity factor so pixels that also match other components receive a lower
+        score.
+
+        Returned score:
+            score = target_strength * target_strength / (target_strength + competitor_strength + eps)
+
+        This is used as the W seed in `selective_score` mode.
+        """
         working_data = np.asarray(image_data, dtype=np.float64)
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
         working_data = np.maximum(working_data, 0.0)

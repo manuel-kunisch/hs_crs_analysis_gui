@@ -394,6 +394,7 @@ class DataWidget(QtWidgets.QWidget):
         self.image = img
         logger.info("Updating ROI manager data")
         self.roi_manager.update_data(img)
+        self.raman_raw_image_view.request_single_autoplay_cycle(reset_to_start=True)
         # pass data to ROI manager, calculate the subtracted data etc.
         if self.show_processed_image_check.isChecked():
             self.callback_processed_img(True)

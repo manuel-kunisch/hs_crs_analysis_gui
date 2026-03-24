@@ -33,7 +33,9 @@ class RamanImageView(ImageViewLineRoi):
         self.max_ticks = max_ticks
         self.unit = "cm⁻¹"
         self.fps = 10.0
-        self.autoplay = bool(autoplay)
+        self.autoplay = False
+        self._play_once_on_next_image = bool(autoplay)
+        self._reset_to_start_on_play_once = bool(autoplay)
         self._playback_tick_in_progress = False
         self._suppress_manual_stop = False
         # create vertical ticks in the frame graph
@@ -153,6 +155,10 @@ class RamanImageView(ImageViewLineRoi):
     def is_playing(self) -> bool:
         return self.playTimer.isActive()
 
+    def request_single_autoplay_cycle(self, reset_to_start: bool = True):
+        self._play_once_on_next_image = True
+        self._reset_to_start_on_play_once = bool(reset_to_start)
+
     def set_playing(self, playing: bool):
         playing = bool(playing)
         was_playing = self.is_playing()
@@ -193,6 +199,16 @@ class RamanImageView(ImageViewLineRoi):
         next_index = self.currentIndex + 1
         if next_index >= self.nframes():
             if not self.playLoop:
+                # after a single cycle set the image to the center-most frame
+                center_index = self.nframes() // 2
+                self._playback_tick_in_progress = True
+                self._suppress_manual_stop = True
+                try:
+                    self.setCurrentIndex(center_index)
+                finally:
+                    self._suppress_manual_stop = False
+                    self._playback_tick_in_progress = False
+                self.playLoop = True
                 self.set_playing(False)
                 return
             next_index = 0
@@ -242,8 +258,20 @@ class RamanImageView(ImageViewLineRoi):
                 self.setCurrentIndex(current_frame)
             finally:
                 self._suppress_manual_stop = False
-        # Start Auto Play
-        if self.autoplay:
+        play_once = self._play_once_on_next_image and self.nframes() > 1
+        self._play_once_on_next_image = False
+        if play_once:
+            if self._reset_to_start_on_play_once:
+                self._suppress_manual_stop = True
+                try:
+                    self.setCurrentIndex(0)
+                finally:
+                    self._suppress_manual_stop = False
+            self.playLoop = False
+            self.play(self.fps)
+        # Start user-controlled looping autoplay
+        elif self.autoplay:
+            self.playLoop = True
             self.play(self.fps)
         self.update_timeline_ticks()
 

@@ -67,6 +67,7 @@ class AnalysisManager(QtCore.QObject):
         # add an attribute to store fixed W components for NNMF
         self._fixed_seed_W: dict[int, np.ndarray] = {}  # component -> (n_pixels,) float32
         self._fixed_seed_W_counts: dict[int, int] = {}  # component -> number of fixed W maps averaged into the stored mean
+        self.rolling_ball_preview_dialog: QtWidgets.QDialog | None = None
         self.wavenumbers = None
 
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
@@ -353,7 +354,7 @@ class AnalysisManager(QtCore.QObject):
 
         # (1) Resonance / actions
         actions_gb = QtWidgets.QGroupBox("Actions")
-        actions_layout = QtWidgets.QVBoxLayout(actions_gb)
+        actions_layout = QtWidgets.QHBoxLayout(actions_gb)
         actions_layout.setSpacing(8)
 
         add_button = _make_btn(
@@ -375,11 +376,15 @@ class AnalysisManager(QtCore.QObject):
         )
 
         actions_layout.addWidget(add_button)
+        actions_layout.addWidget(test_seeds_button)
+        """
+        # old layout
         check_layout = QtWidgets.QHBoxLayout()
         check_layout.setSpacing(8)
         check_layout.addWidget(check_W_seeds_button)
         check_layout.addWidget(test_seeds_button)
         actions_layout.addLayout(check_layout)
+        """
 
         right_layout.addWidget(actions_gb)
 
@@ -407,20 +412,22 @@ class AnalysisManager(QtCore.QObject):
         self.rolling_ball_sigma.setFixedWidth(90)
         bg_form.addRow("Gaussian smoothing (px):", self.rolling_ball_sigma)
 
+        self.rolling_ball_projection_combo = QtWidgets.QComboBox()
+        self.rolling_ball_projection_combo.addItem("Mean Projection", "mean")
+        self.rolling_ball_projection_combo.addItem("Max Projection", "max")
+        self.rolling_ball_projection_combo.addItem("Min Projection", "min")
+        self.rolling_ball_projection_combo.setFixedWidth(120)
+        bg_form.addRow("Reference image:", self.rolling_ball_projection_combo)
+
         bg_btn_row = QtWidgets.QHBoxLayout()
         bg_btn_row.setSpacing(8)
         rb_button = _make_btn(
-            "From selected resonance",
+            "Preview Background",
             "image-filter", QtWidgets.QStyle.SP_FileDialogContentsView,
-            slot=self.rolling_background_component_from_selected_resonance
-        )
-        rb_avg_button = _make_btn(
-            "From average image",
-            "insert-image", QtWidgets.QStyle.SP_FileIcon,
-            slot=self.rolling_background_component_from_average_image
+            slot=self.rolling_background_component_from_projection
         )
         bg_btn_row.addWidget(rb_button)
-        bg_btn_row.addWidget(rb_avg_button)
+        bg_btn_row.addStretch(1)
         bg_gb_layout.addLayout(bg_btn_row)
         right_layout.addWidget(bg_gb)
 
@@ -1380,38 +1387,28 @@ class AnalysisManager(QtCore.QObject):
                 return c
         return None
 
-    def rolling_background_component_from_average_image(self):
-        # get the average image over all wavenumbers
-        avg_image = np.mean(self.mv_analyzer.raw_data_3d, axis=0)
-        self._rolling_ball_background(avg_image)
-
-
-    def rolling_background_component_from_selected_resonance(self):
+    def rolling_background_component_from_projection(self):
         """
-        Create a background component using rolling ball algorithm based on the currently selected resonance row.
-        Estimates a background W component and H component.
-        The background component can be added as a dummy ROI with fixed W seed.
+        Create a background component using a simple projection of the current
+        hyperspectral stack as reference image for the rolling-ball background.
 
         Returns
         -------
 
         """
-        # make sure W seeds exist for the signal component
-        self.reload_H_seeds_from_rois()
-        W, H, _ = self._make_W_seeds_from_spectral_info(make_H_seeds=False, debug_mode=False)
+        if self.mv_analyzer.raw_data_3d is None:
+            QtWidgets.QMessageBox.information(self.analysis_widget, "Info", "Load an image stack first.")
+            return
 
-        # get the W seed from the current user selection for W and H
-        row = self.resonance_table.currentRow()
-        if row is None or row < 0:
-            QtWidgets.QMessageBox.information(self.analysis_widget, "Info", "Select a resonance row first.")
-            return
-        signal_comp = self.get_component_index(row)
-        if signal_comp is None:
-            QtWidgets.QMessageBox.warning(self.analysis_widget, "Warning", "Could not determine component from row.")
-            return
-        img_1d = W[:, signal_comp]
-        img_2d = img_1d.reshape(self.mv_analyzer.raw_data_3d.shape[1], self.mv_analyzer.raw_data_3d.shape[2])
-        self._rolling_ball_background(img_2d)
+        projection_mode = self.rolling_ball_projection_combo.currentData() if hasattr(self, "rolling_ball_projection_combo") else "mean"
+        if projection_mode == "max":
+            projection_image = np.max(self.mv_analyzer.raw_data_3d, axis=0)
+        elif projection_mode == "min":
+            projection_image = np.min(self.mv_analyzer.raw_data_3d, axis=0)
+        else:
+            projection_image = np.mean(self.mv_analyzer.raw_data_3d, axis=0)
+
+        self._rolling_ball_background(projection_image)
 
     def _rolling_ball_background(self, img_2d: np.ndarray):
         bg_comp = self._find_free_component_index()
@@ -1430,36 +1427,90 @@ class AnalysisManager(QtCore.QObject):
                                                                                  smooth_sigma=sigma,
                                                                                  write_into_seeds=False)
 
-        # make a new window and show the W_bg in a pyqtgraph image view
-        bg_W_view = self.make_W_seed_view(W_bg.reshape(self.mv_analyzer.raw_data_3d.shape[1],
-                                                       self.mv_analyzer.raw_data_3d.shape[2], -1))
-        bg_W_view.setWindowTitle(f"Background W Component {bg_comp + 1}")
-        bg_W_view.show()
+        def add_background_roi():
+            self.roi_manager.add_dummy_roi(
+                H_bg,
+                component_number=int(bg_comp + 1),
+                is_background=True,
+                spectrum_name="RollingBall BG",
+                fixed_W=W_bg,
+                seed_H_enabled=False,
+            )
 
-        # add user prompt if he/she want to add the W as seed as well (saved in the roi)
-        reply = QtWidgets.QMessageBox.question(self.analysis_widget, 'Add Background ROI',
-                                               f'Do you want to add the background component {bg_comp + 1} as a'
-                                               f' dummy ROI with fixed W seed?'
-                                               f'\n\n'
-                                               f'Note: W will be saved in the ROI and used as fixed W seed for future analysis runs until removed.',
-                                               QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                                               QtWidgets.QMessageBox.Yes)
+        if self.rolling_ball_preview_dialog is not None:
+            self.rolling_ball_preview_dialog.close()
+            self.rolling_ball_preview_dialog = None
 
-        # kill the bg_W_view if it is still open
-        if bg_W_view is not None:
-            bg_W_view.close()
+        bg_W_view = self.make_W_seed_view(
+            W_bg.reshape(self.mv_analyzer.raw_data_3d.shape[1], self.mv_analyzer.raw_data_3d.shape[2], -1)
+        )
 
-        if reply == QtWidgets.QMessageBox.No:
-            return
+        class RollingBallPreviewDialog(QtWidgets.QDialog):
+            def __init__(self, parent, image_view, component_number: int, add_callback):
+                super().__init__(parent)
+                self._add_callback = add_callback
+                self._added = False
+                self.setWindowTitle(f"Background W Component {component_number}")
+                self.resize(640, 720)
 
-        self.roi_manager.add_dummy_roi(H_bg, component_number=int(bg_comp + 1), is_background=True,
-                                       spectrum_name="RollingBall BG",
-                                       fixed_W=W_bg
-                                       # pass fixed W to the roi so it gets loaded on seed creation
-                                       )
+                layout = QtWidgets.QVBoxLayout(self)
+                layout.setContentsMargins(10, 10, 10, 10)
+                layout.setSpacing(8)
 
-        # Optional: immediately show/update seed window
-        self.make_all_seeds_from_inputs(show_seeds=True)
+                info_label = QtWidgets.QLabel(
+                    "Inspect the rolling-ball background map below. "
+                    "Press 'Add Background ROI' to store it as a dummy ROI with fixed W."
+                )
+                info_label.setWordWrap(True)
+                layout.addWidget(info_label)
+                layout.addWidget(image_view, stretch=1)
+
+                button_row = QtWidgets.QHBoxLayout()
+                button_row.addStretch(1)
+                add_button = QtWidgets.QPushButton("Add Background ROI")
+                add_button.clicked.connect(self._accept_and_add)
+                button_row.addWidget(add_button)
+                layout.addLayout(button_row)
+
+            def _accept_and_add(self):
+                if not self._added:
+                    self._add_callback()
+                    self._added = True
+                self.close()
+
+            def closeEvent(self, event: QtGui.QCloseEvent):
+                if self._added:
+                    event.accept()
+                    return
+
+                reply = QtWidgets.QMessageBox.question(
+                    self,
+                    "Add Background ROI",
+                    "Do you want to add this rolling-ball background component as a dummy ROI with fixed W seed before closing?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No | QtWidgets.QMessageBox.Cancel,
+                    QtWidgets.QMessageBox.Yes,
+                )
+                if reply == QtWidgets.QMessageBox.Yes:
+                    self._add_callback()
+                    self._added = True
+                    event.accept()
+                elif reply == QtWidgets.QMessageBox.No:
+                    event.accept()
+                else:
+                    event.ignore()
+
+        preview_dialog = RollingBallPreviewDialog(
+            self.analysis_widget,
+            bg_W_view,
+            bg_comp + 1,
+            add_background_roi,
+        )
+        preview_dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
+        preview_dialog.destroyed.connect(lambda *_: setattr(self, "rolling_ball_preview_dialog", None))
+        self.rolling_ball_preview_dialog = preview_dialog
+        preview_dialog.show()
+        preview_dialog.raise_()
+        preview_dialog.activateWindow()
 
     def _check_and_find_seeds(self, n_components: int, debug_mode: bool = debug) -> dict[int, tuple[np.ndarray, np.ndarray]]:
         """

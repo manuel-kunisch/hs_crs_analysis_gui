@@ -1,0 +1,17 @@
+# Core runtime dependencies for the HS CRS analysis GUI.
+# For a fully reproducible setup, prefer exporting a Conda environment file
+# from the machine where the app is known to work.
+#
+# Optional:
+#   torch
+# Needed only for the optional PyTorch/CUDA NNMF and NNLS backends.
+
+numpy
+scipy
+scikit-image
+scikit-learn
+tifffile
+pyqtgraph
+PyQt5
+qtawesome
+matplotlib

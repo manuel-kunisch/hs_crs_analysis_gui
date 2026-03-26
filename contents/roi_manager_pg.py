@@ -2250,12 +2250,15 @@ class ROIManager(QtCore.QObject):
             for idx in range(self.roi_table.rowCount()):
                 if self.component_number_from_table_index(idx) == cmp:
                     # update the label name
-                    self.label_change_signal.emit(idx, self.roi_table.cellWidget(idx, self.widget_columns['Name']).text())#
+                    self.label_change_signal.emit(
+                        cmp,
+                        self.roi_table.cellWidget(idx, self.widget_columns['Name']).text(),
+                    )
                     new_cmp = True
                     break
-            if not new_cmp:
+            if not new_cmp and cmp is not None:
                 # if no other roi exists for this component, set back to default name
-                self.label_change_signal.emit(index, f"Component {index}")
+                self.label_change_signal.emit(cmp, f"Component {cmp}")
             if self.active_roi in self.rois:
                 self._select_roi(self.active_roi, ensure_image_visible=False, ensure_table_visible=False)
             elif was_active:

@@ -414,8 +414,12 @@ class CompositeImageViewWidget(QMainWindow):
             axis.setTicks([tick_values])
 
     def update_label(self, component_number: int, new_label: str):
-        # Store/update the label for the given component
-        self.custom_labels[component_number] = new_label
+        # Reverting to the default label should clear the custom label cache.
+        default_label = f'Component {component_number}'
+        if not new_label or new_label == default_label:
+            self.custom_labels.pop(component_number, None)
+        else:
+            self.custom_labels[component_number] = new_label
         self.refresh_label_overlay(component_number)  # Optional: Re-render or update something
         self.fiji_saver.labels = self.custom_labels
 
@@ -465,22 +469,22 @@ class CompositeImageViewWidget(QMainWindow):
                 self.plot_seeds(self.spectral_cmps_seed, dashed=True)
 
 
-    def refresh_label_overlay(self, index: int):
+    def refresh_label_overlay(self, component_index: int):
         """
-            Update the label of a PlotDataItem in the spectrum view without replotting it.
-            """
-        if not self.spectrum_lines:
+        Update the label of a PlotDataItem in the spectrum view without replotting it.
+        """
+        if not self.spectrum_lines or not (0 <= component_index < len(self.spectrum_lines)):
             return
-        line = self.spectrum_lines[index]
+        line = self.spectrum_lines[component_index]
 
         # Remove the old legend entry
         self.legend.removeItem(line)
-        new_label = self.custom_labels.get(index, f'Component {index}')
+        new_label = self.custom_labels.get(component_index, f'Component {component_index}')
         self.legend.addItem(line, new_label)
 
-        if self.channel_slider.value() == index:
+        if self.channel_slider.value() == component_index:
             # Update the title of the channel view
-            self.channel_view.view.setTitle(f"Channel {index} {new_label}")
+            self.channel_view.view.setTitle(f"Channel {component_index} {new_label}")
 
 
     def plot_seeds(self, seeds: np.ndarray, dashed: bool = True):
@@ -672,7 +676,9 @@ class CompositeImageViewWidget(QMainWindow):
         self.color_widget.setColor(pg.mkColor(colormap_color))
         self.color_widget.blockSignals(False)
         # Update the label to show current channel index
-        self.channel_view.view.setTitle(f"Channel {channel_index} {self.custom_labels.get(channel_index, '')}")
+        custom_label = self.custom_labels.get(channel_index)
+        suffix = f" {custom_label}" if custom_label else ""
+        self.channel_view.view.setTitle(f"Channel {channel_index}{suffix}")
 
     def callback_color_widget(self):
         # Get the selected color from the ColorButton
@@ -912,9 +918,9 @@ class CompositeImageViewWidget(QMainWindow):
 
     def update_plot_line_color(self, index: int, color: QColor):
         # update the color of the plot in the spectrum view
-        if self.spectrum_lines:
+        if 0 <= index < len(self.spectrum_lines):
             self.spectrum_lines[index].setPen(pg.mkPen(color))
-        if self.seed_lines:
+        if 0 <= index < len(self.seed_lines):
             self.seed_lines[index].setPen(pg.mkPen(color))
 
     def reload_color_current_channel(self):

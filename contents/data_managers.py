@@ -223,15 +223,8 @@ class ImageLoader(QtWidgets.QWidget):
                     meta = json.load(fh)
 
                 # basic validation + normalization
-                tuned_beam = meta.get("tuned_beam", "").lower()
-                if tuned_beam not in {"stokes", "pump"}:
-                    raise ValueError("tuned_beam must be 'stokes' or 'pump'")
-
-                fixed_beam_nm = float(meta["fixed_beam_nm"])  # required
-
-                tuned_min_nm = meta.get("tuned_min_nm")
-                tuned_max_nm = meta.get("tuned_max_nm")
-                tuned_step_nm = meta.get("tuned_step_nm")
+                custom_values = meta.get("custom_values", meta.get("custom_points"))
+                custom_labels = meta.get("custom_labels", meta.get("labels"))
                 spectral_unit = meta.get("spectral_unit", meta.get("unit"))
 
                 if spectral_unit is not None:
@@ -243,19 +236,44 @@ class ImageLoader(QtWidgets.QWidget):
                     else:
                         raise ValueError("spectral_unit must be 'nm' or 'cm⁻¹'")
 
-                if tuned_min_nm is None and tuned_max_nm is None and tuned_step_nm is None:
-                    raise ValueError(
-                        "Need at least tuned_min_nm + tuned_max_nm OR tuned_step_nm"
-                    )
+                if custom_values is not None or custom_labels is not None:
+                    if custom_values is not None:
+                        custom_values = [float(value) for value in custom_values]
+                    if custom_labels is not None:
+                        custom_labels = [str(value) for value in custom_labels]
+                    if custom_values is not None and custom_labels is not None and len(custom_values) != len(custom_labels):
+                        raise ValueError("custom_values and custom_labels must have the same length")
+                    if custom_values is None and custom_labels is None:
+                        raise ValueError("Custom wavelength metadata requires custom_values and/or custom_labels")
 
-                self.wavelength_meta = {
-                    "tuned_beam": tuned_beam,
-                    "fixed_beam_nm": fixed_beam_nm,
-                    "tuned_min_nm": float(tuned_min_nm) if tuned_min_nm is not None else None,
-                    "tuned_max_nm": float(tuned_max_nm) if tuned_max_nm is not None else None,
-                    "tuned_step_nm": float(tuned_step_nm) if tuned_step_nm is not None else None,
-                    "spectral_unit": spectral_unit,
-                }
+                    self.wavelength_meta = {
+                        "custom_values": custom_values,
+                        "custom_labels": custom_labels,
+                        "spectral_unit": spectral_unit,
+                    }
+                else:
+                    tuned_beam = meta.get("tuned_beam", "").lower()
+                    if tuned_beam not in {"stokes", "pump"}:
+                        raise ValueError("tuned_beam must be 'stokes' or 'pump'")
+
+                    fixed_beam_nm = float(meta["fixed_beam_nm"])  # required
+                    tuned_min_nm = meta.get("tuned_min_nm")
+                    tuned_max_nm = meta.get("tuned_max_nm")
+                    tuned_step_nm = meta.get("tuned_step_nm")
+
+                    if tuned_min_nm is None and tuned_max_nm is None and tuned_step_nm is None:
+                        raise ValueError(
+                            "Need at least tuned_min_nm + tuned_max_nm OR tuned_step_nm"
+                        )
+
+                    self.wavelength_meta = {
+                        "tuned_beam": tuned_beam,
+                        "fixed_beam_nm": fixed_beam_nm,
+                        "tuned_min_nm": float(tuned_min_nm) if tuned_min_nm is not None else None,
+                        "tuned_max_nm": float(tuned_max_nm) if tuned_max_nm is not None else None,
+                        "tuned_step_nm": float(tuned_step_nm) if tuned_step_nm is not None else None,
+                        "spectral_unit": spectral_unit,
+                    }
 
                 logger.info(f"Loaded wavelength metadata from {meta_path}")
                 print(self.wavelength_meta)

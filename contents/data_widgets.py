@@ -1017,6 +1017,43 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.wavenumbers_changed.emit(self.wavenumbers)
 
     def apply_wavelength_meta(self, meta: dict, n_frames: int):
+        custom_values = meta.get("custom_values")
+        custom_labels = meta.get("custom_labels")
+        spectral_unit = meta.get("spectral_unit")
+
+        if custom_values is not None or custom_labels is not None:
+            self.n_frames = int(n_frames)
+
+            widgets = [
+                self.source_combo,
+                self.custom_unit_combo,
+            ]
+            for w in widgets:
+                w.blockSignals(True)
+
+            if spectral_unit is not None:
+                unit_index = self.custom_unit_combo.findText(str(spectral_unit))
+                if unit_index >= 0:
+                    self.custom_unit_combo.setCurrentIndex(unit_index)
+
+            self.source_combo.setCurrentIndex(1)
+            self.stack.setCurrentIndex(1)
+
+            if custom_values is None and custom_labels is not None:
+                self.custom_wavenumbers = np.arange(len(custom_labels), dtype=np.float32)
+            elif custom_values is not None:
+                self.custom_wavenumbers = np.asarray(custom_values, dtype=np.float32)
+            else:
+                self.custom_wavenumbers = None
+
+            self.custom_axis_labels = None if custom_labels is None else [str(value) for value in custom_labels]
+
+            for w in widgets:
+                w.blockSignals(False)
+
+            self.update_wavenums()
+            return
+
         tuned_beam = meta.get("tuned_beam", "pump").lower()
         tuned_min = meta.get("tuned_min_nm")
         tuned_max = meta.get("tuned_max_nm")

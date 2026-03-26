@@ -38,6 +38,46 @@ Example:
 
 ## Installation
 
+### Prerequisites
+
+Before installation, users should have:
+
+- Python **3.11 or newer**
+- either **Conda** or plain **pip/venv**
+- a supported desktop platform:
+  - Windows
+  - Linux
+  - macOS
+
+Optional, for GPU acceleration:
+
+- **NVIDIA GPU**: recommended for the current PyTorch GPU path in this repository
+- **AMD GPU on Linux**: potentially usable through ROCm
+- **Apple Silicon**: the GUI should run, but this repository currently does not use the `mps` backend automatically
+
+Useful links:
+
+- PyTorch install selector: https://pytorch.org/get-started/locally/
+- NVIDIA CUDA downloads: https://developer.nvidia.com/cuda-downloads
+- NVIDIA driver downloads: https://www.nvidia.com/Download/index.aspx
+- PyTorch Apple MPS notes: https://docs.pytorch.org/docs/stable/notes/mps.html
+- PyTorch ROCm / HIP notes: https://docs.pytorch.org/docs/stable/notes/hip.html
+
+### Which Environment File Should I Use?
+
+- `environment.yml`
+  - lean Conda setup
+  - recommended for normal CPU usage
+  - no PyTorch included
+- `environment-pytorch.yml`
+  - Conda setup with PyTorch included
+  - recommended if you want to use the optional PyTorch-based NNMF / NNLS paths
+  - good base for later adding NVIDIA CUDA support
+  - CUDA does not need to be installed separately just to run the GUI, but you will need a CUDA-enabled PyTorch build for GPU acceleration
+- `requirements.txt`
+  - pip-based installation instead of Conda (not recommended)
+  - simplest fallback if you do not want to use Conda
+
 ### Option 1: Conda environment without PyTorch
 
 Recommended for a lean setup that uses the standard CPU/scikit-learn/SciPy fallbacks.
@@ -50,6 +90,7 @@ conda activate hs-mv-analysis
 ### Option 2: Conda environment with PyTorch
 
 Recommended if you want the optional PyTorch-based NNMF / NNLS paths.
+This environment gives you PyTorch, but not necessarily a CUDA-enabled build by itself.
 
 ```bash
 conda env create -f environment-pytorch.yml
@@ -75,6 +116,104 @@ Optional PyTorch installation afterward:
 ```bash
 pip install torch
 ```
+
+## GPU Acceleration and Platform Notes
+
+### NVIDIA GPUs on Windows / Linux
+
+This project currently uses PyTorch GPU acceleration only through the `cuda` device path in the optional NNMF / NNLS backends.
+
+Practical recommendation:
+
+- use the `environment-pytorch.yml` environment
+- for NVIDIA acceleration, install a CUDA-enabled PyTorch build afterward
+- for this project, prefer **CUDA 12.6**
+
+Why CUDA 12.6:
+
+- the official PyTorch "Get Started" page currently lists stable builds for CUDA `11.8`, `12.6`, and `12.8`
+- `12.6` is a good conservative recommendation for this repository: modern, well-supported, and less aggressive than simply chasing the newest option
+
+Important:
+
+For normal PyTorch usage, you usually do **not** need to install the full NVIDIA CUDA toolkit separately just to run this GUI. In practice, you mainly need:
+
+- a compatible NVIDIA driver
+- a CUDA-enabled PyTorch build
+
+Official links:
+
+- PyTorch install selector: https://pytorch.org/get-started/locally/
+- NVIDIA CUDA downloads: https://developer.nvidia.com/cuda-downloads
+- NVIDIA driver downloads: https://www.nvidia.com/Download/index.aspx
+
+
+Example pip install inside the PyTorch environment:
+
+```bash
+pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu126
+```
+
+Or, if you want to follow the official Conda-style PyTorch packaging route:
+
+```bash
+conda install pytorch pytorch-cuda=12.6 -c pytorch -c nvidia
+```
+
+Verification:
+
+```bash
+python -c "import torch; print('torch:', torch.__version__); print('cuda available:', torch.cuda.is_available()); print('torch cuda:', torch.version.cuda)"
+```
+
+If `torch.cuda.is_available()` prints `True`, the current code should be able to use the PyTorch GPU path.
+
+### Apple Silicon / macOS
+
+PyTorch itself supports Apple Silicon acceleration through the `mps` backend on supported macOS systems.
+
+However, this repository does **not** currently select `mps` in its own PyTorch backend code. The current implementation checks CUDA availability and otherwise falls back to CPU.
+
+So, today:
+
+- the GUI should still run on Apple Silicon
+- the PyTorch parts should still install
+- but the custom PyTorch NNMF / NNLS acceleration paths in this project will currently behave as **CPU-only**, unless the code is extended
+
+To add proper Apple GPU support later, the project would need to detect and route to `mps`, especially in:
+
+- `contents/torch_nmf.py`
+- `contents/nnls_pytorch.py`
+- `contents/multivariate_analyzer.py`
+
+### AMD GPUs
+
+For AMD GPUs, the best path is **Linux + ROCm + PyTorch ROCm**.
+
+This is promising for this project because official PyTorch ROCm uses the same `torch.cuda` Python-level semantics, and this repository already uses the `cuda` device naming convention in its PyTorch backend code.
+
+So in practice:
+
+- **AMD on Linux with ROCm**: potentially workable with the current code, and this is the most likely non-NVIDIA GPU route
+- **AMD on Windows**: not a realistic target for this PyTorch path right now; use CPU unless you test a working alternative backend
+
+### Intel and Other GPU Backends
+
+There is no dedicated support in this repository for Intel GPU backends or other non-CUDA/non-ROCm accelerators.
+
+For those systems, assume:
+
+- the GUI itself can still run
+- the analysis will still work
+- PyTorch acceleration should be considered **unsupported unless explicitly adapted and tested**
+
+### Keep This Section Updated
+
+CUDA / ROCm / PyTorch packaging changes over time. Before publishing a release, it is worth re-checking the official PyTorch installation page:
+
+- https://pytorch.org/get-started/locally/
+- https://docs.pytorch.org/docs/stable/notes/mps
+- https://docs.pytorch.org/docs/stable/notes/hip.html
 
 ## Running the Application
 

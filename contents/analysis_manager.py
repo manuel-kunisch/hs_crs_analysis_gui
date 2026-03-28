@@ -85,6 +85,11 @@ class AnalysisManager(QtCore.QObject):
         self.seed_pixel_mode_dropdown: QtWidgets.QComboBox | None = None
         self.nnmf_solver_dropdown: QtWidgets.QComboBox | None = None
         self.nnmf_backend_dropdown: QtWidgets.QComboBox | None = None
+        self.nnmf_max_iter_spinbox: QtWidgets.QSpinBox | None = None
+        self.nnls_max_iter_spinbox: QtWidgets.QSpinBox | None = None
+        self.analysis_progress_widget: QtWidgets.QWidget | None = None
+        self.analysis_progress_label: QtWidgets.QLabel | None = None
+        self.analysis_progress_bar: QtWidgets.QProgressBar | None = None
         self.custom_init_check: QtWidgets.QCheckBox | None = None
         self.fixed_h_nnls_only_check: QtWidgets.QCheckBox | None = None
         self.fast_multislice_nnmf_check: QtWidgets.QCheckBox | None = None
@@ -96,6 +101,7 @@ class AnalysisManager(QtCore.QObject):
         # Connect pyqt signals
         self.thread_analysis.started.connect(self.worker.run)
         self.worker.finished.connect(self.thread_analysis.quit)
+        self.worker.progress.connect(self._update_analysis_progress)
         # Connect the finished function to the worker
         self.worker.finished.connect(lambda: self.analysis_completed(self.mv_analyzer.analysis_method))
         self.thread_analysis.finished.connect(
@@ -104,6 +110,7 @@ class AnalysisManager(QtCore.QObject):
         self.thread_analysis.finished.connect(
             lambda: self.analyze_button.setText('Analyze')
         )
+        self.thread_analysis.finished.connect(self._finish_analysis_progress)
 
         self._seed_pixel_mode = "Max Intensity"  # or "Score"
 
@@ -251,21 +258,14 @@ class AnalysisManager(QtCore.QObject):
 
         analysis_layout.addWidget(custom_init_check, 2, 3, 1, 2)
 
-        self.fixed_h_nnls_only_check = QtWidgets.QCheckBox("Fixed-H NNLS only")
+        self.fixed_h_nnls_only_check = QtWidgets.QCheckBox("Fixed-H NNLS mode (3D/4D)")
         self.fixed_h_nnls_only_check.setToolTip(
-            "Use the NNLS-based W seed maps directly as the result for 3D data. "
-            "This requires every H seed to be set."
+            "3D: use the fixed-H NNLS abundance maps directly as the result.\n"
+            "4D: reuse the displayed slice as the fixed-H reference and rebuild the W maps per slice."
         )
         self.fixed_h_nnls_only_check.stateChanged.connect(self._sync_fixed_h_mode_seed_requirements)
-        analysis_layout.addWidget(self.fixed_h_nnls_only_check, 3, 3, 1, 2)
-
-        self.fast_multislice_nnmf_check = QtWidgets.QCheckBox("4D fast mode")
-        self.fast_multislice_nnmf_check.setToolTip(
-            "For 4D data, keep the reference-slice H seeds fixed and compute the "
-            "NNLS-based W seed maps per slice without NNMF refinement."
-        )
-        self.fast_multislice_nnmf_check.stateChanged.connect(self._sync_fixed_h_mode_seed_requirements)
-        analysis_layout.addWidget(self.fast_multislice_nnmf_check, 3, 1, 1, 2)
+        analysis_layout.addWidget(self.fixed_h_nnls_only_check, 3, 1, 1, 4)
+        self.fast_multislice_nnmf_check = None
 
         solver_label = QtWidgets.QLabel("NNMF solver:")
         solver_label.setToolTip("Choose the scikit-learn NMF solver. 'cd' is usually faster on CPU; 'mu' is the legacy multiplicative-update path.")
@@ -303,7 +303,31 @@ class AnalysisManager(QtCore.QObject):
         self.mv_analyzer.set_nnmf_backend_preference(self.nnmf_backend_dropdown.itemData(0))
         analysis_layout.addWidget(backend_label, 1, 1, 1, 1)
         analysis_layout.addWidget(self.nnmf_backend_dropdown, 1, 2, 1, 2)
+
+        nnmf_iters_label = QtWidgets.QLabel("NNMF max iters:")
+        nnmf_iters_label.setToolTip("Maximum iterations for both scikit-learn and torch NNMF backends.")
+        self.nnmf_max_iter_spinbox = QtWidgets.QSpinBox()
+        self.nnmf_max_iter_spinbox.setRange(1, 100000)
+        self.nnmf_max_iter_spinbox.setSingleStep(100)
+        self.nnmf_max_iter_spinbox.setValue(int(self.mv_analyzer.nnmf_max_iter))
+        self.nnmf_max_iter_spinbox.setToolTip(nnmf_iters_label.toolTip())
+        self.nnmf_max_iter_spinbox.valueChanged.connect(self.mv_analyzer.set_nnmf_max_iter)
+        analysis_layout.addWidget(nnmf_iters_label, 0, 4, 1, 1)
+        analysis_layout.addWidget(self.nnmf_max_iter_spinbox, 0, 5, 1, 1)
+
+        nnls_iters_label = QtWidgets.QLabel("NNLS max iters:")
+        nnls_iters_label.setToolTip("Maximum iterations for fixed-H NNLS reconstruction.")
+        self.nnls_max_iter_spinbox = QtWidgets.QSpinBox()
+        self.nnls_max_iter_spinbox.setRange(1, 100000)
+        self.nnls_max_iter_spinbox.setSingleStep(100)
+        self.nnls_max_iter_spinbox.setValue(int(self.mv_analyzer.nnls_max_iter))
+        self.nnls_max_iter_spinbox.setToolTip(nnls_iters_label.toolTip())
+        self.nnls_max_iter_spinbox.valueChanged.connect(self.mv_analyzer.set_nnls_max_iter)
+        analysis_layout.addWidget(nnls_iters_label, 1, 4, 1, 1)
+        analysis_layout.addWidget(self.nnls_max_iter_spinbox, 1, 5, 1, 1)
+
         self._sync_nnmf_backend_controls()
+        self._sync_fixed_h_mode_seed_requirements()
 
         top_row.addWidget(analysis_group_box)
 
@@ -318,6 +342,21 @@ class AnalysisManager(QtCore.QObject):
         self.analyze_button.clicked.connect(self.analyze_data)
         top_row.addStretch(1)
         top_row.addWidget(self.analyze_button)
+
+        self.analysis_progress_widget = QtWidgets.QWidget()
+        progress_layout = QtWidgets.QHBoxLayout(self.analysis_progress_widget)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(8)
+        self.analysis_progress_label = QtWidgets.QLabel("4D analysis progress:")
+        self.analysis_progress_bar = QtWidgets.QProgressBar()
+        self.analysis_progress_bar.setRange(0, 100)
+        self.analysis_progress_bar.setValue(0)
+        self.analysis_progress_bar.setTextVisible(True)
+        self.analysis_progress_bar.setFormat("%p%")
+        progress_layout.addWidget(self.analysis_progress_label)
+        progress_layout.addWidget(self.analysis_progress_bar, 1)
+        self.analysis_progress_widget.hide()
+        root.addWidget(self.analysis_progress_widget)
 
         # -----------------------------
         # Main area: table (left) + control panel (right)
@@ -536,25 +575,24 @@ class AnalysisManager(QtCore.QObject):
         """
         self._analysis_result_spectra = None
         self._analysis_result_images = None
+        if self._analysis_series_4d is not None:
+            self._begin_analysis_progress(int(self._analysis_series_4d.shape[0]))
+        else:
+            self._finish_analysis_progress()
         if self.nnmf_radio.isChecked():
-            if self._use_fixed_h_nnls_only():
-                if self._analysis_series_4d is not None:
-                    QtWidgets.QMessageBox.warning(
-                        self.analysis_widget,
-                        "Fixed-H NNLS only is 3D-only",
-                        "The 'Fixed-H NNLS only' option is intended for 3D data.\n\n"
-                        "For 4D data, use '4D fast mode' instead.",
-                    )
-                    return
+            if self._fixed_h_mode_enabled():
                 if not self.mv_analyzer.custom_nnmf_init:
+                    self._finish_analysis_progress()
                     QtWidgets.QMessageBox.warning(
                         self.analysis_widget,
                         "Custom initialization required",
-                        "Fixed-H NNLS requires custom H seeds. Enable 'Custom initialization (NNMF)' first.",
+                        "Fixed-H NNLS mode requires custom H seeds. Enable 'Custom initialization (NNMF)' first.",
                     )
                     return
-                self._prepare_fixed_h_seed_template(show_seeds=True, fill_missing_h=False)
-                if not self.mv_analyzer.has_complete_H_seed_set():
+                fill_missing_h = self._analysis_series_4d is not None
+                self._prepare_fixed_h_seed_template(show_seeds=True, fill_missing_h=fill_missing_h)
+                if not fill_missing_h and not self.mv_analyzer.has_complete_H_seed_set():
+                    self._finish_analysis_progress()
                     QtWidgets.QMessageBox.warning(
                         self.analysis_widget,
                         "Incomplete H seeds",
@@ -583,6 +621,7 @@ class AnalysisManager(QtCore.QObject):
             self._analysis_series_4d = None
             self._analysis_series_label = str(slice_axis_label or "Slice")
             self._analysis_series_index = 0
+        self._sync_fixed_h_mode_seed_requirements()
 
     def get_analysis_series_label(self) -> str:
         return self._analysis_series_label
@@ -616,6 +655,9 @@ class AnalysisManager(QtCore.QObject):
         series = self._analysis_series_4d
         if series is None or series.ndim != 4:
             raise RuntimeError("No 4D analysis series is configured.")
+
+        total_slices = int(series.shape[0])
+        self.worker.progress.emit(0)
 
         analysis_method = self.mv_analyzer.analysis_method
         n_components = self.mv_analyzer.get_n_components()
@@ -661,6 +703,7 @@ class AnalysisManager(QtCore.QObject):
             if fast_mode and slice_index == reference_slice_index and reference_result is not None:
                 spectra_per_slice.append(np.array(reference_result["H"], copy=True))
                 images_per_slice.append(np.array(reference_result["W"], copy=True))
+                self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
                 continue
 
             self.z3D_data = slice_data
@@ -677,6 +720,7 @@ class AnalysisManager(QtCore.QObject):
                 self.mv_analyzer.PCA()
                 spectra_per_slice.append(np.array(self.mv_analyzer.PCs[:n_components], copy=True))
                 images_per_slice.append(np.array(self.mv_analyzer.pca_2DX[:n_components], copy=True))
+                self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
                 continue
 
             if fast_mode:
@@ -687,6 +731,7 @@ class AnalysisManager(QtCore.QObject):
                 )
                 spectra_per_slice.append(np.array(seed_result["H"][:n_components], copy=True))
                 images_per_slice.append(np.array(seed_result["W"][:n_components], copy=True))
+                self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
                 continue
 
             if custom_init:
@@ -711,9 +756,11 @@ class AnalysisManager(QtCore.QObject):
 
             spectra_per_slice.append(np.array(self.mv_analyzer.fixed_H[:n_components], copy=True))
             images_per_slice.append(np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True))
+            self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
 
         self._analysis_result_spectra = np.stack(spectra_per_slice, axis=0)
         self._analysis_result_images = np.stack(images_per_slice, axis=0)
+        self.worker.progress.emit(100)
 
         if display_data is not None:
             self.z3D_data = display_data
@@ -758,15 +805,21 @@ class AnalysisManager(QtCore.QObject):
         )
         self.show_seed_window(seed_result["W"].transpose(1, 2, 0), seed_result["H"], seed_pixels)
 
-    def _use_fixed_h_nnls_only(self) -> bool:
+    def _fixed_h_mode_enabled(self) -> bool:
         return bool(self.fixed_h_nnls_only_check is not None and self.fixed_h_nnls_only_check.isChecked())
 
+    def _use_fixed_h_nnls_only(self) -> bool:
+        return self._fixed_h_mode_enabled() and self._analysis_series_4d is None
+
     def _use_fast_multislice_nnmf(self) -> bool:
-        return bool(self.fast_multislice_nnmf_check is not None and self.fast_multislice_nnmf_check.isChecked())
+        return self._fixed_h_mode_enabled() and self._analysis_series_4d is not None
 
     def _sync_fixed_h_mode_seed_requirements(self, state=None):
-        if self._use_fixed_h_nnls_only() or self._use_fast_multislice_nnmf():
+        fixed_h_mode = self._fixed_h_mode_enabled()
+        if fixed_h_mode:
             self._ensure_nnls_seed_mode_selected()
+        if self.w_seed_mode_dropdown is not None:
+            self.w_seed_mode_dropdown.setEnabled(not fixed_h_mode)
 
     def _ensure_nnls_seed_mode_selected(self):
         target_label = "NNLS abundance map"
@@ -1133,6 +1186,35 @@ class AnalysisManager(QtCore.QObject):
 
     def update_analysis_method(self, method):
         self.mv_analyzer.analysis_method = method
+
+    def _begin_analysis_progress(self, total_slices: int):
+        if self.analysis_progress_widget is None or self.analysis_progress_bar is None or self.analysis_progress_label is None:
+            return
+        total_slices = max(1, int(total_slices))
+        self.analysis_progress_label.setText(f"4D analysis progress: 0/{total_slices}")
+        self.analysis_progress_bar.setRange(0, 100)
+        self.analysis_progress_bar.setValue(0)
+        self.analysis_progress_widget.show()
+
+    def _update_analysis_progress(self, percent: int):
+        if self.analysis_progress_widget is None or self.analysis_progress_bar is None or self.analysis_progress_label is None:
+            return
+        if self._analysis_series_4d is None:
+            return
+        total_slices = max(1, int(self._analysis_series_4d.shape[0]))
+        percent = int(np.clip(percent, 0, 100))
+        completed = min(total_slices, int(round((percent / 100.0) * total_slices)))
+        self.analysis_progress_label.setText(f"4D analysis progress: {completed}/{total_slices}")
+        self.analysis_progress_bar.setValue(percent)
+        if not self.analysis_progress_widget.isVisible():
+            self.analysis_progress_widget.show()
+
+    def _finish_analysis_progress(self):
+        if self.analysis_progress_widget is None or self.analysis_progress_bar is None or self.analysis_progress_label is None:
+            return
+        self.analysis_progress_bar.setValue(0)
+        self.analysis_progress_label.setText("4D analysis progress:")
+        self.analysis_progress_widget.hide()
 
     def _sync_nnmf_backend_controls(self):
         if self.nnmf_backend_dropdown is None:
@@ -2220,6 +2302,7 @@ class AnalysisManager(QtCore.QObject):
             "w_seed_mode": mode,
             "overwrite_existing_w_from_h": bool(self._overwrite_existing_W_from_H),
             "seed_pixel_metric": seed_pixel_metric,
+            "fixed_h_nnls_mode": bool(self._fixed_h_mode_enabled()),
             "fixed_h_nnls_only": bool(self._use_fixed_h_nnls_only()),
             "fast_multislice_nnmf": bool(self._use_fast_multislice_nnmf()),
         }
@@ -2272,17 +2355,17 @@ class AnalysisManager(QtCore.QObject):
                 self.seed_pixel_mode_dropdown.setCurrentText(seed_pixel_metric)
                 del blocker
 
-        fixed_h_nnls_only = bool(settings.get("fixed_h_nnls_only", False))
+        fixed_h_mode = bool(
+            settings.get(
+                "fixed_h_nnls_mode",
+                bool(settings.get("fixed_h_nnls_only", False) or settings.get("fast_multislice_nnmf", False)),
+            )
+        )
         if self.fixed_h_nnls_only_check is not None:
             blocker = QtCore.QSignalBlocker(self.fixed_h_nnls_only_check)
-            self.fixed_h_nnls_only_check.setChecked(fixed_h_nnls_only)
+            self.fixed_h_nnls_only_check.setChecked(fixed_h_mode)
             del blocker
-
-        fast_multislice_nnmf = bool(settings.get("fast_multislice_nnmf", False))
-        if self.fast_multislice_nnmf_check is not None:
-            blocker = QtCore.QSignalBlocker(self.fast_multislice_nnmf_check)
-            self.fast_multislice_nnmf_check.setChecked(fast_multislice_nnmf)
-            del blocker
+        self._sync_fixed_h_mode_seed_requirements()
 
     def set_spectral_units(self, unit: str):
         unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"

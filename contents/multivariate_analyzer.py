@@ -49,10 +49,12 @@ class MultivariateAnalyzer(object):
         self.nnmf_solver = 'mu'
         self.nnmf_backend_preference = 'auto'
         self.prefer_torch_nmf = True
-        self.torch_nmf_max_iter = 5000
+        self.nnmf_max_iter = 5000
+        self.torch_nmf_max_iter = self.nnmf_max_iter
         self.torch_nmf_tol = 1e-4
         self.prefer_torch_nnls = True
-        self.torch_nnls_max_iter = 2500
+        self.nnls_max_iter = 2500
+        self.torch_nnls_max_iter = self.nnls_max_iter
         self.torch_nnls_tol = 1e-4
         self.torch_nnls_chunk_size = 32768
         self._nnls_abundance_cache = {}
@@ -155,6 +157,18 @@ class MultivariateAnalyzer(object):
         self.nnmf_backend_preference = mode
         logger.info("NNMF backend preference updated to %s", self.nnmf_backend_preference)
 
+    def set_nnmf_max_iter(self, max_iter: int):
+        max_iter = max(1, int(max_iter))
+        self.nnmf_max_iter = max_iter
+        self.torch_nmf_max_iter = max_iter
+        logger.info("NNMF max_iter updated to %s", self.nnmf_max_iter)
+
+    def set_nnls_max_iter(self, max_iter: int):
+        max_iter = max(1, int(max_iter))
+        self.nnls_max_iter = max_iter
+        self.torch_nnls_max_iter = max_iter
+        logger.info("NNLS max_iter updated to %s", self.nnls_max_iter)
+
     def _resolve_torch_nmf_device(self) -> str | None:
         """
         Resolve the PyTorch NMF device from the backend preference.
@@ -246,7 +260,7 @@ class MultivariateAnalyzer(object):
             n_components=self._n_components,
             init=init,
             random_state=0,
-            max_iter=1000,
+            max_iter=self.nnmf_max_iter,
             solver=self.nnmf_solver,
         )
         if init == 'custom':
@@ -426,7 +440,10 @@ class MultivariateAnalyzer(object):
         )
         residual_sq = 0.0
         for pixel_index in active_pixels:
-            coeffs, _ = nnls(basis, working_data[pixel_index])
+            try:
+                coeffs, _ = nnls(basis, working_data[pixel_index], maxiter=self.nnls_max_iter)
+            except TypeError:
+                coeffs, _ = nnls(basis, working_data[pixel_index])
             coeffs = np.maximum(coeffs, eps)
             abundance[pixel_index] = coeffs
             residual = working_data[pixel_index] - (basis @ coeffs)
@@ -439,6 +456,7 @@ class MultivariateAnalyzer(object):
             "n_components": int(basis.shape[1]),
             "tol": None,
             "n_iter": None,
+            "max_iter": int(self.nnls_max_iter),
             "final_error": float(residual_sq ** 0.5),
         }
         return abundance, info
@@ -500,7 +518,7 @@ class MultivariateAnalyzer(object):
                     image_data,
                     basis,
                     device='cuda',
-                    max_iter=self.torch_nnls_max_iter,
+                    max_iter=self.nnls_max_iter,
                     tol=self.torch_nnls_tol,
                     eps=eps,
                     chunk_size=self.torch_nnls_chunk_size,

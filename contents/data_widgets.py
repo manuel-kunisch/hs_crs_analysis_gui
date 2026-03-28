@@ -1560,6 +1560,12 @@ class DataHandler(QtWidgets.QWidget):
     def get_current_slice_index(self) -> int:
         return self._current_slice_index
 
+    def set_current_slice_index(self, index: int):
+        if self._analysis_image is None or self._analysis_image.ndim != 4:
+            self._current_slice_index = 0
+            return
+        self._set_current_slice_index(index)
+
     def get_slice_axis_label(self) -> str:
         return self._slice_axis_label
 

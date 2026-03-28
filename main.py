@@ -358,6 +358,7 @@ class MainApplication(QtWidgets.QMainWindow):
             "image_path": self.data_handler.loader_widget.current_path,
             # "image": self.data_handler.loader_widget.image.tolist() if self.data_handler.loader_widget.image is not None else None,
             "binning_factor": self.data_handler.get_current_binning(),
+            "current_slice_index": self.data_handler.get_current_slice_index(),
             "fov": self.data_handler.loader_widget.physical_units_manager.get_fov(),
             "unit": self.data_handler.loader_widget.physical_units_manager.unit,
             # wavennumber widget
@@ -370,6 +371,8 @@ class MainApplication(QtWidgets.QMainWindow):
             "custom_model": self.analysis_manager.mv_analyzer.custom_nnmf_init,
             "nnmf_solver": self.analysis_manager.mv_analyzer.nnmf_solver,
             "nnmf_backend": self.analysis_manager.mv_analyzer.nnmf_backend_preference,
+            "nnmf_max_iter": int(self.analysis_manager.mv_analyzer.nnmf_max_iter),
+            "nnls_max_iter": int(self.analysis_manager.mv_analyzer.nnls_max_iter),
             "seed_init_settings": self.analysis_manager.export_seed_init_state(),
             "w_seed_settings": [self.analysis_manager.mv_analyzer.full_W_seed, self.analysis_manager.mv_analyzer.avg_W_seed,
                                 self.analysis_manager.mv_analyzer.H_weighted_W_seed],
@@ -468,6 +471,12 @@ class MainApplication(QtWidgets.QMainWindow):
         self.change_spectral_units(self.data_handler.wavenumber_widget.custom_unit_combo.currentText())
         if wav_warning:
             QtWidgets.QMessageBox.warning(self, "Preset Wavenumbers Adjusted", wav_warning)
+        saved_slice_index = preset.get("current_slice_index", None)
+        if image_loaded and saved_slice_index is not None:
+            try:
+                self.data_handler.set_current_slice_index(int(saved_slice_index))
+            except Exception as exc:
+                logger.warning("Could not restore preset slice index %s: %s", saved_slice_index, exc)
         # 5) ROIs (after image+binning+wavenumbers exist)
         roi_state = preset.get("roi_manager", None)
         if roi_state and hasattr(self.data_widget.roi_manager, "import_state"):
@@ -481,7 +490,12 @@ class MainApplication(QtWidgets.QMainWindow):
 
         # 6) analysis settings + resonance table
         self.analysis_manager.num_components_spinbox.setValue(int(preset.get("num_components", 3)))
-        self.analysis_manager.mv_analyzer.set_custom_nnmf_init(bool(preset.get("custom_model", True)))
+        custom_model = bool(preset.get("custom_model", True))
+        if self.analysis_manager.custom_init_check is not None:
+            blocker = QtCore.QSignalBlocker(self.analysis_manager.custom_init_check)
+            self.analysis_manager.custom_init_check.setChecked(custom_model)
+            del blocker
+        self.analysis_manager.mv_analyzer.set_custom_nnmf_init(custom_model)
         nnmf_solver = str(preset.get("nnmf_solver", "mu")).lower()
         if nnmf_solver not in {"cd", "mu"}:
             nnmf_solver = "mu"
@@ -506,6 +520,23 @@ class MainApplication(QtWidgets.QMainWindow):
             self.analysis_manager._sync_nnmf_backend_controls()
         else:
             self.analysis_manager.mv_analyzer.set_nnmf_backend_preference(nnmf_backend)
+        try:
+            nnmf_max_iter = int(preset.get("nnmf_max_iter", self.analysis_manager.mv_analyzer.nnmf_max_iter))
+        except Exception:
+            nnmf_max_iter = int(self.analysis_manager.mv_analyzer.nnmf_max_iter)
+        if self.analysis_manager.nnmf_max_iter_spinbox is not None:
+            self.analysis_manager.nnmf_max_iter_spinbox.setValue(nnmf_max_iter)
+        else:
+            self.analysis_manager.mv_analyzer.set_nnmf_max_iter(nnmf_max_iter)
+
+        try:
+            nnls_max_iter = int(preset.get("nnls_max_iter", self.analysis_manager.mv_analyzer.nnls_max_iter))
+        except Exception:
+            nnls_max_iter = int(self.analysis_manager.mv_analyzer.nnls_max_iter)
+        if self.analysis_manager.nnls_max_iter_spinbox is not None:
+            self.analysis_manager.nnls_max_iter_spinbox.setValue(nnls_max_iter)
+        else:
+            self.analysis_manager.mv_analyzer.set_nnls_max_iter(nnls_max_iter)
         self.analysis_manager.import_seed_init_state(
             preset.get("seed_init_settings", preset.get("w_seed_settings"))
         )

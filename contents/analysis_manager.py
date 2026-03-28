@@ -90,6 +90,7 @@ class AnalysisManager(QtCore.QObject):
         self.analysis_progress_widget: QtWidgets.QWidget | None = None
         self.analysis_progress_label: QtWidgets.QLabel | None = None
         self.analysis_progress_bar: QtWidgets.QProgressBar | None = None
+        self._nnmf_option_widgets: list[QtWidgets.QWidget] = []
         self.custom_init_check: QtWidgets.QCheckBox | None = None
         self.fixed_h_nnls_only_check: QtWidgets.QCheckBox | None = None
         self.fast_multislice_nnmf_check: QtWidgets.QCheckBox | None = None
@@ -199,8 +200,21 @@ class AnalysisManager(QtCore.QObject):
         }
         QToolButton#AnalyzeTool {
             border-radius: 10px;
-            padding: 10px 12px;
+            padding: 10px 14px;
             font-weight: 700;
+            color: white;
+            background-color: #4f79aa;
+            border: 1px solid #7ea8d6;
+            border-bottom: 3px solid #2d4f75;
+        }
+        QToolButton#AnalyzeTool:hover {
+            background-color: #5c88bc;
+        }
+        QToolButton#AnalyzeTool:pressed {
+            background-color: #436a97;
+            border-bottom: 1px solid #2d4f75;
+            padding-top: 12px;
+            padding-bottom: 8px;
         }
         QHeaderView::section {
             padding: 6px;
@@ -215,25 +229,49 @@ class AnalysisManager(QtCore.QObject):
         root.addLayout(top_row)
 
         analysis_group_box = QtWidgets.QGroupBox("Analysis")
-        analysis_group_box.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
-        analysis_layout = QtWidgets.QGridLayout(analysis_group_box)
-        analysis_layout.setHorizontalSpacing(10)
-        analysis_layout.setVerticalSpacing(6)
+        analysis_group_box.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        analysis_layout = QtWidgets.QHBoxLayout(analysis_group_box)
+        analysis_layout.setContentsMargins(12, 8, 12, 8)
+        analysis_layout.setSpacing(12)
 
-        # Method radio buttons
+        def _make_section_title(text: str) -> QtWidgets.QLabel:
+            label = QtWidgets.QLabel(text)
+            label.setStyleSheet("font-weight: 700; color: #d7dee8;")
+            return label
+
+        def _make_divider() -> QtWidgets.QFrame:
+            line = QtWidgets.QFrame()
+            line.setFrameShape(QtWidgets.QFrame.VLine)
+            line.setFrameShadow(QtWidgets.QFrame.Sunken)
+            line.setStyleSheet("color: rgba(180,180,180,0.30);")
+            return line
+
+        # Method section
+        method_panel = QtWidgets.QWidget()
+        method_layout = QtWidgets.QVBoxLayout(method_panel)
+        method_layout.setContentsMargins(0, 0, 0, 0)
+        method_layout.setSpacing(4)
+        method_layout.addWidget(_make_section_title("Method"))
+
+        method_buttons = QtWidgets.QHBoxLayout()
+        method_buttons.setContentsMargins(0, 0, 0, 0)
+        method_buttons.setSpacing(10)
         self.pca_radio = QtWidgets.QRadioButton("PCA")
         self.nnmf_radio = QtWidgets.QRadioButton("NNMF")
         self.pca_radio.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         self.nnmf_radio.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
         self.pca_radio.clicked.connect(lambda: self.update_analysis_method("PCA"))
         self.nnmf_radio.clicked.connect(lambda: self.update_analysis_method("NNMF"))
-        self.nnmf_radio.setChecked(True)  # Default
+        self.nnmf_radio.setChecked(True)
+        method_buttons.addWidget(self.pca_radio)
+        method_buttons.addWidget(self.nnmf_radio)
+        method_buttons.addStretch(1)
+        method_layout.addLayout(method_buttons)
 
-        analysis_layout.addWidget(self.pca_radio, 0, 0, 1, 1)
-        analysis_layout.addWidget(self.nnmf_radio, 1, 0, 1, 1)
-
-        # Components
-        comp_label = QtWidgets.QLabel("# Components:")
+        comp_row = QtWidgets.QHBoxLayout()
+        comp_row.setContentsMargins(0, 0, 0, 0)
+        comp_row.setSpacing(8)
+        comp_label = QtWidgets.QLabel("Components:")
         comp_label.setToolTip("Set the number of components for PCA/NNMF analysis")
         self.num_components_spinbox = QtWidgets.QSpinBox(
             minimum=1, maximum=100,
@@ -241,33 +279,49 @@ class AnalysisManager(QtCore.QObject):
             singleStep=1
         )
         self.num_components_spinbox.setToolTip(comp_label.toolTip())
-        self.num_components_spinbox.setFixedWidth(80)
+        self.num_components_spinbox.setFixedWidth(72)
         self.num_components_spinbox.valueChanged.connect(self._handle_component_count_changed)
+        comp_row.addWidget(comp_label)
+        comp_row.addWidget(self.num_components_spinbox)
+        comp_row.addStretch(1)
+        method_layout.addLayout(comp_row)
 
-        analysis_layout.addWidget(comp_label, 2, 1, 1, 1)
-        analysis_layout.addWidget(self.num_components_spinbox, 2, 2, 1, 1)
-
-        # Custom init
-        custom_init_check = QtWidgets.QCheckBox("Custom initialization (NNMF)")
+        custom_init_check = QtWidgets.QCheckBox("Custom initialization")
         custom_init_check.setToolTip(
             "Use custom initialization for NNMF based on spectral and spatial seed information")
         custom_init_check.setChecked(True)
         custom_init_check.stateChanged.connect(self.mv_analyzer.set_custom_nnmf_init)
         self.mv_analyzer.set_custom_nnmf_init(custom_init_check.isChecked())
         self.custom_init_check = custom_init_check
+        method_layout.addWidget(custom_init_check)
 
-        analysis_layout.addWidget(custom_init_check, 2, 3, 1, 2)
-
-        self.fixed_h_nnls_only_check = QtWidgets.QCheckBox("Fixed-H NNLS mode (3D/4D)")
+        self.fixed_h_nnls_only_check = QtWidgets.QCheckBox("Fixed-H NNLS mode")
         self.fixed_h_nnls_only_check.setToolTip(
             "3D: use the fixed-H NNLS abundance maps directly as the result.\n"
             "4D: reuse the displayed slice as the fixed-H reference and rebuild the W maps per slice."
         )
         self.fixed_h_nnls_only_check.stateChanged.connect(self._sync_fixed_h_mode_seed_requirements)
-        analysis_layout.addWidget(self.fixed_h_nnls_only_check, 3, 1, 1, 4)
+        method_layout.addWidget(self.fixed_h_nnls_only_check)
         self.fast_multislice_nnmf_check = None
+        method_layout.addStretch(1)
+        analysis_layout.addWidget(method_panel)
+        analysis_layout.addWidget(_make_divider())
 
-        solver_label = QtWidgets.QLabel("NNMF solver:")
+        # NNMF options section
+        options_panel = QtWidgets.QWidget()
+        options_layout = QtWidgets.QVBoxLayout(options_panel)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.setSpacing(4)
+        options_title = _make_section_title("NNMF Options")
+        options_layout.addWidget(options_title)
+
+        options_form = QtWidgets.QFormLayout()
+        options_form.setContentsMargins(0, 0, 0, 0)
+        options_form.setHorizontalSpacing(10)
+        options_form.setVerticalSpacing(4)
+        options_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        solver_label = QtWidgets.QLabel("Solver:")
         solver_label.setToolTip("Choose the scikit-learn NMF solver. 'cd' is usually faster on CPU; 'mu' is the legacy multiplicative-update path.")
         self.nnmf_solver_dropdown = QtWidgets.QComboBox()
         self.nnmf_solver_dropdown.addItem("Coordinate Descent (cd)", "cd")
@@ -281,10 +335,9 @@ class AnalysisManager(QtCore.QObject):
         )
         self.nnmf_solver_dropdown.setCurrentIndex(1)
         self.mv_analyzer.set_nnmf_solver(self.nnmf_solver_dropdown.itemData(1))
-        analysis_layout.addWidget(solver_label, 0, 1, 1, 1)
-        analysis_layout.addWidget(self.nnmf_solver_dropdown, 0, 2, 1, 2)
+        options_form.addRow(solver_label, self.nnmf_solver_dropdown)
 
-        backend_label = QtWidgets.QLabel("NNMF backend:")
+        backend_label = QtWidgets.QLabel("Backend:")
         backend_label.setToolTip(
             "Controls GPU use for multiplicative-update NNMF. "
             "'cd' always runs on the scikit-learn CPU backend."
@@ -301,62 +354,91 @@ class AnalysisManager(QtCore.QObject):
         )
         self.nnmf_backend_dropdown.setCurrentIndex(0)
         self.mv_analyzer.set_nnmf_backend_preference(self.nnmf_backend_dropdown.itemData(0))
-        analysis_layout.addWidget(backend_label, 1, 1, 1, 1)
-        analysis_layout.addWidget(self.nnmf_backend_dropdown, 1, 2, 1, 2)
+        options_form.addRow(backend_label, self.nnmf_backend_dropdown)
 
-        nnmf_iters_label = QtWidgets.QLabel("NNMF max iters:")
+        nnmf_iters_label = QtWidgets.QLabel("NNMF iters:")
         nnmf_iters_label.setToolTip("Maximum iterations for both scikit-learn and torch NNMF backends.")
         self.nnmf_max_iter_spinbox = QtWidgets.QSpinBox()
         self.nnmf_max_iter_spinbox.setRange(1, 100000)
         self.nnmf_max_iter_spinbox.setSingleStep(100)
         self.nnmf_max_iter_spinbox.setValue(int(self.mv_analyzer.nnmf_max_iter))
+        self.nnmf_max_iter_spinbox.setFixedWidth(82)
         self.nnmf_max_iter_spinbox.setToolTip(nnmf_iters_label.toolTip())
         self.nnmf_max_iter_spinbox.valueChanged.connect(self.mv_analyzer.set_nnmf_max_iter)
-        analysis_layout.addWidget(nnmf_iters_label, 0, 4, 1, 1)
-        analysis_layout.addWidget(self.nnmf_max_iter_spinbox, 0, 5, 1, 1)
+        options_form.addRow(nnmf_iters_label, self.nnmf_max_iter_spinbox)
 
-        nnls_iters_label = QtWidgets.QLabel("NNLS max iters:")
+        nnls_iters_label = QtWidgets.QLabel("NNLS iters:")
         nnls_iters_label.setToolTip("Maximum iterations for fixed-H NNLS reconstruction.")
         self.nnls_max_iter_spinbox = QtWidgets.QSpinBox()
         self.nnls_max_iter_spinbox.setRange(1, 100000)
         self.nnls_max_iter_spinbox.setSingleStep(100)
         self.nnls_max_iter_spinbox.setValue(int(self.mv_analyzer.nnls_max_iter))
+        self.nnls_max_iter_spinbox.setFixedWidth(82)
         self.nnls_max_iter_spinbox.setToolTip(nnls_iters_label.toolTip())
         self.nnls_max_iter_spinbox.valueChanged.connect(self.mv_analyzer.set_nnls_max_iter)
-        analysis_layout.addWidget(nnls_iters_label, 1, 4, 1, 1)
-        analysis_layout.addWidget(self.nnls_max_iter_spinbox, 1, 5, 1, 1)
+        options_form.addRow(nnls_iters_label, self.nnls_max_iter_spinbox)
+
+        options_layout.addLayout(options_form)
+        options_layout.addStretch(1)
+        analysis_layout.addWidget(options_panel)
+        analysis_layout.addStretch(1)
+
+        self._nnmf_option_widgets = [
+            options_title,
+            solver_label,
+            self.nnmf_solver_dropdown,
+            backend_label,
+            self.nnmf_backend_dropdown,
+            nnmf_iters_label,
+            self.nnmf_max_iter_spinbox,
+            nnls_iters_label,
+            self.nnls_max_iter_spinbox,
+            custom_init_check,
+            self.fixed_h_nnls_only_check,
+        ]
 
         self._sync_nnmf_backend_controls()
         self._sync_fixed_h_mode_seed_requirements()
+        self._sync_analysis_mode_controls()
 
-        top_row.addWidget(analysis_group_box)
+        top_row.addWidget(analysis_group_box, 1)
 
-        # Big Analyze button (toolbutton looks nicer than pushbutton here)
+        # Run section
+        run_group_box = QtWidgets.QGroupBox("Run")
+        run_group_box.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        run_layout = QtWidgets.QVBoxLayout(run_group_box)
+        run_layout.setContentsMargins(12, 8, 12, 8)
+        run_layout.setSpacing(6)
+
         self.analyze_button = QtWidgets.QToolButton()
         self.analyze_button.setObjectName("AnalyzeTool")
-        self.analyze_button.setText("Analyze")
+        self.analyze_button.setText("Run Analysis")
         self.analyze_button.setIcon(_icon("media-playback-start", QtWidgets.QStyle.SP_MediaPlay))
-        self.analyze_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
-        self.analyze_button.setIconSize(QtCore.QSize(32, 32))
-        self.analyze_button.setMinimumWidth(130)
+        self.analyze_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self.analyze_button.setIconSize(QtCore.QSize(24, 24))
+        self.analyze_button.setAutoRaise(False)
+        self.analyze_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        self.analyze_button.setMinimumSize(170, 52)
         self.analyze_button.clicked.connect(self.analyze_data)
-        top_row.addStretch(1)
-        top_row.addWidget(self.analyze_button)
+        run_layout.addWidget(self.analyze_button)
 
         self.analysis_progress_widget = QtWidgets.QWidget()
         progress_layout = QtWidgets.QHBoxLayout(self.analysis_progress_widget)
         progress_layout.setContentsMargins(0, 0, 0, 0)
-        progress_layout.setSpacing(8)
-        self.analysis_progress_label = QtWidgets.QLabel("4D analysis progress:")
+        progress_layout.setSpacing(6)
+        self.analysis_progress_label = QtWidgets.QLabel("Slice progress")
+        self.analysis_progress_label.setStyleSheet("color: #97a3af; font-size: 11px;")
         self.analysis_progress_bar = QtWidgets.QProgressBar()
         self.analysis_progress_bar.setRange(0, 100)
         self.analysis_progress_bar.setValue(0)
-        self.analysis_progress_bar.setTextVisible(True)
-        self.analysis_progress_bar.setFormat("%p%")
+        self.analysis_progress_bar.setFixedHeight(12)
+        self.analysis_progress_bar.setTextVisible(False)
         progress_layout.addWidget(self.analysis_progress_label)
         progress_layout.addWidget(self.analysis_progress_bar, 1)
-        self.analysis_progress_widget.hide()
-        root.addWidget(self.analysis_progress_widget)
+        run_layout.addWidget(self.analysis_progress_widget)
+
+        top_row.addWidget(run_group_box)
+        self._finish_analysis_progress()
 
         # -----------------------------
         # Main area: table (left) + control panel (right)
@@ -806,7 +888,11 @@ class AnalysisManager(QtCore.QObject):
         self.show_seed_window(seed_result["W"].transpose(1, 2, 0), seed_result["H"], seed_pixels)
 
     def _fixed_h_mode_enabled(self) -> bool:
-        return bool(self.fixed_h_nnls_only_check is not None and self.fixed_h_nnls_only_check.isChecked())
+        return bool(
+            self.nnmf_radio.isChecked()
+            and self.fixed_h_nnls_only_check is not None
+            and self.fixed_h_nnls_only_check.isChecked()
+        )
 
     def _use_fixed_h_nnls_only(self) -> bool:
         return self._fixed_h_mode_enabled() and self._analysis_series_4d is None
@@ -1186,15 +1272,16 @@ class AnalysisManager(QtCore.QObject):
 
     def update_analysis_method(self, method):
         self.mv_analyzer.analysis_method = method
+        self._sync_analysis_mode_controls()
 
     def _begin_analysis_progress(self, total_slices: int):
         if self.analysis_progress_widget is None or self.analysis_progress_bar is None or self.analysis_progress_label is None:
             return
         total_slices = max(1, int(total_slices))
-        self.analysis_progress_label.setText(f"4D analysis progress: 0/{total_slices}")
+        self.analysis_progress_label.setText(f"Slice progress 0/{total_slices}")
         self.analysis_progress_bar.setRange(0, 100)
         self.analysis_progress_bar.setValue(0)
-        self.analysis_progress_widget.show()
+        self.analysis_progress_widget.setEnabled(True)
 
     def _update_analysis_progress(self, percent: int):
         if self.analysis_progress_widget is None or self.analysis_progress_bar is None or self.analysis_progress_label is None:
@@ -1204,22 +1291,28 @@ class AnalysisManager(QtCore.QObject):
         total_slices = max(1, int(self._analysis_series_4d.shape[0]))
         percent = int(np.clip(percent, 0, 100))
         completed = min(total_slices, int(round((percent / 100.0) * total_slices)))
-        self.analysis_progress_label.setText(f"4D analysis progress: {completed}/{total_slices}")
+        self.analysis_progress_label.setText(f"Slice progress {completed}/{total_slices}")
         self.analysis_progress_bar.setValue(percent)
-        if not self.analysis_progress_widget.isVisible():
-            self.analysis_progress_widget.show()
 
     def _finish_analysis_progress(self):
         if self.analysis_progress_widget is None or self.analysis_progress_bar is None or self.analysis_progress_label is None:
             return
         self.analysis_progress_bar.setValue(0)
-        self.analysis_progress_label.setText("4D analysis progress:")
-        self.analysis_progress_widget.hide()
+        self.analysis_progress_label.setText("Slice progress")
+        self.analysis_progress_widget.setEnabled(False)
+
+    def _sync_analysis_mode_controls(self):
+        use_nnmf = bool(self.nnmf_radio.isChecked())
+        for widget in self._nnmf_option_widgets:
+            if widget is not None:
+                widget.setEnabled(use_nnmf)
+        self._sync_fixed_h_mode_seed_requirements()
+        self._sync_nnmf_backend_controls()
 
     def _sync_nnmf_backend_controls(self):
         if self.nnmf_backend_dropdown is None:
             return
-        use_backend_selector = self.mv_analyzer.nnmf_solver == "mu"
+        use_backend_selector = self.mv_analyzer.nnmf_solver == "mu" and self.nnmf_radio.isChecked()
         self.nnmf_backend_dropdown.setEnabled(use_backend_selector)
 
     def get_analysis_data(self) -> (np.ndarray, np.ndarray):

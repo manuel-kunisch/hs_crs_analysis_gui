@@ -44,7 +44,7 @@ def solve_batched_nnls_projected_gradient(
         eps: float = 1e-8,
         chunk_size: int = 32768,
         use_acceleration: bool = True,
-) -> np.ndarray:
+) -> tuple[np.ndarray, dict]:
     """
     Solve the fixed-H NNMF subproblem for W with a batched PyTorch NNLS solver.
 
@@ -97,6 +97,8 @@ def solve_batched_nnls_projected_gradient(
     n_components = b_np.shape[1]
     chunk_size = max(int(chunk_size), 1)
     abundance = np.full((n_pixels, n_components), eps, dtype=np.float32)
+    chunk_iterations: list[int] = []
+    total_residual_sq = 0.0
 
     logger.info(
         "Running PyTorch NNLS solver on %s with %s pixels, %s components, chunk_size=%s, max_iter=%s.",
@@ -117,6 +119,7 @@ def solve_batched_nnls_projected_gradient(
         y = a.clone()
         t = 1.0
 
+        iterations_used = max_iter
         for iteration in range(max_iter):
             grad = y @ gram - c
             a_next = torch.clamp(y - step * grad, min=0.0)
@@ -133,10 +136,29 @@ def solve_batched_nnls_projected_gradient(
                 base = torch.linalg.norm(a) + eps
                 if (delta / base).item() <= tol:
                     a = a_next
+                    iterations_used = iteration + 1
                     break
 
             a = a_next
 
-        abundance[start:stop] = torch.clamp(a, min=eps).detach().cpu().numpy()
+        a_final = torch.clamp(a, min=eps)
+        abundance[start:stop] = a_final.detach().cpu().numpy()
+        residual = x_chunk - (a_final @ basis_t.T)
+        total_residual_sq += float(torch.sum(residual * residual).item())
+        chunk_iterations.append(int(iterations_used))
 
-    return abundance
+    info = {
+        "algorithm": "projected_gradient_nnls",
+        "device": str(dev),
+        "n_pixels": int(n_pixels),
+        "n_components": int(n_components),
+        "chunk_size": int(chunk_size),
+        "max_iter": int(max_iter),
+        "tol": float(tol),
+        "n_chunks": int(len(chunk_iterations)),
+        "chunk_iterations": chunk_iterations,
+        "max_chunk_iter": int(max(chunk_iterations)) if chunk_iterations else 0,
+        "mean_chunk_iter": float(np.mean(chunk_iterations)) if chunk_iterations else 0.0,
+        "final_error": float(total_residual_sq ** 0.5),
+    }
+    return abundance, info

@@ -14,6 +14,7 @@ class FIJISaver:
         self.colormaps = colors
         self.dtype: np.dtype = dtype   # luts can only be directly applied in 8 bit images
         self.ranges = ranges
+        self.axes = None
         self.update_image(image)
         self.labels = {}
         self.pixel_size_um = 1.  # default pixel size in micrometers
@@ -22,7 +23,11 @@ class FIJISaver:
 
     def save_composite_image(self):
         colors = []
-        n_colors = int(self.image.shape[0])
+        axes = self.axes or self._default_axes_for_image()
+        channel_axis = axes.find('C')
+        if channel_axis < 0:
+            raise ValueError(f'FIJI saver requires a channel axis, got axes={axes!r}.')
+        n_colors = int(self.image.shape[channel_axis])
 
         # Default to min/max values if not set
 
@@ -55,7 +60,7 @@ class FIJISaver:
         metadata = {'LUTs': colors,
                     'Ranges': tuple_ranges,
                     'Labels': labels,
-                    'mode': 'composite', 'unit': '\\u00B5m'
+                    'mode': 'composite', 'unit': '\\u00B5m', 'axes': axes
          }
         res = 1/self.pixel_size_um
         tiff.imwrite(f'{self.path}', self.image, imagej=True, metadata=metadata, resolution=(res, res))
@@ -66,6 +71,15 @@ class FIJISaver:
         if self.image is not None:
             # convert to uint8 for proper LUT handling
             self.image = self.normalize_to_dtype(self.image, self.dtype)
+
+    def _default_axes_for_image(self) -> str:
+        if self.image is None:
+            return 'CYX'
+        if self.image.ndim == 3:
+            return 'CYX'
+        if self.image.ndim == 4:
+            return 'TCYX'
+        raise ValueError(f'Unsupported FIJI export image ndim {self.image.ndim}; expected 3D or 4D channel stacks.')
 
     @staticmethod
     def create_lut_for_fiji(lut_color: ArrayLike):

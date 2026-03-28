@@ -189,7 +189,17 @@ class ImageLoader(QtWidgets.QWidget):
 
         # 2) apply rolling ball BEFORE anything else sees it
         if self.rb_ctrl.cfg.enabled:
-            corrected = self.rb_ctrl.apply(image)
+            if image.ndim == 4:
+                logger.warning("Rolling-ball correction does not support 4D stacks yet. Loading the raw 4D image instead.")
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Rolling-ball skipped for 4D data",
+                    "Rolling-ball correction currently supports 2D and 3D data only.\n\n"
+                    "The 4D stack was loaded without rolling-ball correction.",
+                )
+                corrected = image
+            else:
+                corrected = self.rb_ctrl.apply(image)
         else:
             corrected = image
 
@@ -210,7 +220,16 @@ class ImageLoader(QtWidgets.QWidget):
                 "Please rerun the image loading step (e.g. stitching).",
             )
             return
-        img = self.rb_ctrl.apply(self._raw_image) if self.rb_ctrl.cfg.enabled else self._raw_image
+        if self.rb_ctrl.cfg.enabled and self._raw_image.ndim == 4:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Rolling-ball skipped for 4D data",
+                "Rolling-ball correction currently supports 2D and 3D data only.\n\n"
+                "The 4D stack was reloaded without rolling-ball correction.",
+            )
+            img = self._raw_image
+        else:
+            img = self.rb_ctrl.apply(self._raw_image) if self.rb_ctrl.cfg.enabled else self._raw_image
         self.image = img    # trigger callback attached to update_img_callback
 
     def try_load_wavelength_json(self, directory: str):

@@ -1284,10 +1284,194 @@ class DataHandler(QtWidgets.QWidget):
         self.loader_dock = Dock("Data", size=(300, 300))
         self.loader_dock.addWidget(self.loader_widget, 1, 0, 1, 1)
         self.loader_dock.addWidget(self.wavenumber_widget, 0, 0, 1, 1)
+        self.slice_selector_widget = QtWidgets.QWidget()
+        self.slice_selector_widget.hide()
+        slice_layout = QtWidgets.QHBoxLayout(self.slice_selector_widget)
+        slice_layout.setContentsMargins(6, 4, 6, 4)
+        slice_layout.setSpacing(8)
+        self.slice_axis_title_label = QtWidgets.QLabel("Slice:")
+        self.slice_selector_spinbox = QtWidgets.QSpinBox()
+        self.slice_selector_spinbox.setMinimum(1)
+        self.slice_selector_spinbox.setMaximum(1)
+        self.slice_selector_spinbox.setValue(1)
+        self.slice_selector_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slice_selector_slider.setMinimum(0)
+        self.slice_selector_slider.setMaximum(0)
+        self.slice_selector_slider.setTickInterval(1)
+        self.slice_selector_slider.setTickPosition(QtWidgets.QSlider.TicksBothSides)
+        slice_layout.addWidget(self.slice_axis_title_label)
+        slice_layout.addWidget(self.slice_selector_spinbox)
+        slice_layout.addWidget(self.slice_selector_slider, stretch=1)
+        self.loader_dock.addWidget(self.slice_selector_widget, 2, 0, 1, 1)
+
+        self.slice_selector_spinbox.valueChanged.connect(
+            lambda value: self._set_current_slice_index(int(value) - 1)
+        )
+        self.slice_selector_slider.valueChanged.connect(self._set_current_slice_index)
 
         self._binning_factor = default_binning
-        self._binned_image = None   # the raw image is always available in the loader widget
+        self._source_image = None   # canonical image used for analysis, before spatial binning
+        self._analysis_image = None  # 3D or 4D image after spatial binning
+        self._display_image = None   # 3D image currently shown in the raw-data widget
         self._suspend_custom_axis_warning = False
+        self._current_slice_index = 0
+        self._slice_axis_label = "Slice"
+
+    class _AxisRoleDialog(QtWidgets.QDialog):
+        def __init__(self, shape: tuple[int, ...], parent: QtWidgets.QWidget | None = None):
+            super().__init__(parent)
+            self.setWindowTitle("Interpret 4D Stack")
+            layout = QtWidgets.QVBoxLayout(self)
+            layout.setContentsMargins(12, 12, 12, 12)
+            layout.setSpacing(10)
+
+            info = QtWidgets.QLabel(
+                "A 4D stack was detected. Choose which axis contains the spectral channels and "
+                "which axis represents the outer z/time dimension."
+            )
+            info.setWordWrap(True)
+            layout.addWidget(info)
+
+            axis_options = [(f"Axis {i} (size {shape[i]})", i) for i in range(len(shape))]
+
+            form = QtWidgets.QFormLayout()
+            form.setLabelAlignment(QtCore.Qt.AlignRight)
+            self.spectral_combo = QtWidgets.QComboBox()
+            self.slice_combo = QtWidgets.QComboBox()
+            for label, axis in axis_options:
+                self.spectral_combo.addItem(label, axis)
+                self.slice_combo.addItem(label, axis)
+            # Most microscopy-style 4D inputs arrive as (z/time, channel, y, x),
+            # so default to "outer axis first, spectral axis second".
+            spectral_default = 1 if len(shape) > 1 else 0
+            slice_default = 0
+            self.spectral_combo.setCurrentIndex(spectral_default)
+            self.slice_combo.setCurrentIndex(slice_default)
+
+            self.slice_kind_combo = QtWidgets.QComboBox()
+            self.slice_kind_combo.addItem("Z slices", "Z")
+            self.slice_kind_combo.addItem("Time points", "Time")
+
+            form.addRow("Spectral axis:", self.spectral_combo)
+            form.addRow("Outer axis:", self.slice_combo)
+            form.addRow("Outer axis meaning:", self.slice_kind_combo)
+            layout.addLayout(form)
+
+            buttons = QtWidgets.QDialogButtonBox(
+                QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+            )
+            buttons.accepted.connect(self._accept_if_valid)
+            buttons.rejected.connect(self.reject)
+            layout.addWidget(buttons)
+
+        def _accept_if_valid(self):
+            if self.spectral_combo.currentData() == self.slice_combo.currentData():
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Invalid axis assignment",
+                    "The spectral axis and the outer z/time axis must be different.",
+                )
+                return
+            self.accept()
+
+        def selection(self) -> tuple[int, int, str]:
+            return (
+                int(self.spectral_combo.currentData()),
+                int(self.slice_combo.currentData()),
+                str(self.slice_kind_combo.currentData()),
+            )
+
+    def _interpret_loaded_image(self, image: np.ndarray) -> tuple[np.ndarray, int]:
+        if image.ndim == 3:
+            self._slice_axis_label = "Slice"
+            self._current_slice_index = 0
+            return image, image.shape[0]
+
+        if image.ndim != 4:
+            raise ValueError(
+                f"Only 3D hyperspectral stacks or 4D channel+z/time stacks are supported, got shape {image.shape}."
+            )
+
+        dialog = self._AxisRoleDialog(image.shape, parent=self)
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            raise RuntimeError("4D stack loading cancelled by user.")
+
+        spectral_axis, slice_axis, slice_kind = dialog.selection()
+        remaining_axes = [axis for axis in range(image.ndim) if axis not in {slice_axis, spectral_axis}]
+        if len(remaining_axes) != 2:
+            raise ValueError(f"Could not determine the two spatial axes for 4D image shape {image.shape}.")
+
+        canonical = np.transpose(image, (slice_axis, spectral_axis, remaining_axes[0], remaining_axes[1]))
+        self._slice_axis_label = slice_kind
+        self._current_slice_index = 0
+        logger.info(
+            "Interpreted 4D stack %s as (%s, channel, y, x) using slice axis %s and spectral axis %s.",
+            image.shape,
+            slice_kind.lower(),
+            slice_axis,
+            spectral_axis,
+        )
+        return canonical, canonical.shape[1]
+
+    def _update_slice_selector(self):
+        if self._analysis_image is None or self._analysis_image.ndim != 4:
+            self.slice_selector_widget.hide()
+            return
+
+        n_slices = int(self._analysis_image.shape[0])
+        self.slice_axis_title_label.setText(f"{self._slice_axis_label}:")
+
+        self.slice_selector_spinbox.blockSignals(True)
+        self.slice_selector_spinbox.setMaximum(max(1, n_slices))
+        self.slice_selector_spinbox.setValue(self._current_slice_index + 1)
+        self.slice_selector_spinbox.blockSignals(False)
+
+        self.slice_selector_slider.blockSignals(True)
+        self.slice_selector_slider.setMaximum(max(0, n_slices - 1))
+        self.slice_selector_slider.setValue(self._current_slice_index)
+        self.slice_selector_slider.blockSignals(False)
+        self.slice_selector_widget.show()
+
+    def _set_current_slice_index(self, index: int):
+        if self._analysis_image is None or self._analysis_image.ndim != 4:
+            return
+
+        index = int(np.clip(index, 0, self._analysis_image.shape[0] - 1))
+        if index == self._current_slice_index and self._display_image is not None:
+            return
+
+        self._current_slice_index = index
+        self._display_image = self._analysis_image[index]
+        self._update_slice_selector()
+        self.update_image_callback(self._display_image)
+
+    def _apply_binning_to_canonical_image(self):
+        if self._source_image is None:
+            self._analysis_image = None
+            self._display_image = None
+            self._update_slice_selector()
+            return
+
+        if self._binning_factor == 1:
+            self._analysis_image = self._source_image
+        elif self._source_image.ndim == 3:
+            self._analysis_image = self.bin_image_3d(self._source_image, self._binning_factor)
+        elif self._source_image.ndim == 4:
+            self._analysis_image = np.stack(
+                [self.bin_image_3d(volume, self._binning_factor) for volume in self._source_image],
+                axis=0,
+            )
+        else:
+            raise ValueError(f"Unsupported canonical image dimensionality: {self._source_image.ndim}")
+
+        if self._analysis_image.ndim == 4:
+            self._current_slice_index = int(np.clip(self._current_slice_index, 0, self._analysis_image.shape[0] - 1))
+            self._display_image = self._analysis_image[self._current_slice_index]
+        else:
+            self._current_slice_index = 0
+            self._display_image = self._analysis_image
+
+        self._update_slice_selector()
 
     def new_image_loaded(self, image: np.ndarray):
         logger.info('New image loaded')
@@ -1308,17 +1492,25 @@ class DataHandler(QtWidgets.QWidget):
             logger.warning('NaN and Inf values replaced with 0.0, zeros replaced with small epsilon value.')
             logger.warning(f"Image dtype after replacement: {image.dtype}")
 
+        try:
+            self._source_image, n_frames = self._interpret_loaded_image(image)
+        except RuntimeError:
+            logger.info("4D image loading cancelled by user.")
+            return
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Unsupported image shape", str(exc))
+            logger.warning("Could not interpret loaded image shape %s: %s", image.shape, exc)
+            return
+
         # --- binning ---
-        self._binned_image = image
         if self._binning_factor != 1:
             logger.warning('Binning factor is not 1, image will be binned')
-            self._binned_image = self.bin_image_3d(image, self._binning_factor)
+        self._apply_binning_to_canonical_image()
 
         # update physical units with *final* image shape
-        self.loader_widget.physical_units_manager.update_image_dimensions(self._binned_image.shape[1:])
+        self.loader_widget.physical_units_manager.update_image_dimensions(self._display_image.shape[1:])
 
         # --- wavelength / wavenumber handling ---
-        n_frames = self._binned_image.shape[0]
         wavelength_meta = self.loader_widget.wavelength_meta
 
         if not self._suspend_custom_axis_warning:
@@ -1332,8 +1524,7 @@ class DataHandler(QtWidgets.QWidget):
             self.wavenumber_widget.set_nframes(n_frames)
 
         # push image to the rest of the pipeline
-
-        self.update_image_callback(self._binned_image)
+        self.update_image_callback(self._display_image)
 
     def get_dock_widget(self):
         return self.loader_dock
@@ -1352,18 +1543,28 @@ class DataHandler(QtWidgets.QWidget):
     def apply_binning(self):
         """Apply binning to the image and update the image view."""
         logger.info('Calculating binned image with factor %i'%self._binning_factor)
-        if self._binning_factor == 1:
-            self._binned_image = self.loader_widget.image
-            self.update_image_callback(self._binned_image)
-        else:
-            # apply binning to all image frames
-            self._binned_image = self.bin_image_3d(self.loader_widget.image, self._binning_factor)
-            self.update_image_callback(self._binned_image)
+        self._apply_binning_to_canonical_image()
+        if self._display_image is not None:
+            self.loader_widget.physical_units_manager.update_image_dimensions(self._display_image.shape[1:])
+            self.update_image_callback(self._display_image)
 
 
     def get_image(self):
         """Return the binned image (widgets only see binned data)."""
-        return self._binned_image
+        return self._display_image
+
+    def get_analysis_image(self):
+        """Return the current analysis image: 3D for standard data, 4D for multi-slice data."""
+        return self._analysis_image
+
+    def get_current_slice_index(self) -> int:
+        return self._current_slice_index
+
+    def get_slice_axis_label(self) -> str:
+        return self._slice_axis_label
+
+    def has_multi_slice_axis(self) -> bool:
+        return self._analysis_image is not None and self._analysis_image.ndim == 4
 
     @staticmethod
     def bin_image_3d(image: np.ndarray, bin_factor: int, axis_order: dict= {'z': 0, 'y': 1, 'x': 2}):

@@ -1,4 +1,5 @@
 import logging
+import sys
 from datetime import datetime
 from typing import Tuple, Callable
 
@@ -27,15 +28,14 @@ class AnalysisWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
     finished = QtCore.pyqtSignal(str)
 
-    def __init__(self, mv_analyzer):
+    def __init__(self, run_callable: Callable[[], None], method_getter: Callable[[], str]):
         super().__init__()
-        self.mv_analyzer = mv_analyzer
+        self._run_callable = run_callable
+        self._method_getter = method_getter
 
     def run(self):
-        # Check which radio button is selected
-        analysis_method = self.mv_analyzer.analysis_method
-        self.mv_analyzer.start_analysis()
-        self.finished.emit(analysis_method)
+        self._run_callable()
+        self.finished.emit(self._method_getter())
 
 """
 # Threading option 2: use thread pool in case of multiple threads
@@ -69,6 +69,11 @@ class AnalysisManager(QtCore.QObject):
         self._fixed_seed_W_counts: dict[int, int] = {}  # component -> number of fixed W maps averaged into the stored mean
         self.rolling_ball_preview_dialog: QtWidgets.QDialog | None = None
         self.wavenumbers = None
+        self._analysis_series_4d: np.ndarray | None = None
+        self._analysis_series_label: str = "Slice"
+        self._analysis_series_index: int = 0
+        self._analysis_result_spectra: np.ndarray | None = None
+        self._analysis_result_images: np.ndarray | None = None
 
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
         # Main widget instantiated in the init_ui method
@@ -81,10 +86,12 @@ class AnalysisManager(QtCore.QObject):
         self.nnmf_solver_dropdown: QtWidgets.QComboBox | None = None
         self.nnmf_backend_dropdown: QtWidgets.QComboBox | None = None
         self.custom_init_check: QtWidgets.QCheckBox | None = None
+        self.fixed_h_nnls_only_check: QtWidgets.QCheckBox | None = None
+        self.fast_multislice_nnmf_check: QtWidgets.QCheckBox | None = None
 
         # set up thread for analysis
         self.thread_analysis = QtCore.QThread()
-        self.worker = AnalysisWorker(self.mv_analyzer)
+        self.worker = AnalysisWorker(self._run_analysis_job, lambda: self.mv_analyzer.analysis_method)
         self.worker.moveToThread(self.thread_analysis)
         # Connect pyqt signals
         self.thread_analysis.started.connect(self.worker.run)
@@ -243,6 +250,22 @@ class AnalysisManager(QtCore.QObject):
         self.custom_init_check = custom_init_check
 
         analysis_layout.addWidget(custom_init_check, 2, 3, 1, 2)
+
+        self.fixed_h_nnls_only_check = QtWidgets.QCheckBox("Fixed-H NNLS only")
+        self.fixed_h_nnls_only_check.setToolTip(
+            "Use the NNLS-based W seed maps directly as the result for 3D data. "
+            "This requires every H seed to be set."
+        )
+        self.fixed_h_nnls_only_check.stateChanged.connect(self._sync_fixed_h_mode_seed_requirements)
+        analysis_layout.addWidget(self.fixed_h_nnls_only_check, 3, 3, 1, 2)
+
+        self.fast_multislice_nnmf_check = QtWidgets.QCheckBox("4D fast mode")
+        self.fast_multislice_nnmf_check.setToolTip(
+            "For 4D data, keep the reference-slice H seeds fixed and compute the "
+            "NNLS-based W seed maps per slice without NNMF refinement."
+        )
+        self.fast_multislice_nnmf_check.stateChanged.connect(self._sync_fixed_h_mode_seed_requirements)
+        analysis_layout.addWidget(self.fast_multislice_nnmf_check, 3, 1, 1, 2)
 
         solver_label = QtWidgets.QLabel("NNMF solver:")
         solver_label.setToolTip("Choose the scikit-learn NMF solver. 'cd' is usually faster on CPU; 'mu' is the legacy multiplicative-update path.")
@@ -511,8 +534,39 @@ class AnalysisManager(QtCore.QObject):
         Returns:
 
         """
-        if self.nnmf_radio.isChecked() and self.mv_analyzer.custom_nnmf_init:
-            self.make_all_seeds_from_inputs(show_seeds=True)
+        self._analysis_result_spectra = None
+        self._analysis_result_images = None
+        if self.nnmf_radio.isChecked():
+            if self._use_fixed_h_nnls_only():
+                if self._analysis_series_4d is not None:
+                    QtWidgets.QMessageBox.warning(
+                        self.analysis_widget,
+                        "Fixed-H NNLS only is 3D-only",
+                        "The 'Fixed-H NNLS only' option is intended for 3D data.\n\n"
+                        "For 4D data, use '4D fast mode' instead.",
+                    )
+                    return
+                if not self.mv_analyzer.custom_nnmf_init:
+                    QtWidgets.QMessageBox.warning(
+                        self.analysis_widget,
+                        "Custom initialization required",
+                        "Fixed-H NNLS requires custom H seeds. Enable 'Custom initialization (NNMF)' first.",
+                    )
+                    return
+                self._prepare_fixed_h_seed_template(show_seeds=True, fill_missing_h=False)
+                if not self.mv_analyzer.has_complete_H_seed_set():
+                    QtWidgets.QMessageBox.warning(
+                        self.analysis_widget,
+                        "Incomplete H seeds",
+                        "Fixed-H NNLS is only available when every component has an H seed.\n\n"
+                        "Add ROI/spectral H seeds for all components first.",
+                    )
+                    return
+            elif self.mv_analyzer.custom_nnmf_init:
+                if self._analysis_series_4d is not None:
+                    self._prepare_fixed_h_seed_template(show_seeds=True, fill_missing_h=True)
+                else:
+                    self.make_all_seeds_from_inputs(show_seeds=True)
         self.analyze_button.setEnabled(False)
         self.analyze_button.setText('Analysis in Progress')
         self.thread_analysis.start()
@@ -520,10 +574,324 @@ class AnalysisManager(QtCore.QObject):
         logger.info(f'{datetime.now()}: Analysis started')
         logger.info(f"{'-' * 50}")
 
+    def set_analysis_series(self, data: np.ndarray | None, slice_axis_label: str = "Slice", current_slice_index: int = 0):
+        if data is not None and data.ndim == 4:
+            self._analysis_series_4d = np.asarray(data)
+            self._analysis_series_label = str(slice_axis_label or "Slice")
+            self._analysis_series_index = int(np.clip(current_slice_index, 0, self._analysis_series_4d.shape[0] - 1))
+        else:
+            self._analysis_series_4d = None
+            self._analysis_series_label = str(slice_axis_label or "Slice")
+            self._analysis_series_index = 0
+
+    def get_analysis_series_label(self) -> str:
+        return self._analysis_series_label
+
+    def _run_analysis_job(self):
+        if self._use_fixed_h_nnls_only():
+            self.mv_analyzer.fixed_H = np.array(self.mv_analyzer.seed_H, copy=True)
+            self.mv_analyzer.fixed_W = np.array(self.mv_analyzer.seed_W, copy=True)
+            self.mv_analyzer.fixed_W_2D = self.mv_analyzer.fixed_W.reshape(
+                self.mv_analyzer.raw_data_3d.shape[1],
+                self.mv_analyzer.raw_data_3d.shape[2],
+                -1,
+            ).transpose(2, 0, 1)
+            self._analysis_result_spectra = np.array(self.mv_analyzer.seed_H, copy=True)
+            self._analysis_result_images = np.array(self.mv_analyzer.fixed_W_2D, copy=True)
+            return
+
+        if self._analysis_series_4d is not None:
+            self._run_multislice_analysis()
+            return
+
+        self.mv_analyzer.start_analysis()
+        if self.mv_analyzer.analysis_method == "PCA":
+            self._analysis_result_spectra = self.mv_analyzer.PCs
+            self._analysis_result_images = self.mv_analyzer.pca_2DX
+        else:
+            self._analysis_result_spectra = self.mv_analyzer.fixed_H
+            self._analysis_result_images = self.mv_analyzer.fixed_W_2D
+
+    def _run_multislice_analysis(self):
+        series = self._analysis_series_4d
+        if series is None or series.ndim != 4:
+            raise RuntimeError("No 4D analysis series is configured.")
+
+        analysis_method = self.mv_analyzer.analysis_method
+        n_components = self.mv_analyzer.get_n_components()
+        wavenumbers = None if self.wavenumbers is None else np.array(self.wavenumbers, copy=True)
+        spectral_info = self.mv_analyzer.spectral_info
+        custom_init = bool(self.mv_analyzer.custom_nnmf_init)
+        solver = self.mv_analyzer.nnmf_solver
+        backend_preference = self.mv_analyzer.nnmf_backend_preference
+        w_seed_mode = self.mv_analyzer.w_seed_mode
+        fast_mode = bool(custom_init and self._use_fast_multislice_nnmf())
+        reference_slice_index = int(np.clip(self._analysis_series_index, 0, series.shape[0] - 1))
+
+        display_data = None if self.z3D_data is None else np.array(self.z3D_data, copy=True)
+        display_seed_H = None if self.mv_analyzer.seed_H is None else np.array(self.mv_analyzer.seed_H, copy=True)
+        display_seed_H_bg = None if self.mv_analyzer.seed_H_background_flag is None else np.array(self.mv_analyzer.seed_H_background_flag, copy=True)
+        display_seed_W = None if self.mv_analyzer.seed_W is None else np.array(self.mv_analyzer.seed_W, copy=True)
+        fixed_seed_W = {comp: np.array(seed, copy=True) for comp, seed in self._fixed_seed_W.items()}
+
+        spectra_per_slice = []
+        images_per_slice = []
+        reference_result = None
+
+        if fast_mode:
+            logger.info(
+                "4D fast mode enabled: reusing the reference-slice NNLS seed result on %s %s and "
+                "recomputing the same fixed-H NNLS seed maps on the remaining slices.",
+                self._analysis_series_label.lower(),
+                reference_slice_index + 1,
+            )
+            reference_result = {
+                "H": None if display_seed_H is None else np.array(display_seed_H[:n_components], copy=True),
+                "W": None if display_seed_W is None else display_seed_W.reshape(
+                    self.mv_analyzer.raw_data_3d.shape[1],
+                    self.mv_analyzer.raw_data_3d.shape[2],
+                    -1,
+                ).transpose(2, 0, 1)[:n_components],
+            }
+
+        for slice_index in range(series.shape[0]):
+            slice_data = np.array(series[slice_index], copy=True)
+            logger.info("Running %s on %s %s/%s", analysis_method, self._analysis_series_label.lower(), slice_index + 1, series.shape[0])
+
+            if fast_mode and slice_index == reference_slice_index and reference_result is not None:
+                spectra_per_slice.append(np.array(reference_result["H"], copy=True))
+                images_per_slice.append(np.array(reference_result["W"], copy=True))
+                continue
+
+            self.z3D_data = slice_data
+            self.mv_analyzer.update_image_data(slice_data, n_components, wavenumbers)
+            if spectral_info is not None:
+                self.mv_analyzer.update_spectral_info(spectral_info)
+            self.mv_analyzer.set_custom_nnmf_init(custom_init)
+            self.mv_analyzer.set_nnmf_solver(solver)
+            self.mv_analyzer.set_nnmf_backend_preference(backend_preference)
+            self.mv_analyzer.set_W_seed_mode(w_seed_mode)
+            self._update_multislice_modified_data(slice_data)
+
+            if analysis_method == "PCA":
+                self.mv_analyzer.PCA()
+                spectra_per_slice.append(np.array(self.mv_analyzer.PCs[:n_components], copy=True))
+                images_per_slice.append(np.array(self.mv_analyzer.pca_2DX[:n_components], copy=True))
+                continue
+
+            if fast_mode:
+                seed_result = self._build_fixed_h_seed_result(
+                    H_template=display_seed_H,
+                    H_background_template=display_seed_H_bg,
+                    fixed_seed_W=fixed_seed_W,
+                )
+                spectra_per_slice.append(np.array(seed_result["H"][:n_components], copy=True))
+                images_per_slice.append(np.array(seed_result["W"][:n_components], copy=True))
+                continue
+
+            if custom_init:
+                self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
+                self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
+                self.mv_analyzer.seed_W = None
+                self.mv_analyzer._W_prepared = False
+                self.mv_analyzer.estimate_W_seed_matrix_from_H(
+                    overwrite=True,
+                    skip_components=fixed_seed_W.keys(),
+                )
+                self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
+                if self.mv_analyzer.seed_W is None:
+                    self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
+                for comp, fixed_W in fixed_seed_W.items():
+                    if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
+                        self.mv_analyzer.seed_W[:, comp] = fixed_W
+                self.mv_analyzer._W_prepared = np.all(self.mv_analyzer.seed_W)
+                self.mv_analyzer.NNMF(skip_seed_fining=True)
+            else:
+                self.mv_analyzer.randomNNMF()
+
+            spectra_per_slice.append(np.array(self.mv_analyzer.fixed_H[:n_components], copy=True))
+            images_per_slice.append(np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True))
+
+        self._analysis_result_spectra = np.stack(spectra_per_slice, axis=0)
+        self._analysis_result_images = np.stack(images_per_slice, axis=0)
+
+        if display_data is not None:
+            self.z3D_data = display_data
+            self.mv_analyzer.update_image_data(display_data, n_components, wavenumbers)
+            if spectral_info is not None:
+                self.mv_analyzer.update_spectral_info(spectral_info)
+            self.mv_analyzer.set_custom_nnmf_init(custom_init)
+            self.mv_analyzer.set_nnmf_solver(solver)
+            self.mv_analyzer.set_nnmf_backend_preference(backend_preference)
+            self.mv_analyzer.set_W_seed_mode(w_seed_mode)
+            self._update_multislice_modified_data(display_data)
+            self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
+            self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
+            self.mv_analyzer.seed_W = None if display_seed_W is None else np.array(display_seed_W, copy=True)
+            self.mv_analyzer._W_prepared = bool(self.mv_analyzer.seed_W is not None and np.all(self.mv_analyzer.seed_W))
+
+    def _prepare_fixed_h_seed_template(self, show_seeds: bool = True, fill_missing_h: bool = True):
+        """
+        Build the reusable H/fixed-W seed template once on the currently displayed slice.
+        This deliberately skips the full W construction because fixed-H modes rebuild or
+        solve W separately afterwards.
+        """
+        self._ensure_nnls_seed_mode_selected()
+        self._fixed_seed_W = {}
+        self._fixed_seed_W_counts = {}
+
+        self.reload_H_seeds_from_rois()
+        logger.info("Processing reusable H seeds for fixed-H analysis modes")
+        _, _, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True, debug_mode=False)
+
+        if fill_missing_h:
+            logger.info('Ensuring all H seeds are available before per-slice W reconstruction.')
+            self.mv_analyzer.set_up_missing_H_seeds()
+
+        if not show_seeds:
+            return
+
+        seed_result = self._build_fixed_h_seed_result(
+            H_template=self.mv_analyzer.seed_H,
+            H_background_template=self.mv_analyzer.seed_H_background_flag,
+            fixed_seed_W=self._fixed_seed_W,
+        )
+        self.show_seed_window(seed_result["W"].transpose(1, 2, 0), seed_result["H"], seed_pixels)
+
+    def _use_fixed_h_nnls_only(self) -> bool:
+        return bool(self.fixed_h_nnls_only_check is not None and self.fixed_h_nnls_only_check.isChecked())
+
+    def _use_fast_multislice_nnmf(self) -> bool:
+        return bool(self.fast_multislice_nnmf_check is not None and self.fast_multislice_nnmf_check.isChecked())
+
+    def _sync_fixed_h_mode_seed_requirements(self, state=None):
+        if self._use_fixed_h_nnls_only() or self._use_fast_multislice_nnmf():
+            self._ensure_nnls_seed_mode_selected()
+
+    def _ensure_nnls_seed_mode_selected(self):
+        target_label = "NNLS abundance map"
+        if self.w_seed_mode_dropdown is not None:
+            for idx in range(self.w_seed_mode_dropdown.count()):
+                if self.w_seed_mode_dropdown.itemData(idx) == target_label:
+                    if self.w_seed_mode_dropdown.currentIndex() != idx:
+                        blocker = QtCore.QSignalBlocker(self.w_seed_mode_dropdown)
+                        self.w_seed_mode_dropdown.setCurrentIndex(idx)
+                        del blocker
+                    break
+        self.mv_analyzer.set_W_seed_mode(target_label)
+
+    def _build_fixed_h_seed_result(
+            self,
+            *,
+            H_template: np.ndarray | None,
+            H_background_template: np.ndarray | None,
+            fixed_seed_W: dict[int, np.ndarray],
+    ) -> dict:
+        self._ensure_nnls_seed_mode_selected()
+        self.mv_analyzer.seed_H = None if H_template is None else np.array(H_template, copy=True)
+        self.mv_analyzer.seed_H_background_flag = None if H_background_template is None else np.array(H_background_template, copy=True)
+        self.mv_analyzer.seed_W = None
+        self.mv_analyzer._W_prepared = False
+        self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
+        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
+        if self.mv_analyzer.seed_W is None:
+            self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()), dtype=np.float64)
+        for comp, fixed_W in fixed_seed_W.items():
+            if 0 <= comp < self.mv_analyzer.seed_W.shape[1] and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
+                self.mv_analyzer.seed_W[:, comp] = fixed_W
+        self.mv_analyzer._W_prepared = bool(np.all(self.mv_analyzer.seed_W))
+        self._log_last_nnls_summary()
+        return {
+            "H": np.array(self.mv_analyzer.seed_H, copy=True),
+            "W": self.mv_analyzer.seed_W.reshape(
+                self.mv_analyzer.raw_data_3d.shape[1],
+                self.mv_analyzer.raw_data_3d.shape[2],
+                -1,
+            ).transpose(2, 0, 1),
+        }
+
+    def _log_last_nnls_summary(self):
+        info = getattr(self.mv_analyzer, "last_nnls_info", None)
+        if not info:
+            logger.info("NNLS finished without an available backend summary.")
+            return
+
+        backend = info.get("backend", "unknown")
+        algorithm = info.get("algorithm", "nnls")
+        source = info.get("source", "unknown")
+        final_error = info.get("final_error")
+        tol = info.get("tol")
+        cache_hit = bool(info.get("cache_hit", False))
+        n_iter = info.get("n_iter")
+        max_chunk_iter = info.get("max_chunk_iter")
+        mean_chunk_iter = info.get("mean_chunk_iter")
+
+        logger.info(
+            "NNLS finished: backend=%s, algorithm=%s, source=%s, cache_hit=%s, final_error=%s, tol=%s",
+            backend,
+            algorithm,
+            source,
+            cache_hit,
+            final_error,
+            tol,
+        )
+        if n_iter is not None:
+            logger.info("NNLS iterations: %s", n_iter)
+        if max_chunk_iter is not None:
+            logger.info("NNLS max chunk iterations: %s", max_chunk_iter)
+        if mean_chunk_iter is not None:
+            logger.info("NNLS mean chunk iterations: %s", mean_chunk_iter)
+
+    def _apply_fixed_W_overrides_to_results(self, fixed_seed_W: dict[int, np.ndarray]):
+        if not fixed_seed_W or self.mv_analyzer.fixed_W is None:
+            return
+        updated = False
+        for comp, fixed_W in fixed_seed_W.items():
+            if 0 <= comp < self.mv_analyzer.fixed_W.shape[1] and fixed_W.shape[0] == self.mv_analyzer.fixed_W.shape[0]:
+                self.mv_analyzer.fixed_W[:, comp] = fixed_W
+                updated = True
+        if updated:
+            self.mv_analyzer.fixed_W_2D = self.mv_analyzer.reshape_2d_3d_mv_data(self.mv_analyzer.fixed_W)
+
+    def _update_multislice_modified_data(self, slice_data: np.ndarray):
+        subtract_row = None
+        for row in range(self.roi_manager.roi_table.rowCount()):
+            sub_cb = self.roi_manager.roi_table.cellWidget(row, self.roi_manager.widget_columns["Subtract"])
+            if sub_cb is not None and sub_cb.isChecked():
+                subtract_row = row
+                break
+        if subtract_row is None:
+            self.mv_analyzer.update_resonance_image_data(np.array([]))
+            return
+
+        roi = self.roi_manager.rois[subtract_row] if subtract_row < len(self.roi_manager.rois) else None
+        if roi is None:
+            self.mv_analyzer.update_resonance_image_data(np.array([]))
+            return
+
+        try:
+            z_stack = roi.getArrayRegion(
+                slice_data,
+                self.roi_manager.image_view.imageItem,
+                axes=(2, 1),
+                returnMappedCoords=False,
+            )
+            if z_stack is None or z_stack.size == 0:
+                self.mv_analyzer.update_resonance_image_data(np.array([]))
+                return
+            spectral_background = np.mean(z_stack, axis=(1, 2))
+            tiled_background = spectral_background[:, np.newaxis, np.newaxis]
+            subtracted_data = slice_data - tiled_background
+            subtracted_data[subtracted_data <= 0] = sys.float_info.epsilon
+            self.mv_analyzer.update_resonance_image_data(subtracted_data)
+        except Exception as exc:
+            logger.warning("Could not update per-slice processed data for 4D analysis. Falling back to raw data. Error: %s", exc)
+            self.mv_analyzer.update_resonance_image_data(np.array([]))
+
     def _handle_component_count_changed(self, n_components: int):
         self.mv_analyzer.update_components(n_components)
 
-    def import_current_result_component(self, target: str, component_index: int) -> bool:
+    def import_current_result_component(self, target: str, component_index: int, slice_index: int = 0) -> bool:
         """
         Main input point to set ROIs with dummy data for W and H in the ROI Manager.
         Works with references of the NNMF result `fixed_W` and `fixed_H`.
@@ -534,8 +902,23 @@ class AnalysisManager(QtCore.QObject):
             logger.warning('Unknown result-to-seed target requested: %s', target)
             return False
 
-        fixed_H = self.mv_analyzer.fixed_H
-        fixed_W = self.mv_analyzer.fixed_W
+        fixed_H = self._analysis_result_spectra
+        fixed_W_images = self._analysis_result_images
+        if fixed_H is None or fixed_W_images is None:
+            fixed_H = self.mv_analyzer.fixed_H
+            fixed_W = self.mv_analyzer.fixed_W
+        else:
+            fixed_H = np.asarray(fixed_H)
+            fixed_W_images = np.asarray(fixed_W_images)
+            if fixed_H.ndim == 3:
+                slice_index = int(np.clip(slice_index, 0, fixed_H.shape[0] - 1))
+                fixed_H = fixed_H[slice_index]
+            if fixed_W_images.ndim == 4:
+                slice_index = int(np.clip(slice_index, 0, fixed_W_images.shape[0] - 1))
+                fixed_W = fixed_W_images[slice_index].reshape(fixed_W_images.shape[1], -1).T
+            else:
+                fixed_W = fixed_W_images.reshape(fixed_W_images.shape[0], -1).T
+
         if fixed_H is None or fixed_W is None:
             QtWidgets.QMessageBox.warning(
                 self.analysis_widget,
@@ -758,12 +1141,11 @@ class AnalysisManager(QtCore.QObject):
         self.nnmf_backend_dropdown.setEnabled(use_backend_selector)
 
     def get_analysis_data(self) -> (np.ndarray, np.ndarray):
+        if self._analysis_result_spectra is not None and self._analysis_result_images is not None:
+            return self._analysis_result_spectra, self._analysis_result_images
         if self.pca_radio.isChecked():
-            analysis_method = "PCA"
             return self.mv_analyzer.PCs, self.mv_analyzer.pca_2DX
-        elif self.nnmf_radio.isChecked():
-            analysis_method = "NNMF"
-            return self.mv_analyzer.fixed_H, self.mv_analyzer.fixed_W_2D
+        return self.mv_analyzer.fixed_H, self.mv_analyzer.fixed_W_2D
 
     def _refresh_resonance_table_layout(self):
         header = self.resonance_table.horizontalHeader()
@@ -1838,6 +2220,8 @@ class AnalysisManager(QtCore.QObject):
             "w_seed_mode": mode,
             "overwrite_existing_w_from_h": bool(self._overwrite_existing_W_from_H),
             "seed_pixel_metric": seed_pixel_metric,
+            "fixed_h_nnls_only": bool(self._use_fixed_h_nnls_only()),
+            "fast_multislice_nnmf": bool(self._use_fast_multislice_nnmf()),
         }
 
     def import_seed_init_state(self, state: dict | list | tuple | None):
@@ -1887,6 +2271,18 @@ class AnalysisManager(QtCore.QObject):
                 blocker = QtCore.QSignalBlocker(self.seed_pixel_mode_dropdown)
                 self.seed_pixel_mode_dropdown.setCurrentText(seed_pixel_metric)
                 del blocker
+
+        fixed_h_nnls_only = bool(settings.get("fixed_h_nnls_only", False))
+        if self.fixed_h_nnls_only_check is not None:
+            blocker = QtCore.QSignalBlocker(self.fixed_h_nnls_only_check)
+            self.fixed_h_nnls_only_check.setChecked(fixed_h_nnls_only)
+            del blocker
+
+        fast_multislice_nnmf = bool(settings.get("fast_multislice_nnmf", False))
+        if self.fast_multislice_nnmf_check is not None:
+            blocker = QtCore.QSignalBlocker(self.fast_multislice_nnmf_check)
+            self.fast_multislice_nnmf_check.setChecked(fast_multislice_nnmf)
+            del blocker
 
     def set_spectral_units(self, unit: str):
         unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"

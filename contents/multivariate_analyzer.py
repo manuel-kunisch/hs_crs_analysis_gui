@@ -52,10 +52,11 @@ class MultivariateAnalyzer(object):
         self.torch_nmf_max_iter = 5000
         self.torch_nmf_tol = 1e-4
         self.prefer_torch_nnls = True
-        self.torch_nnls_max_iter = 250
+        self.torch_nnls_max_iter = 2500
         self.torch_nnls_tol = 1e-4
         self.torch_nnls_chunk_size = 32768
         self._nnls_abundance_cache = {}
+        self.last_nnls_info: dict | None = None
         self.update_image_data(data, n_components, wavenumbers)
 
     def update_spectral_info(self, spectral_info: list[dict[str, float | int]]):
@@ -65,6 +66,7 @@ class MultivariateAnalyzer(object):
 
     def _clear_nnls_abundance_cache(self):
         self._nnls_abundance_cache = {}
+        self.last_nnls_info = None
 
     def update_image_data(self, data: np.ndarray, n_components: int, wavenumbers: np.ndarray):
         self.prepared = False
@@ -332,6 +334,35 @@ class MultivariateAnalyzer(object):
         return np.column_stack(basis_columns), component_to_basis
 
     @staticmethod
+    def _prepare_fixed_h_component(spectrum: np.ndarray, eps: float = 1e-8) -> np.ndarray | None:
+        """
+        Prepare a fixed-H component for direct NNLS without renormalizing its scale.
+
+        Unlike `_prepare_seed_spectrum`, this keeps the magnitude of the spectrum so a
+        reference NNMF result can be reused as-is across slices while only W is updated.
+        """
+        arr = np.asarray(spectrum, dtype=np.float64)
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        min_val = float(np.min(arr))
+        if min_val < 0:
+            arr = arr - min_val
+        arr = np.maximum(arr, 0.0)
+        if not np.any(arr > eps):
+            return None
+        return np.maximum(arr, eps)
+
+    def has_complete_H_seed_set(self, spectra: np.ndarray | None = None, eps: float = 1e-8) -> bool:
+        target = self.seed_H if spectra is None else np.asarray(spectra)
+        if target is None or target.ndim != 2 or target.shape[0] < self._n_components:
+            return False
+        for component_index in range(self._n_components):
+            if not self._has_seed_signal(target[component_index], eps=eps):
+                return False
+            if self._prepare_fixed_h_component(target[component_index], eps=eps) is None:
+                return False
+        return True
+
+    @staticmethod
     def _project_target_strength(image_data: np.ndarray, prepared_target: np.ndarray) -> np.ndarray:
         working_data = np.asarray(image_data, dtype=np.float64)
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
@@ -363,7 +394,7 @@ class MultivariateAnalyzer(object):
             image_data: np.ndarray,
             basis: np.ndarray,
             eps: float,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, dict]:
         """
         Solve a SciPy NNLS abundance fit for every active pixel.
 
@@ -393,10 +424,24 @@ class MultivariateAnalyzer(object):
             active_pixels.size,
             basis.shape[1],
         )
+        residual_sq = 0.0
         for pixel_index in active_pixels:
             coeffs, _ = nnls(basis, working_data[pixel_index])
-            abundance[pixel_index] = np.maximum(coeffs, eps)
-        return abundance
+            coeffs = np.maximum(coeffs, eps)
+            abundance[pixel_index] = coeffs
+            residual = working_data[pixel_index] - (basis @ coeffs)
+            residual_sq += float(np.dot(residual, residual))
+        info = {
+            "algorithm": "scipy_nnls",
+            "backend": "scipy-cpu",
+            "n_pixels": int(working_data.shape[0]),
+            "active_pixels": int(active_pixels.size),
+            "n_components": int(basis.shape[1]),
+            "tol": None,
+            "n_iter": None,
+            "final_error": float(residual_sq ** 0.5),
+        }
+        return abundance, info
 
     def _build_nnls_abundance_matrix(
             self,
@@ -404,7 +449,7 @@ class MultivariateAnalyzer(object):
             basis: np.ndarray,
             eps: float,
             source_key: str,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, dict]:
         """
         Solve the fixed-H NNMF subproblem for W via a non-negative least-squares formulation.
 
@@ -436,12 +481,22 @@ class MultivariateAnalyzer(object):
             denom = float(np.dot(basis[:, 0], basis[:, 0])) + eps
             abundance = np.full((working_data.shape[0], 1), eps, dtype=np.float32)
             abundance[:, 0] = np.maximum((working_data @ basis[:, 0]) / denom, eps).astype(np.float32)
-            return abundance
+            residual = working_data - abundance[:, [0]] @ basis[:, [0]].T
+            info = {
+                "algorithm": "closed_form_nnls",
+                "backend": "closed-form",
+                "n_pixels": int(working_data.shape[0]),
+                "n_components": 1,
+                "tol": None,
+                "n_iter": 1,
+                "final_error": float(np.linalg.norm(residual, ord="fro")),
+            }
+            return abundance, info
 
         if self.prefer_torch_nnls and nnls_pytorch.cuda_available():
             try:
                 logger.info('Using PyTorch CUDA NNLS solver for %s data.', source_key)
-                abundance = nnls_pytorch.solve_batched_nnls_projected_gradient(
+                abundance, info = nnls_pytorch.solve_batched_nnls_projected_gradient(
                     image_data,
                     basis,
                     device='cuda',
@@ -450,7 +505,9 @@ class MultivariateAnalyzer(object):
                     eps=eps,
                     chunk_size=self.torch_nnls_chunk_size,
                 )
-                return np.maximum(abundance, eps).astype(np.float32, copy=False)
+                info = dict(info)
+                info["backend"] = "torch-cuda"
+                return np.maximum(abundance, eps).astype(np.float32, copy=False), info
             except Exception as exc:
                 logger.warning('PyTorch CUDA NNLS solver failed; falling back to SciPy NNLS. Error: %s', exc)
 
@@ -481,9 +538,17 @@ class MultivariateAnalyzer(object):
         cached = self._nnls_abundance_cache.get(cache_key)
         if cached is not None and cached.shape == (image_data.shape[0], basis.shape[1]):
             logger.info('Reusing cached NNLS abundance matrix for %s data (%s).', source_key, backend_name)
+            if self.last_nnls_info is not None:
+                self.last_nnls_info = dict(self.last_nnls_info)
+                self.last_nnls_info["source"] = source_key
+                self.last_nnls_info["cache_hit"] = True
             return cached
 
-        abundance = self._build_nnls_abundance_matrix(image_data, basis, eps, source_key)
+        abundance, info = self._build_nnls_abundance_matrix(image_data, basis, eps, source_key)
+        info = dict(info)
+        info["source"] = source_key
+        info["cache_hit"] = False
+        self.last_nnls_info = info
         self._nnls_abundance_cache[cache_key] = abundance
         return abundance
 
@@ -548,6 +613,56 @@ class MultivariateAnalyzer(object):
             source_key,
         )
         return np.maximum(abundance[:, target_basis_index], eps)
+
+    def solve_fixed_H_nnls(
+            self,
+            H_matrix: np.ndarray | None = None,
+            *,
+            use_processed_data: bool = True,
+            source_key: str | None = None,
+            eps: float = 1e-8,
+    ) -> dict:
+        """
+        Solve only W with fixed spectra H via NNLS and store the result as the current outcome.
+
+        This is the fixed-H subproblem
+
+            W = argmin_{W >= 0} ||X - W H||_F^2
+
+        using either the provided `H_matrix` or the current `seed_H`.
+        """
+        target_H = self.seed_H if H_matrix is None else np.asarray(H_matrix, dtype=np.float64)
+        if target_H is None or target_H.ndim != 2 or target_H.shape[0] < self._n_components:
+            raise ValueError("A complete H matrix is required for fixed-H NNLS.")
+
+        fixed_h_rows = []
+        for component_index in range(self._n_components):
+            prepared = self._prepare_fixed_h_component(target_H[component_index], eps=eps)
+            if prepared is None:
+                raise ValueError(f"Component {component_index} has no usable fixed-H spectrum for NNLS.")
+            fixed_h_rows.append(prepared)
+
+        fixed_h = np.vstack(fixed_h_rows).astype(np.float32, copy=False)
+        use_subtracted = bool(use_processed_data and self.resonance_data_2d is not None)
+        image_data = self.resonance_data_2d if use_subtracted else self.data_2d
+        resolved_source_key = source_key or ("fixed-h-subtracted" if use_subtracted else "fixed-h-raw")
+        abundance, info = self._build_nnls_abundance_matrix(
+            image_data,
+            fixed_h.T.astype(np.float64, copy=False),
+            eps,
+            resolved_source_key,
+        )
+
+        self.fixed_W = np.asarray(abundance, dtype=np.float32)
+        self.fixed_H = fixed_h
+        self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
+        info = dict(info)
+        info["algorithm"] = "fixed_h_nnls"
+        info["source"] = resolved_source_key
+        info["use_processed_data"] = use_subtracted
+        self.last_nnls_info = dict(info)
+        logger.info("Fixed-H NNLS outcome: backend=%s, source=%s", info["backend"], info["source"])
+        return info
 
     def standardize_and_reshape_data(self):
         """

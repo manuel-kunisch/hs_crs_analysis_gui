@@ -41,20 +41,24 @@ class CompositeImageViewWidget(QMainWindow):
         (255, 192, 203),  # Pink
     ]
     color_changed_signal = pyqtSignal(int, QColor)
-    import_result_component_signal = pyqtSignal(str, int)
+    import_result_component_signal = pyqtSignal(str, int, int)
     def __init__(self, img:np.ndarray = None, spectral_cmps: np.ndarray|None = None,
                  color_manager: ComponentColorManager=None):
         super().__init__()
         self.img = img
+        self.img_series = None
         self.color_manager = color_manager
         # sync the colormap colors with the color manager if provided
         if self.color_manager is not None:
             self.colormap_colors = self.color_manager.get_all_colors_rgb()
         self.spectral_cmps = spectral_cmps
+        self.spectral_cmps_series = None
         self.spectral_cmps_seed = None
         self.wavenumbers = None
         self.axis_labels = None
         self.result_mode = None
+        self.outer_axis_label = "Slice"
+        self.current_result_slice_index = 0
         self.fiji_saver = FIJISaver(self.img, f'{os.path.join(os.getcwd(), "result.tif")}',
                                     colors=self.colormap_colors, dtype=np.uint16)
         self.custom_model = False
@@ -158,6 +162,7 @@ class CompositeImageViewWidget(QMainWindow):
             lambda: self.import_result_component_signal.emit(
                 promote_seed_target_combobox.currentData(),
                 promote_seed_component_spinbox.value() - 1,
+                self.current_result_slice_index,
             )
         )
         self.promote_seed_button = promote_seed_button
@@ -172,7 +177,7 @@ class CompositeImageViewWidget(QMainWindow):
         reset_levels_button.clicked.connect(self.reset_levels)
 
         # %% Buttons to modfiy the false color images
-        image_channels = self.img.shape[2] if self.img is not None else 1
+        image_channels = int(self.img.shape[-1]) if self.img is not None and self.img.ndim >= 3 else 1
 
         # Add a QScrollBar for selecting the channel
         self.channel_slider = QSlider()
@@ -301,12 +306,33 @@ class CompositeImageViewWidget(QMainWindow):
         channel_controls_layout.setContentsMargins(0, 0, 0, 0)
         channel_controls_layout.setHorizontalSpacing(8)
         channel_controls_layout.setVerticalSpacing(6)
+        self.result_slice_label = QLabel("Slice:")
+        self.result_slice_spinbox = QSpinBox()
+        self.result_slice_spinbox.setMinimum(1)
+        self.result_slice_spinbox.setMaximum(1)
+        self.result_slice_spinbox.setValue(1)
+        self.result_slice_slider = QSlider(Qt.Horizontal)
+        self.result_slice_slider.setMinimum(0)
+        self.result_slice_slider.setMaximum(0)
+        self.result_slice_slider.setTickInterval(1)
+        self.result_slice_slider.setTickPosition(QSlider.TicksBothSides)
+        self.result_slice_widget = QWidget()
+        result_slice_layout = QHBoxLayout(self.result_slice_widget)
+        result_slice_layout.setContentsMargins(0, 0, 0, 0)
+        result_slice_layout.setSpacing(8)
+        result_slice_layout.addWidget(self.result_slice_label)
+        result_slice_layout.addWidget(self.result_slice_spinbox)
+        result_slice_layout.addWidget(self.result_slice_slider, stretch=1)
+        self.result_slice_widget.hide()
+        self.result_slice_spinbox.valueChanged.connect(lambda value: self.update_result_slice(int(value) - 1))
+        self.result_slice_slider.valueChanged.connect(self.update_result_slice)
         channel_controls_layout.addWidget(channel_label, 0, 0)
         channel_controls_layout.addWidget(self.channel_spinbox, 0, 1)
         channel_controls_layout.addWidget(self.color_button, 0, 2)
         channel_controls_layout.addWidget(self.color_widget, 0, 3)
         channel_controls_layout.addWidget(autoscale_button, 0, 4)
         channel_controls_layout.addWidget(self.channel_slider, 1, 0, 1, 5)
+        channel_controls_layout.addWidget(self.result_slice_widget, 2, 0, 1, 5)
         channel_controls_layout.setColumnStretch(4, 1)
 
         channel_header = QWidget()
@@ -385,14 +411,40 @@ class CompositeImageViewWidget(QMainWindow):
         self.wavenumbers = wavenumbers
         self.fiji_saver.wavenumbers = wavenumbers
         self._update_spectrum_axis()
-        self.plot_components(self.spectral_cmps)
+        self.plot_components(self.spectral_cmps_series if self.spectral_cmps_series is not None else self.spectral_cmps)
 
         # TODO: update plot
 
     def set_axis_labels(self, labels):
         self.axis_labels = None if labels is None else [str(label) for label in labels]
         self._update_spectrum_axis()
-        self.plot_components(self.spectral_cmps)
+        self.plot_components(self.spectral_cmps_series if self.spectral_cmps_series is not None else self.spectral_cmps)
+
+    def _current_spectral_components(self):
+        if self.spectral_cmps_series is not None:
+            if self.spectral_cmps_series.ndim == 3:
+                return self.spectral_cmps_series[self.current_result_slice_index]
+            return None
+        return self.spectral_cmps
+
+    def _sync_result_slice_controls(self):
+        if self.img_series is None:
+            self.result_slice_widget.hide()
+            return
+
+        n_slices = int(self.img_series.shape[0])
+        self.result_slice_label.setText(f"{self.outer_axis_label}:")
+
+        self.result_slice_spinbox.blockSignals(True)
+        self.result_slice_spinbox.setMaximum(max(1, n_slices))
+        self.result_slice_spinbox.setValue(self.current_result_slice_index + 1)
+        self.result_slice_spinbox.blockSignals(False)
+
+        self.result_slice_slider.blockSignals(True)
+        self.result_slice_slider.setMaximum(max(0, n_slices - 1))
+        self.result_slice_slider.setValue(self.current_result_slice_index)
+        self.result_slice_slider.blockSignals(False)
+        self.result_slice_widget.show()
 
     def _spectral_x_values(self, length: int) -> np.ndarray:
         if self.axis_labels is not None:
@@ -452,6 +504,10 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectrum_lines = []
         self.seed_lines = []
         # Plot each component of H resp. the PCs
+        if spectral_components is not None and spectral_components.ndim == 3:
+            spectral_components = spectral_components[self.current_result_slice_index]
+
+        self.spectral_cmps = spectral_components
         try:
             num_components = spectral_components.shape[0]
         except AttributeError as e:
@@ -484,7 +540,10 @@ class CompositeImageViewWidget(QMainWindow):
 
         if self.channel_slider.value() == component_index:
             # Update the title of the channel view
-            self.channel_view.view.setTitle(f"Channel {component_index} {new_label}")
+            slice_suffix = ""
+            if self.img_series is not None:
+                slice_suffix = f" | {self.outer_axis_label} {self.current_result_slice_index + 1}"
+            self.channel_view.view.setTitle(f"Channel {component_index} {new_label}{slice_suffix}")
 
 
     def plot_seeds(self, seeds: np.ndarray, dashed: bool = True):
@@ -510,7 +569,8 @@ class CompositeImageViewWidget(QMainWindow):
                      spectral_cmps:np.ndarray|None = None,
                      spectral_cmps_seed: np.ndarray|None = None,
                      custom_model: bool = False,
-                     update_gamma_curve=False):
+                     update_gamma_curve=False,
+                     outer_axis_label: str = "Slice"):
         """
         Update the data with new multivariate results of shape (y, x, z)
         Args:
@@ -529,7 +589,16 @@ class CompositeImageViewWidget(QMainWindow):
         if spectral_axis is not None:
             if spectral_axis != -1:
                 self.img = np.moveaxis(self.img, spectral_axis, -1)
-        self.composite_view.setImage(img_file)
+        self.outer_axis_label = str(outer_axis_label or "Slice")
+        if self.img.ndim == 4:
+            self.img_series = self.img
+            self.current_result_slice_index = int(np.clip(self.current_result_slice_index, 0, self.img_series.shape[0] - 1))
+            self.img = self.img_series[self.current_result_slice_index]
+        else:
+            self.img_series = None
+            self.current_result_slice_index = 0
+        self._sync_result_slice_controls()
+        self.composite_view.setImage(self.img)
         # adjust slider and scrollbar to max....
         channels = self.img.shape[-1] - 1
         self.channel_slider.setMaximum(channels)
@@ -548,12 +617,13 @@ class CompositeImageViewWidget(QMainWindow):
             # self.update_channel_view(0)
             self.channel_slider.setValue(0)
 
-        self.spectral_cmps = spectral_cmps
+        self.spectral_cmps_series = spectral_cmps if spectral_cmps is not None and spectral_cmps.ndim == 3 else None
+        self.spectral_cmps = None if self.spectral_cmps_series is not None else spectral_cmps
         self.spectral_cmps_seed = spectral_cmps_seed
         self.custom_model = custom_model
         result_components = 1
         if spectral_cmps is not None:
-            result_components = max(1, int(spectral_cmps.shape[0]))
+            result_components = max(1, int(spectral_cmps.shape[1] if spectral_cmps.ndim == 3 else spectral_cmps.shape[0]))
         self.promote_seed_component_spinbox.setMaximum(result_components)
         self.promote_seed_component_spinbox.setValue(min(self.promote_seed_component_spinbox.value(), result_components))
         if spectral_cmps is not None:
@@ -564,6 +634,23 @@ class CompositeImageViewWidget(QMainWindow):
         self.composite_view.getView().autoRange(padding=0.02)
         self.channel_view.getView().autoRange(padding=0.02)
         # print('Updated Channel View')
+
+    def update_result_slice(self, slice_index: int):
+        if self.img_series is None:
+            return
+        slice_index = int(np.clip(slice_index, 0, self.img_series.shape[0] - 1))
+        if slice_index == self.current_result_slice_index and self.img is not None:
+            return
+
+        self.current_result_slice_index = slice_index
+        self._sync_result_slice_controls()
+        self.img = self.img_series[self.current_result_slice_index]
+        composite_view_range = self._capture_viewbox_range(self.composite_view)
+        self.composite_view.setImage(self.img)
+        self._restore_viewbox_range(self.composite_view, composite_view_range)
+        self.update_channel_view(min(self.channel_slider.value(), self.img.shape[-1] - 1))
+        self.plot_components(self.spectral_cmps_series if self.spectral_cmps_series is not None else self.spectral_cmps)
+        self.update_channel_and_composite_levels()
 
 
 
@@ -678,7 +765,10 @@ class CompositeImageViewWidget(QMainWindow):
         # Update the label to show current channel index
         custom_label = self.custom_labels.get(channel_index)
         suffix = f" {custom_label}" if custom_label else ""
-        self.channel_view.view.setTitle(f"Channel {channel_index}{suffix}")
+        slice_suffix = ""
+        if self.img_series is not None:
+            slice_suffix = f" | {self.outer_axis_label} {self.current_result_slice_index + 1}"
+        self.channel_view.view.setTitle(f"Channel {channel_index}{suffix}{slice_suffix}")
 
     def callback_color_widget(self):
         # Get the selected color from the ColorButton
@@ -783,15 +873,24 @@ class CompositeImageViewWidget(QMainWindow):
 
         # save the composite image as tiff file with the current color maps
         # self.fiji_saver.fpath = file_path
-        image_3d = np.moveaxis(self.img, -1, 0)
-        self.fiji_saver.update_image(image_3d)
+        if self.img_series is not None:
+            # Export the full result stack as an ImageJ hyperstack in (Z/T, C, Y, X) order
+            # instead of only the currently displayed slice.
+            image_to_save = np.moveaxis(self.img_series, -1, 1)
+            outer_axis = 'T' if self.outer_axis_label.lower().startswith('time') else 'Z'
+            self.fiji_saver.axes = f'{outer_axis}CYX'
+        else:
+            image_to_save = np.moveaxis(self.img, -1, 0)
+            self.fiji_saver.axes = 'CYX'
+        self.fiji_saver.update_image(image_to_save)
         self.fiji_saver.path = file_path
         # luts are referenced via the class variable colormap_colors
         # print(f'colormap colors {self.colormap_colors}, {self.fiji_saver.colormaps}')
 
         scale_factor_8bit_nbit = 255 / max_dtype_val
         # pass the ranges from the histogram states to the fiji saver in the format list((min1, max1), (min2, max2), ...)
-        ranges_nbit = [self.histogram_states[i]['levels'] for i in range(image_3d.shape[0])]
+        channel_count = image_to_save.shape[self.fiji_saver.axes.find('C')]
+        ranges_nbit = [self.histogram_states[i]['levels'] for i in range(channel_count)]
         # ranges_8bit = [(int(min_ * scale_factor_8bit_nbit), int(max_ * scale_factor_8bit_nbit)) for min_, max_ in ranges_nbit]
         self.fiji_saver.ranges = ranges_nbit
         self.fiji_saver.colormaps = self.color_manager.get_all_colors_rgb() if self.color_manager is not None else self.colormap_colors

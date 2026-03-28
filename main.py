@@ -225,7 +225,11 @@ class MainApplication(QtWidgets.QMainWindow):
         logging.warning('Updating data')
         if img_array is None:
             img_array = self.get_current_image()
-        self.data_handler.wavenumber_widget.set_nframes(img_array.shape[0])
+        self.analysis_manager.set_analysis_series(
+            self.data_handler.get_analysis_image(),
+            slice_axis_label=self.data_handler.get_slice_axis_label(),
+            current_slice_index=self.data_handler.get_current_slice_index(),
+        )
         self.analysis_manager.update_image_data(img_array, self.data_handler.wavenumber_widget.wavenumbers)
         self.data_widget.update_img(img_array)
         # make the roi manager highlight all rois again if spectral info exists
@@ -292,7 +296,7 @@ class MainApplication(QtWidgets.QMainWindow):
 
 
     def get_current_image(self):
-        return self.data_handler.loader_widget.image
+        return self.data_handler.get_image()
 
     def update_results(self):
         # TODO move to update thread, only required for very larged HS images
@@ -300,14 +304,16 @@ class MainApplication(QtWidgets.QMainWindow):
         logger.info(f'Results data {analyzed_img.shape = }')
         is_nnmf = self.analysis_manager.nnmf_radio.isChecked()
         self.result_viewer_widget.set_result_mode("NNMF" if is_nnmf else "PCA")
+        result_spectral_axis = 1 if analyzed_img.ndim == 4 else 0
         self.result_viewer_widget.update_image(analyzed_img,
-                                               spectral_cmps=spectral_cmps[: self.analysis_manager.mv_analyzer._n_components],
+                                               spectral_cmps=spectral_cmps,
                                                spectral_cmps_seed=self.analysis_manager.mv_analyzer.seed_H if is_nnmf else None,
                                                custom_model=self.analysis_manager.mv_analyzer.custom_nnmf_init if is_nnmf else False,
-                                               spectral_axis=0)
+                                               spectral_axis=result_spectral_axis,
+                                               outer_axis_label=self.analysis_manager.get_analysis_series_label())
 
-    def import_displayed_result_component(self, target: str, component_index: int):
-        self.analysis_manager.import_current_result_component(target, component_index)
+    def import_displayed_result_component(self, target: str, component_index: int, slice_index: int):
+        self.analysis_manager.import_current_result_component(target, component_index, slice_index)
 
     def preset_loaded(self, n_components: int, v_min_vmax_states: list, color_states: list):
         self.analysis_manager.num_components_spinbox.setValue(n_components)

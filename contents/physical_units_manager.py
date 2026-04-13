@@ -159,6 +159,32 @@ class PhysicalUnitsManager:
         self.widget.fov_input.setText(f"{self.fov[0]:.2f}, {self.fov[1]:.2f}")
         self.dimensions_updated()
 
+    def set_pixel_size_and_unit(self, pixel_size: float, unit: str):
+        """
+        Set pixel size from trusted metadata without requiring the image shape
+        to be initialized already.
+        """
+        if unit not in {"nm", "µm", "mm"}:
+            raise ValueError(f"Unsupported physical unit: {unit}")
+
+        self.pixel_size = float(pixel_size)
+        self.unit = unit
+
+        self.widget.unit_dropdown.blockSignals(True)
+        self.widget.unit_dropdown.setCurrentText(unit)
+        self.widget.unit_dropdown.blockSignals(False)
+
+        self.widget.pixel_size_input.blockSignals(True)
+        self.widget.pixel_size_input.setText(f"{self.pixel_size:.6g}")
+        self.widget.pixel_size_input.blockSignals(False)
+
+        if self.image_shape:
+            self.fov = (self.image_shape[1] * self.pixel_size, self.image_shape[0] * self.pixel_size)
+            self.widget.fov_input.blockSignals(True)
+            self.widget.fov_input.setText(f"{self.fov[0]:.2f}, {self.fov[1]:.2f}")
+            self.widget.fov_input.blockSignals(False)
+            self.dimensions_updated()
+
 
     def dimensions_updated(self):
         self.widget.fov_change_signal.emit(self.fov, self.unit)

@@ -5,7 +5,7 @@ import sys
 
 import numpy as np
 from PyQt5 import QtWidgets, QtCore
-from tifffile import imread
+from tifffile import TiffFile, imread
 
 from contents import stitch_functions as stitching
 from contents.physical_units_manager import PhysicalUnitsManager
@@ -180,6 +180,7 @@ class ImageLoader(QtWidgets.QWidget):
         # check if a wavelength json file is in the directory
         self.try_load_wavelength_json(os.path.dirname(fpath))
         image = imread(fpath).astype(np.uint16)     # assume 16 bit image and read in as such
+        self._apply_tiff_pixel_size_metadata(fpath)
         self.drag_label.setText(f"✔ Loaded: {fpath.split('/')[-1]}")
         logger.info(f"Loaded image from {fpath}")
 
@@ -205,6 +206,77 @@ class ImageLoader(QtWidgets.QWidget):
 
         self.image = corrected  # load as image and trigger callback attached to update_img_callback
         return self.image
+
+    def _apply_tiff_pixel_size_metadata(self, fpath: str):
+        pixel_size_meta = self._read_tiff_pixel_size_metadata(fpath)
+        if pixel_size_meta is None:
+            return
+
+        pixel_size, unit = pixel_size_meta
+        self.physical_units_manager.set_pixel_size_and_unit(pixel_size, unit)
+        logger.info("Applied TIFF/ImageJ pixel size metadata: %.6g %s/px", pixel_size, unit)
+
+    @staticmethod
+    def _read_tiff_pixel_size_metadata(fpath: str):
+        """
+        Read TIFF/ImageJ pixel size metadata from the first page of the TIFF file, if available and valid.
+         - Supports ImageJ metadata "unit" for physical unit and "XResolution"/"YResolution" tags for pixel size.
+         - Returns (pixel_size, unit) if valid metadata is found, or None if metadata is missing/invalid.
+         - Logs warnings for unsupported units, invalid resolutions, or anisotropic pixel sizes.
+         - Catches and logs any exceptions during metadata reading without crashing the application.
+        """
+        try:
+            with TiffFile(fpath) as tif:
+                imagej_meta = tif.imagej_metadata or {}
+                unit = ImageLoader._normalize_imagej_unit(imagej_meta.get("unit"))
+                if unit is None:
+                    return None
+
+                page = tif.pages[0]
+                x_resolution = ImageLoader._resolution_tag_to_float(page.tags.get("XResolution"))
+                y_resolution = ImageLoader._resolution_tag_to_float(page.tags.get("YResolution"))
+                if x_resolution is None or x_resolution <= 0:
+                    return None
+
+                pixel_size_x = 1.0 / x_resolution
+                pixel_size_y = 1.0 / y_resolution if y_resolution and y_resolution > 0 else pixel_size_x
+                if not np.isclose(pixel_size_x, pixel_size_y, rtol=1e-3, atol=1e-12):
+                    logger.warning(
+                        "TIFF metadata has anisotropic pixel sizes (x=%.6g %s, y=%.6g %s). "
+                        "The GUI supports one pixel size, using x.",
+                        pixel_size_x, unit, pixel_size_y, unit,
+                    )
+                return pixel_size_x, unit
+        except Exception:
+            logger.debug("Could not read TIFF/ImageJ pixel size metadata from %s", fpath, exc_info=True)
+            return None
+
+    @staticmethod
+    def _resolution_tag_to_float(tag):
+        if tag is None:
+            return None
+        value = tag.value
+        if isinstance(value, tuple) and len(value) == 2:
+            numerator, denominator = value
+            if denominator == 0:
+                return None
+            return float(numerator) / float(denominator)
+        return float(value)
+
+    @staticmethod
+    def _normalize_imagej_unit(unit):
+        if unit is None:
+            return None
+        if isinstance(unit, bytes):
+            unit = unit.decode("latin-1", errors="ignore")
+        normalized = str(unit).strip().lower().replace("\\u00b5", "µ").replace("μ", "µ")
+        if normalized in {"µm", "um", "micron", "microns", "micrometer", "micrometers", "micrometre", "micrometres"}:
+            return "µm"
+        if normalized in {"nm", "nanometer", "nanometers", "nanometre", "nanometres"}:
+            return "nm"
+        if normalized in {"mm", "millimeter", "millimeters", "millimetre", "millimetres"}:
+            return "mm"
+        return None
 
     def _reprocess_from_raw(self):
         logger.info("Reprocessing image from raw data")

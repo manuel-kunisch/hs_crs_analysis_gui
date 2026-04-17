@@ -1,0 +1,37 @@
+site_name: HS MV Analysis
+site_description: GUI for seeded multivariate analysis of hyperspectral and multispectral microscopy data
+repo_name: hs-mv-analysis
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Quickstart: quickstart.md
+  - Concepts: concepts.md
+  - Tutorials:
+      - Reproduce Figure 1: tutorials/reproduce_figure_1.md
+      - ROI-seeded NNMF: tutorials/01_cars_srs_roi_seeded_nnmf.md
+      - Defining custom spectral profiles: tutorials/01_custom_spectral_profiles.md
+      - Combining spectral profiles and ROI seeds: tutorials/01_combining_spectral_profiles_and_roi_seeds.md
+      - H seed modes: tutorials/01_h_seed_modes.md
+      - Fixed-H NNLS: tutorials/02_swir_fixed_h_nnls.md
+      - Stitching and rolling-ball correction: tutorials/04_stitching_and_rolling_ball.md
+      - Presets and reuse: tutorials/05_presets_and_reuse.md
+  - Examples:
+      - Reproduce Figure 1: examples/reproduce_figure_1.md
+      - Fluorescence unmixing: examples/fluorescence_unmixing.md
+  - Reference:
+      - Spectral axis and wavelength.json: reference/spectral_axis_and_wavelength_json.md
+      - ROI manager and seed types: reference/roi_manager_and_seed_types.md
+      - NNMF and NNLS modes: reference/nnmf_nnls_modes.md
+      - Fiji export: reference/fiji_export.md
+      - Presets: reference/presets.md
+  - Troubleshooting: troubleshooting.md
+  - Citation: citation.md

@@ -119,6 +119,8 @@ After loading, the GUI shows a z/time selector below the raw image controls. Cha
 
 Use the **HS Image Stitching** tab when the dataset is stored as multiple tiled TIFFs. The stitching tool expects filenames that contain x/y tile indices. These indices are extracted with a regular expression.
 
+For the full stitching workflow, regex examples, scan-direction settings, overlap handling, and stitch presets, see [01b Stitching tile folders](01b_stitching_tile_folders.md).
+
 The stitching workflow is:
 
 1. Choose or drop the folder with tiles.

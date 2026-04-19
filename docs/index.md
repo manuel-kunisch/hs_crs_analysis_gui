@@ -14,12 +14,25 @@ This documentation contains the basic GUI tutorials, example workflows, and feat
 
 The tutorials explain the app from the basic workflow upward. They are intentionally modality-independent first; dataset-specific examples are listed separately below.
 
-- [01 Loading data](tutorials/01_loading_data.md)
-- [01a Spectral axis and labels](tutorials/01a_spectral_axis_and_channel_labels.md)
-- [02 Analysis modes](tutorials/02_analysis_modes.md)
-- [02a GPU acceleration](tutorials/02a_gpu_acceleration.md)
-- [03 Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)
-- [03a Loading custom seed spectra](tutorials/03a_loading_custom_seed_spectra.md)
+### 01 Data loading
+
+- [Loading 3D TIFF and 4D data](tutorials/01_loading_data.md)
+- [Spectral axis and channel labels](tutorials/01a_spectral_axis_and_channel_labels.md)
+- [Stitching tile folders](tutorials/01b_stitching_tile_folders.md)
+
+### 02 Analysis
+
+- [Analysis modes](tutorials/02_analysis_modes.md)
+- [GPU acceleration](tutorials/02a_gpu_acceleration.md)
+
+### 03 Seeds
+
+- [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)
+- [ROI Manager in detail](tutorials/03b_roi_manager.md)
+- [Loading custom seed spectra](tutorials/03a_loading_custom_seed_spectra.md)
+
+### Remaining workflow
+
 - [04 Physical units and rolling-ball correction](tutorials/04_physical_units_and_rolling_ball.md)
 - [05 Results and export](tutorials/05_results_and_export.md)
 - [06 Presets and reproducibility](tutorials/06_presets_and_reproducibility.md)

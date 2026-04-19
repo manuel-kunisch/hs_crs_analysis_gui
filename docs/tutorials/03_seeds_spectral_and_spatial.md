@@ -69,6 +69,8 @@ Important settings include:
 
 The ROI table stores component assignment, color, label, scaling, offset, background/subtraction flags, plotting options, and remove/show actions.
 
+For a detailed explanation of every ROI Manager button, row type, and table column, see [ROI Manager in detail](03b_roi_manager.md).
+
 Rows can represent:
 
 - drawn spatial ROIs,

@@ -98,3 +98,4 @@ Before exporting, check that:
 ## Importing Results Back As Seeds
 
 NNMF result components can be imported back into the ROI manager as H, W, or H+W seed rows. This supports iterative workflows where a first analysis provides seeds for a later run.
+This can be useful for refining random NNMF results to refine later NNLS or NNMF iterations.

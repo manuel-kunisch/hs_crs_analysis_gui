@@ -1,6 +1,6 @@
 # HS MV Analysis Documentation
 
-This documentation will contain the publication-oriented tutorials and feature reference for HS MV Analysis.
+This documentation contains the basic GUI tutorials, example workflows, and feature reference for HS MV Analysis.
 
 ## Start Here
 
@@ -12,12 +12,30 @@ This documentation will contain the publication-oriented tutorials and feature r
 
 ## Tutorials
 
-- [Reproduce Figure 1](tutorials/reproduce_figure_1.md)
-- [CARS/SRS ROI-seeded NNMF](tutorials/01_cars_srs_roi_seeded_nnmf.md)
-- [SWIR fixed-H NNLS](tutorials/02_swir_fixed_h_nnls.md)
-- [4D fluorescence unmixing](tutorials/03_fluorescence_4d_unmixing.md)
-- [Stitching and rolling-ball correction](tutorials/04_stitching_and_rolling_ball.md)
-- [Presets and reuse](tutorials/05_presets_and_reuse.md)
+The tutorials explain the app from the basic workflow upward. They are intentionally modality-independent first; dataset-specific examples are listed separately below.
+
+- [01 Loading data](tutorials/01_loading_data.md)
+- [01a Spectral axis and labels](tutorials/01a_spectral_axis_and_channel_labels.md)
+- [02 Analysis modes](tutorials/02_analysis_modes.md)
+- [02a GPU acceleration](tutorials/02a_gpu_acceleration.md)
+- [03 Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)
+- [03a Loading custom seed spectra](tutorials/03a_loading_custom_seed_spectra.md)
+- [04 Physical units and rolling-ball correction](tutorials/04_physical_units_and_rolling_ball.md)
+- [05 Results and export](tutorials/05_results_and_export.md)
+- [06 Presets and reproducibility](tutorials/06_presets_and_reproducibility.md)
+- [07 Workflow checklist](tutorials/07_workflow_checklist.md)
+
+## Examples
+
+The example section is reserved for data-specific workflows and for reproducing figure panels from a paper.
+
+- [Examples overview](examples/index.md)
+- [Reproduce Figure 1](examples/reproduce_figure_1.md)
+- [Synthetic quickstart](examples/synthetic_quickstart.md)
+- [CARS/SRS label-free data](examples/cars_srs_label_free.md)
+- [SWIR reflection data](examples/swir_reflection.md)
+- [4D fluorescence unmixing](examples/fluorescence_4d_unmixing.md)
+- [Stitching and preprocessing](examples/stitching_and_preprocessing.md)
 
 ## Reference
 
@@ -31,4 +49,4 @@ This documentation will contain the publication-oriented tutorials and feature r
 
 - Add screenshots and short GIFs for each major workflow.
 - Link small example datasets and expected outputs.
-- Add a GitHub Pages / MkDocs configuration when the first tutorials are ready.
+- Replace placeholders with final paper datasets, presets, and expected outputs.

@@ -16,17 +16,24 @@ nav:
   - Quickstart: quickstart.md
   - Concepts: concepts.md
   - Tutorials:
-      - Reproduce Figure 1: tutorials/reproduce_figure_1.md
-      - ROI-seeded NNMF: tutorials/01_cars_srs_roi_seeded_nnmf.md
-      - Defining custom spectral profiles: tutorials/01_custom_spectral_profiles.md
-      - Combining spectral profiles and ROI seeds: tutorials/01_combining_spectral_profiles_and_roi_seeds.md
-      - H seed modes: tutorials/01_h_seed_modes.md
-      - Fixed-H NNLS: tutorials/02_swir_fixed_h_nnls.md
-      - Stitching and rolling-ball correction: tutorials/04_stitching_and_rolling_ball.md
-      - Presets and reuse: tutorials/05_presets_and_reuse.md
+      - 01 Loading data: tutorials/01_loading_data.md
+      - 01a Spectral axis and labels: tutorials/01a_spectral_axis_and_channel_labels.md
+      - 02 Analysis modes: tutorials/02_analysis_modes.md
+      - 02a GPU acceleration: tutorials/02a_gpu_acceleration.md
+      - 03 Seeds, spectra, and W maps: tutorials/03_seeds_spectral_and_spatial.md
+      - 03a Loading custom seed spectra: tutorials/03a_loading_custom_seed_spectra.md
+      - 04 Physical units and rolling-ball correction: tutorials/04_physical_units_and_rolling_ball.md
+      - 05 Results and export: tutorials/05_results_and_export.md
+      - 06 Presets and reproducibility: tutorials/06_presets_and_reproducibility.md
+      - 07 Workflow checklist: tutorials/07_workflow_checklist.md
   - Examples:
+      - Overview: examples/index.md
       - Reproduce Figure 1: examples/reproduce_figure_1.md
-      - Fluorescence unmixing: examples/fluorescence_unmixing.md
+      - Synthetic quickstart: examples/synthetic_quickstart.md
+      - CARS/SRS label-free data: examples/cars_srs_label_free.md
+      - SWIR reflection data: examples/swir_reflection.md
+      - 4D fluorescence unmixing: examples/fluorescence_4d_unmixing.md
+      - Stitching and preprocessing: examples/stitching_and_preprocessing.md
   - Reference:
       - Spectral axis and wavelength.json: reference/spectral_axis_and_wavelength_json.md
       - ROI manager and seed types: reference/roi_manager_and_seed_types.md

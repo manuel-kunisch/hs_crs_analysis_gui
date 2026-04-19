@@ -40,7 +40,8 @@ Recommended starting points:
 
 - [`Quickstart`](docs/quickstart.md): minimal end-to-end GUI workflow
 - [`Concepts`](docs/concepts.md): unmixing model, seeds, NNMF, and fixed-H NNLS
-- [`Tutorials`](docs/tutorials/reproduce_figure_1.md): figure-linked example workflows
+- [`Tutorials`](docs/tutorials/01_loading_data.md): step-by-step GUI usage
+- [`Examples`](docs/examples/reproduce_figure_1.md): figure-linked and modality-specific workflows
 - [`Reference`](docs/reference/nnmf_nnls_modes.md): feature-specific notes
 
 **[TODO: publish these docs with GitHub Pages / MkDocs once the tutorials contain screenshots, GIFs, and example data links.]**
@@ -271,6 +272,7 @@ contents/roi_manager_pg.py      ROI management and ROI plotting
 contents/multivariate_analyzer.py Core PCA / NNMF logic
 docs/                           Tutorial and reference documentation
 docs/tutorials/                 Step-by-step workflow tutorials
+docs/examples/                  Dataset-specific and figure-linked examples
 docs/reference/                 Feature-specific reference notes
 environment.yml                 Conda environment without PyTorch
 environment-pytorch.yml         Conda environment with PyTorch

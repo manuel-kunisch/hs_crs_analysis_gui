@@ -4,7 +4,7 @@ This page explains what the analysis modes do mathematically and how the results
 
 ## The data matrix
 
-The GUI starts from a spectral image stack and reshapes it into a matrix:
+The GUI starts from a spectral image stack (either 3D or 4D) and reshapes it into a 2D matrix:
 
 ```text
 X = pixels x channels

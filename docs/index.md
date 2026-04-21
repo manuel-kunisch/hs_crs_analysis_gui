@@ -2,6 +2,13 @@
 
 This documentation contains the basic GUI tutorials, example workflows, and feature reference for HS MV Analysis.
 
+TODO:
+- [] add screenshots and short GIFs for each major workflow.
+- [] link small example datasets and expected outputs.
+- [] replace placeholders with final paper datasets, presets, and expected outputs.
+- [] check text for errors
+
+
 ## Start Here
 
 - [Installation](installation.md)

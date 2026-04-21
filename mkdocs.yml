@@ -3,7 +3,7 @@ site_description: GUI for seeded multivariate analysis of hyperspectral and mult
 repo_name: hs-mv-analysis
 
 theme:
-  name: material
+  name: readthedocs
   features:
     - navigation.sections
     - navigation.expand

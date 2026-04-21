@@ -642,15 +642,16 @@ class CompositeImageViewWidget(QMainWindow):
         if slice_index == self.current_result_slice_index and self.img is not None:
             return
 
+        composite_levels = self._current_composite_levels()
         self.current_result_slice_index = slice_index
         self._sync_result_slice_controls()
         self.img = self.img_series[self.current_result_slice_index]
         composite_view_range = self._capture_viewbox_range(self.composite_view)
-        self.composite_view.setImage(self.img)
+        self.composite_view.setImage(self.img, autoLevels=False)
         self._restore_viewbox_range(self.composite_view, composite_view_range)
         self.update_channel_view(min(self.channel_slider.value(), self.img.shape[-1] - 1))
         self.plot_components(self.spectral_cmps_series if self.spectral_cmps_series is not None else self.spectral_cmps)
-        self.update_channel_and_composite_levels()
+        self.update_channel_and_composite_levels(composite_levels=composite_levels)
 
 
 
@@ -1142,7 +1143,7 @@ class CompositeImageViewWidget(QMainWindow):
         rgb_uint16 = (rgb_image * 65535).astype(np.uint16)
         return rgb_uint16
 
-    def update_channel_and_composite_levels(self):
+    def update_channel_and_composite_levels(self, *args, composite_levels=None):
         """
         Update the composite image and channel view levels based on the current channel's histogram state.
         Returns:
@@ -1165,6 +1166,9 @@ class CompositeImageViewWidget(QMainWindow):
         if auto_min_max:
             min_, max_ = self.min_max_levels()
             self.composite_view.ui.histogram.setLevels(min_, max_)
+        else:
+            min_, max_ = composite_levels if composite_levels is not None else self._current_composite_levels()
+            self.composite_view.ui.histogram.setLevels(min_, max_)
         # self.composite_view.autoLevels()
 
     def min_max_levels(self):
@@ -1186,6 +1190,22 @@ class CompositeImageViewWidget(QMainWindow):
     def reset_levels(self):
         # Reset the levels of the composite image to the default range (0 - 65535)
         self.composite_view.ui.histogram.setLevels(0, max_dtype_val)
+
+    def _current_composite_levels(self) -> tuple[float, float]:
+        """
+        Return the current composite histogram levels, or the full dtype range if
+        no valid levels are available yet.
+        """
+        try:
+            levels = self.composite_view.getHistogramWidget().item.getLevels()
+            if levels is None:
+                return 0.0, float(max_dtype_val)
+            min_level, max_level = float(levels[0]), float(levels[1])
+            if not np.isfinite(min_level) or not np.isfinite(max_level) or min_level >= max_level:
+                return 0.0, float(max_dtype_val)
+            return min_level, max_level
+        except Exception:
+            return 0.0, float(max_dtype_val)
 
     def _sync_color_button_to_gradient(self):
         """Sync the ColorButton with the top color in the histogram gradient."""

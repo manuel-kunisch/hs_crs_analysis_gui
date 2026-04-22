@@ -158,9 +158,15 @@ class DataWidget(QtWidgets.QWidget):
         self.roi_manager.spectral_units = unit
         self.roi_manager.roi_plotter.set_spectral_units(unit)
         self.raman_raw_image_view.set_spectral_units(unit)
+        if self.roi_avg_plot_wid is not None:
+            has_custom_labels = bool(getattr(self.roi_manager.roi_plotter, "axis_labels", None))
+            self.roi_avg_plot_wid.setLabel('bottom', text='Channel' if has_custom_labels else ('Wavelength [nm]' if unit == 'nm' else 'Wavenumber [cm⁻¹]'))
 
     def set_spectral_axis_labels(self, labels):
         self.raman_raw_image_view.set_axis_labels(labels)
+        self.roi_manager.roi_plotter.set_axis_labels(labels)
+        if self.roi_avg_plot_wid is not None:
+            self.roi_avg_plot_wid.setLabel('bottom', text='Channel' if labels is not None else ('Wavelength [nm]' if self.roi_manager.spectral_units == 'nm' else 'Wavenumber [cm⁻¹]'))
 
     def init_toolbar(self):
         self.lut_combo_box = QtWidgets.QComboBox(self)

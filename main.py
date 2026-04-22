@@ -87,6 +87,12 @@ class MainApplication(QtWidgets.QMainWindow):
         self.scale_bar_raw = ScaleBar(self.data_widget.raman_raw_image_view.view.getViewBox(), px_size)
         self.scale_bar_channels = ScaleBar(self.result_viewer_widget.channel_view.view.getViewBox(), px_size)
         self.scale_bar_composite = ScaleBar(self.result_viewer_widget.composite_view.view, px_size)
+        self.result_viewer_widget.set_export_scalebar_config(
+            pixel_size_um=float(px_size) if px_size is not None else None,
+            length=float(self.data_handler.loader_widget.physical_units_manager.widget.scale_bar_length_spinbox.value()),
+            unit=self.data_handler.loader_widget.physical_units_manager.unit,
+            visible=self.data_handler.loader_widget.physical_units_manager.widget.show_scalebar_checkbox.isChecked(),
+        )
         self.data_handler.loader_widget.physical_units_manager.widget.show_scalebar_checkbox.clicked.connect(self.show_scale_bars)
         self.show_scale_bars(self.data_handler.loader_widget.physical_units_manager.widget.show_scalebar_checkbox.isChecked())
 
@@ -251,11 +257,13 @@ class MainApplication(QtWidgets.QMainWindow):
         self.scale_bar_composite.update_pixel_size(px_size_um)
         # adjust the pixel size in the image saver such that physical units are saved correctly in Fiji
         self.result_viewer_widget.fiji_saver.pixel_size_um = px_size_um
+        self.result_viewer_widget.set_export_scalebar_config(pixel_size_um=px_size_um, unit=unit)
 
     def update_scale_bars(self, len: float):
         self.scale_bar_raw.update_scale_bar_len(len)
         self.scale_bar_channels.update_scale_bar_len(len)
         self.scale_bar_composite.update_scale_bar_len(len)
+        self.result_viewer_widget.set_export_scalebar_config(length=float(len))
 
     def change_spectral_units(self, unit: str):
         unit = _norm_spec_unit(unit)
@@ -271,7 +279,8 @@ class MainApplication(QtWidgets.QMainWindow):
 
         # 4) optional: your extra ROI plot in data_widgets.py if it exists
         if getattr(self.data_widget, "roi_avg_plot_wid", None) is not None:
-            self.data_widget.roi_avg_plot_wid.setLabel('bottom', _spec_axis_label(unit))
+            axis_labels = getattr(self.data_handler.wavenumber_widget, "custom_axis_labels", None)
+            self.data_widget.roi_avg_plot_wid.setLabel('bottom', 'Channel' if axis_labels is not None else _spec_axis_label(unit))
 
 
     def updated_widget_component_colors(self, lut_index: int, color: QColor):
@@ -283,16 +292,26 @@ class MainApplication(QtWidgets.QMainWindow):
 
     def update_binning(self, binning_factor: int):
         old_binning = self.data_handler.get_current_binning()
+        if old_binning == binning_factor:
+            return
+        pum = self.data_handler.loader_widget.physical_units_manager
+        current_pixel_size = pum.pixel_size
         self.data_handler.set_binning(binning_factor)
         self.data_widget.sync_binning_ui(binning_factor)
         scale = old_binning / binning_factor
         self.data_widget.roi_manager.move_and_scale_all_rois(scale)
+        if current_pixel_size is not None:
+            # Keep the physical field of view constant across binning changes by
+            # updating the effective pixel size shown in the units manager.
+            effective_pixel_size = float(current_pixel_size) * (binning_factor / old_binning)
+            pum.set_pixel_size_and_unit(effective_pixel_size, pum.unit)
 
 
     def show_scale_bars(self, show: bool):
         self.scale_bar_raw.setVisible(show)
         self.scale_bar_channels.setVisible(show)
         self.scale_bar_composite.setVisible(show)
+        self.result_viewer_widget.set_export_scalebar_config(visible=show)
 
 
     def get_current_image(self):

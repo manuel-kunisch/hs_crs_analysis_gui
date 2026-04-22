@@ -7,11 +7,12 @@ import pyqtgraph as pg
 import tifffile
 from PyQt5 import QtGui
 from PyQt5.Qt import QObject
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPointF
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPointF, QRect, QRectF, QSizeF, QMarginsF
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QHBoxLayout, QSpinBox, QComboBox,
-    QPushButton, QColorDialog, QSizePolicy, QGridLayout, QSpacerItem, QSplitter, QSlider, QCheckBox, QFileDialog)
+    QPushButton, QColorDialog, QSizePolicy, QGridLayout, QSpacerItem, QSplitter, QSlider, QCheckBox, QFileDialog,
+    QMessageBox, QDialog, QDialogButtonBox, QFormLayout)
 from pyqtgraph import PlotItem
 
 from contents.color_manager import ComponentColorManager
@@ -65,6 +66,10 @@ class CompositeImageViewWidget(QMainWindow):
         self.fiji_saver = FIJISaver(self.img, f'{os.path.join(os.getcwd(), "result.tif")}',
                                     colors=self.colormap_colors, dtype=np.uint16)
         self.custom_model = False
+        self.export_scalebar_pixel_size_um = None
+        self.export_scalebar_length = 50.0
+        self.export_scalebar_unit = "\u00b5m"
+        self.export_scalebar_visible = False
         self.update_thread = QThread()
         self.timeout_callbacks = False
 
@@ -136,9 +141,8 @@ class CompositeImageViewWidget(QMainWindow):
 
 
 
-        # add button to save the composite image
-        save_tiff_button = QPushButton("Save Composite Image")
-        save_tiff_button.clicked.connect(self.save_data)
+        export_composite_button = QPushButton("Export Composite")
+        export_composite_button.clicked.connect(self.save_data)
         
         # add button to save the H seeds with combobox to select the mode
         save_seeds_button = QPushButton("Save Histogram Preset")
@@ -174,6 +178,9 @@ class CompositeImageViewWidget(QMainWindow):
 
         save_H_as_csv_button = QPushButton("Save H as CSV")
         save_H_as_csv_button.clicked.connect(self.save_components)
+
+        export_spectra_button = QPushButton("Export Spectra")
+        export_spectra_button.clicked.connect(self.export_spectrum_plot)
 
         # Create a QPushButton for resetting the levels
         reset_levels_button = QPushButton("Reset Black Levels")
@@ -224,7 +231,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.show_seeds_check.clicked.connect(lambda state: self.plot_seeds(self.spectral_cmps_seed) if state else self.plot_seeds(np.array([])))
         self.show_seeds_check.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        for widget in [save_tiff_button, save_seeds_button, save_H_as_csv_button, reset_levels_button,
+        for widget in [export_composite_button, save_seeds_button, save_H_as_csv_button, export_spectra_button, reset_levels_button,
                        save_seed_mode_combobox, promote_seed_button, promote_seed_target_combobox, promote_seed_component_spinbox,
                        self.channel_spinbox, self.color_button, autoscale_button]:
             widget.setMinimumHeight(28)
@@ -254,12 +261,11 @@ class CompositeImageViewWidget(QMainWindow):
         composite_controls_layout = QHBoxLayout(composite_controls_widget)
         composite_controls_layout.setContentsMargins(0, 0, 0, 0)
         composite_controls_layout.setSpacing(8)
-        composite_controls_layout.addWidget(save_tiff_button)
+        composite_controls_layout.addWidget(export_composite_button)
         composite_controls_layout.addWidget(save_seeds_button)
         composite_controls_layout.addWidget(save_seed_mode_label)
         composite_controls_layout.addWidget(save_seed_mode_combobox)
         composite_controls_layout.addStretch(1)
-        composite_controls_layout.addWidget(save_H_as_csv_button)
         composite_controls_layout.addWidget(reset_levels_button)
 
         import_seed_title = QLabel("Import Into ROI Manager")
@@ -392,6 +398,8 @@ class CompositeImageViewWidget(QMainWindow):
         spectrum_meta.setProperty("role", "sectionMeta")
         spectrum_header_layout.addWidget(spectrum_title)
         spectrum_header_layout.addWidget(spectrum_meta, stretch=1)
+        spectrum_header_layout.addWidget(save_H_as_csv_button)
+        spectrum_header_layout.addWidget(export_spectra_button)
         spectrum_header_layout.addWidget(self.show_seeds_check, alignment=Qt.AlignRight)
 
         spectrum_panel = QWidget()
@@ -1023,25 +1031,33 @@ class CompositeImageViewWidget(QMainWindow):
         # update is automatically triggered by gradient change
 
     def save_data(self):
-        # Open a file dialog to select where to save the TIFF file
         options = QFileDialog.Options()
-        file_path, _ = QFileDialog.getSaveFileName(
+        file_path, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Save Composite Image",
+            "Export Composite Image",
             "",
-            "TIFF Files (*.tif *.tiff);;All Files (*)",
+            "TIFF Files (*.tif *.tiff);;PNG Files (*.png);;All Files (*)",
             options=options
         )
 
-        if not file_path:  # User canceled the dialog
+        if not file_path:
             return
 
-            # Ensure the file has the correct extension
+        wants_png = selected_filter.startswith("PNG") or file_path.lower().endswith(".png")
+        if wants_png:
+            if not file_path.lower().endswith(".png"):
+                file_path += ".png"
+            self._export_composite_png(file_path)
+            return
+
         if not file_path.lower().endswith((".tif", ".tiff")):
             file_path += ".tif"
+        self._save_composite_tiff(file_path)
 
-        # save the composite image as tiff file with the current color maps
-        # self.fiji_saver.fpath = file_path
+    def _save_composite_tiff(self, file_path: str):
+        if self.img is None:
+            return
+
         if self.img_series is not None:
             # Export the full result stack as an ImageJ hyperstack in (Z/T, C, Y, X) order
             # instead of only the currently displayed slice.
@@ -1064,6 +1080,343 @@ class CompositeImageViewWidget(QMainWindow):
         self.fiji_saver.ranges = ranges_nbit
         self.fiji_saver.colormaps = self.color_manager.get_all_colors_rgb() if self.color_manager is not None else self.colormap_colors
         self.fiji_saver.save_composite_image()
+
+    def _export_composite_png(self, file_path: str):
+        if self.img is None:
+            return
+
+        rgb_image = self._build_composite_export_rgb8()
+        if rgb_image is None:
+            return
+
+        height, width, _ = rgb_image.shape
+        qimage = QtGui.QImage(rgb_image.data, width, height, 3 * width, QtGui.QImage.Format_RGB888).copy()
+
+        include_scalebar = self._prompt_include_scalebar()
+        if include_scalebar is None:
+            return
+        if include_scalebar:
+            self._draw_scalebar_on_image(qimage)
+
+        if not qimage.save(file_path, "PNG"):
+            logger.error("Failed to save composite PNG export to %s", file_path)
+            return
+        logger.info("Saved composite PNG export to %s", file_path)
+
+    def _build_composite_export_rgb8(self) -> np.ndarray | None:
+        rgb_16 = self.get_rgba()
+        if rgb_16 is None:
+            return None
+
+        level_min, level_max = self._current_composite_levels()
+        denom = max(level_max - level_min, 1.0)
+        rgb_scaled = np.clip((rgb_16.astype(np.float32) - level_min) / denom, 0.0, 1.0)
+        return np.ascontiguousarray((rgb_scaled * 255.0).astype(np.uint8))
+
+    def _prompt_include_scalebar(self) -> bool | None:
+        pixel_size_um = self.export_scalebar_pixel_size_um
+        if pixel_size_um is None or not np.isfinite(pixel_size_um) or pixel_size_um <= 0:
+            return False
+
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("Composite PNG Export")
+        message_box.setText("Include scalebar in the exported PNG?")
+        message_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+        default_button = QMessageBox.Yes if self.export_scalebar_visible else QMessageBox.No
+        message_box.setDefaultButton(default_button)
+        reply = message_box.exec_()
+        if reply == QMessageBox.Cancel:
+            return None
+        return reply == QMessageBox.Yes
+
+    def _draw_scalebar_on_image(self, image: QtGui.QImage):
+        pixel_size_um = self.export_scalebar_pixel_size_um
+        if pixel_size_um is None or not np.isfinite(pixel_size_um) or pixel_size_um <= 0:
+            return
+
+        length_um = float(self.export_scalebar_length) * self._unit_to_um_scale(self.export_scalebar_unit)
+        if not np.isfinite(length_um) or length_um <= 0:
+            return
+
+        width = image.width()
+        height = image.height()
+        margin = max(12, min(width, height) // 20)
+        bar_pixels = int(round(length_um / pixel_size_um))
+        bar_pixels = max(1, min(bar_pixels, max(1, width - 2 * margin)))
+        line_thickness = max(3, min(width, height) // 180)
+        font_size = max(10, min(width, height) // 35)
+        label_text = f"{self._format_scalebar_value(self.export_scalebar_length)} {self._normalize_length_unit(self.export_scalebar_unit)}"
+
+        bar_x0 = width - margin - bar_pixels
+        bar_x1 = width - margin
+        bar_y = height - margin - line_thickness
+
+        painter = QtGui.QPainter(image)
+        try:
+            painter.setRenderHint(QtGui.QPainter.Antialiasing)
+            painter.setRenderHint(QtGui.QPainter.TextAntialiasing)
+
+            font = painter.font()
+            font.setPointSize(font_size)
+            painter.setFont(font)
+            text_rect = painter.fontMetrics().boundingRect(label_text)
+
+            box_padding = max(6, font_size // 3)
+            overlay_height = text_rect.height() + line_thickness + 3 * box_padding
+            overlay_top = max(0, bar_y - text_rect.height() - 2 * box_padding)
+            overlay_left = max(0, bar_x0 - box_padding)
+            overlay_width = min(width - overlay_left, bar_pixels + 2 * box_padding)
+            overlay_rect = QRect(overlay_left, overlay_top, overlay_width, overlay_height)
+
+            painter.fillRect(overlay_rect, QColor(0, 0, 0, 140))
+
+            line_pen = QtGui.QPen(QColor(255, 255, 255))
+            line_pen.setWidth(line_thickness)
+            line_pen.setCapStyle(Qt.FlatCap)
+            painter.setPen(line_pen)
+            painter.drawLine(bar_x0, bar_y, bar_x1, bar_y)
+
+            painter.setPen(QColor(255, 255, 255))
+            text_x = bar_x1 - text_rect.width()
+            text_y = bar_y - box_padding
+            painter.drawText(text_x, text_y, label_text)
+        finally:
+            painter.end()
+
+    def export_spectrum_plot(self):
+        if self.spectral_cmps is None or len(self.spectrum_lines) == 0:
+            QMessageBox.information(self, "Export Spectra", "No spectral plot is available to export.")
+            return
+
+        options = QFileDialog.Options()
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Spectral Plot",
+            "",
+            "PNG Files (*.png);;PDF Files (*.pdf);;All Files (*)",
+            options=options
+        )
+        if not file_path:
+            return
+
+        export_options = self._prompt_plot_export_size()
+        if export_options is None:
+            return
+        width, height, transparent_background = export_options
+
+        wants_pdf = selected_filter.startswith("PDF") or file_path.lower().endswith(".pdf")
+        if wants_pdf:
+            if not file_path.lower().endswith(".pdf"):
+                file_path += ".pdf"
+            self._export_plot_to_pdf(self.spectrum_view, file_path, width, height)
+        else:
+            if not file_path.lower().endswith(".png"):
+                file_path += ".png"
+            self._export_plot_to_png(self.spectrum_view, file_path, width, height, transparent_background)
+
+    def _prompt_plot_export_size(
+            self,
+            default_width: int = 1800,
+            default_height: int = 1200,
+    ) -> tuple[int, int, bool] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Spectral Plot Export")
+        layout = QVBoxLayout(dialog)
+        form_layout = QFormLayout()
+
+        width_spinbox = QSpinBox(dialog)
+        width_spinbox.setRange(256, 12000)
+        width_spinbox.setValue(default_width)
+        height_spinbox = QSpinBox(dialog)
+        height_spinbox.setRange(256, 12000)
+        height_spinbox.setValue(default_height)
+        transparent_checkbox = QCheckBox("Transparent background (PNG only)", dialog)
+
+        form_layout.addRow("Width (px):", width_spinbox)
+        form_layout.addRow("Height (px):", height_spinbox)
+        form_layout.addRow("", transparent_checkbox)
+        layout.addLayout(form_layout)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        return width_spinbox.value(), height_spinbox.value(), transparent_checkbox.isChecked()
+
+    def _export_plot_to_png(self, plot_widget: pg.PlotWidget, file_path: str, width: int, height: int):
+        image = QtGui.QImage(width, height, QtGui.QImage.Format_ARGB32)
+        background_color = plot_widget.backgroundBrush().color()
+        if not background_color.isValid():
+            background_color = QColor(255, 255, 255)
+        image.fill(background_color)
+
+        painter = QtGui.QPainter(image)
+        try:
+            plot_widget.scene().render(painter, QRectF(0, 0, width, height), plot_widget.sceneRect())
+        finally:
+            painter.end()
+
+        if not image.save(file_path, "PNG"):
+            logger.error("Failed to save spectral plot PNG export to %s", file_path)
+            return
+        logger.info("Saved spectral plot PNG export to %s", file_path)
+
+    def _export_plot_to_pdf(self, plot_widget: pg.PlotWidget, file_path: str, width: int, height: int):
+        dpi = 300
+        pdf_writer = QtGui.QPdfWriter(file_path)
+        pdf_writer.setResolution(dpi)
+        pdf_writer.setPageMargins(QMarginsF(0, 0, 0, 0))
+        page_width_mm = width / dpi * 25.4
+        page_height_mm = height / dpi * 25.4
+        pdf_writer.setPageSize(QtGui.QPageSize(QSizeF(page_width_mm, page_height_mm), QtGui.QPageSize.Millimeter))
+
+        painter = QtGui.QPainter(pdf_writer)
+        try:
+            viewport = painter.viewport()
+            plot_widget.scene().render(
+                painter,
+                QRectF(0, 0, viewport.width(), viewport.height()),
+                plot_widget.sceneRect(),
+            )
+        finally:
+            painter.end()
+        logger.info("Saved spectral plot PDF export to %s", file_path)
+
+    @staticmethod
+    def _normalize_length_unit(unit: str | None) -> str:
+        if unit is None:
+            return "\u00b5m"
+        normalized = str(unit).replace("Â", "").strip()
+        if normalized in {"um", "µm"}:
+            return "\u00b5m"
+        return normalized
+
+    def _unit_to_um_scale(self, unit: str | None) -> float:
+        normalized = self._normalize_length_unit(unit).lower()
+        if normalized == "nm":
+            return 1e-3
+        if normalized == "mm":
+            return 1e3
+        return 1.0
+
+    @staticmethod
+    def _format_scalebar_value(value: float) -> str:
+        return f"{float(value):g}"
+
+    # Re-define these helpers here to keep export rendering robust across Qt/Python
+    # environments and Windows string encoding oddities around the micrometer symbol.
+    def _plot_export_source_rect(self, plot_widget: pg.PlotWidget) -> QRectF:
+        plot_item = plot_widget.getPlotItem()
+        if plot_item is None:
+            return plot_widget.scene().sceneRect()
+        rect = plot_item.sceneBoundingRect()
+        if rect.isNull() or rect.width() <= 0 or rect.height() <= 0:
+            return plot_widget.scene().sceneRect()
+        return rect.adjusted(-6, -6, 6, 6)
+
+    def _plot_export_dimensions(self, plot_widget: pg.PlotWidget, width: int, height: int) -> tuple[int, int]:
+        source_rect = self._plot_export_source_rect(plot_widget)
+        if source_rect.isNull() or source_rect.width() <= 0 or source_rect.height() <= 0:
+            return max(1, int(width)), max(1, int(height))
+
+        width = max(1, int(width))
+        height = max(1, int(height))
+        source_aspect = float(source_rect.width()) / float(source_rect.height())
+        target_aspect = float(width) / float(height)
+
+        # Fit the export into the requested box without distorting text or axes.
+        if target_aspect > source_aspect:
+            width = max(1, int(round(height * source_aspect)))
+        else:
+            height = max(1, int(round(width / source_aspect)))
+        return width, height
+
+    def _export_plot_to_png(
+            self,
+            plot_widget: pg.PlotWidget,
+            file_path: str,
+            width: int,
+            height: int,
+            transparent_background: bool = False,
+    ):
+        width, height = self._plot_export_dimensions(plot_widget, width, height)
+        image = QtGui.QImage(width, height, QtGui.QImage.Format_ARGB32)
+        background_color = plot_widget.backgroundBrush().color()
+        if not background_color.isValid():
+            background_color = QColor(255, 255, 255)
+        image.fill(Qt.transparent if transparent_background else background_color)
+
+        painter = QtGui.QPainter(image)
+        original_background = background_color
+        try:
+            if transparent_background:
+                plot_widget.setBackground((0, 0, 0, 0))
+            plot_widget.scene().render(
+                painter,
+                QRectF(0, 0, width, height),
+                self._plot_export_source_rect(plot_widget),
+                Qt.KeepAspectRatio,
+            )
+        finally:
+            if transparent_background:
+                plot_widget.setBackground(original_background)
+            painter.end()
+
+        if not image.save(file_path, "PNG"):
+            logger.error("Failed to save spectral plot PNG export to %s", file_path)
+            return
+        logger.info("Saved spectral plot PNG export to %s", file_path)
+
+    def _export_plot_to_pdf(self, plot_widget: pg.PlotWidget, file_path: str, width: int, height: int):
+        width, height = self._plot_export_dimensions(plot_widget, width, height)
+        dpi = 300
+        pdf_writer = QtGui.QPdfWriter(file_path)
+        pdf_writer.setResolution(dpi)
+        pdf_writer.setPageMargins(QMarginsF(0, 0, 0, 0), QtGui.QPageLayout.Millimeter)
+        page_width_mm = width / dpi * 25.4
+        page_height_mm = height / dpi * 25.4
+        pdf_writer.setPageSize(QtGui.QPageSize(QSizeF(page_width_mm, page_height_mm), QtGui.QPageSize.Millimeter))
+
+        painter = QtGui.QPainter(pdf_writer)
+        try:
+            viewport = painter.viewport()
+            plot_widget.scene().render(
+                painter,
+                QRectF(0, 0, viewport.width(), viewport.height()),
+                self._plot_export_source_rect(plot_widget),
+                Qt.KeepAspectRatio,
+            )
+        finally:
+            painter.end()
+        logger.info("Saved spectral plot PDF export to %s", file_path)
+
+    @staticmethod
+    def _normalize_length_unit(unit: str | None) -> str:
+        if unit is None:
+            return "\u00b5m"
+        normalized = str(unit).replace("Â", "").replace("Ã‚", "").strip()
+        if normalized.lower() in {"um", "\u00b5m"}:
+            return "\u00b5m"
+        return normalized
+
+    def set_export_scalebar_config(
+            self,
+            pixel_size_um: float | None = None,
+            length: float | None = None,
+            unit: str | None = None,
+            visible: bool | None = None,
+    ):
+        if pixel_size_um is not None and np.isfinite(pixel_size_um) and pixel_size_um > 0:
+            self.export_scalebar_pixel_size_um = float(pixel_size_um)
+        if length is not None and np.isfinite(length) and length > 0:
+            self.export_scalebar_length = float(length)
+        if unit is not None:
+            self.export_scalebar_unit = self._normalize_length_unit(unit)
+        if visible is not None:
+            self.export_scalebar_visible = bool(visible)
     
     def save_preset(self, mode='seeds'):
         """ 

@@ -3119,6 +3119,7 @@ class ROIPlotter(pg.PlotWidget):
         super().__init__()
         self.roi_manager = roi_manager
         self.spectral_units = "cm⁻¹"
+        self.axis_labels = None
         self.set_spectral_units(self.spectral_units)
         self.setLabel('left', text='Intensity [a.u.]')
         self.curves = {}
@@ -3135,11 +3136,6 @@ class ROIPlotter(pg.PlotWidget):
         # keyed by component index (0, 1, 2, ...)
         self.component_gaussians: dict[int, dict] = {}
         self.component_gaussian_lines: dict[int, pg.PlotDataItem] = {}
-
-    def set_spectral_units(self, unit: str):
-        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
-        self.spectral_units = unit
-        self.setLabel('bottom', 'Wavelength [nm]' if unit == "nm" else 'Wavenumber [cm⁻¹]')
 
     def plot_roi_average(self, roi_id, z_data, label):
         roi_index = self.roi_manager.roi_id_idx.get(roi_id)
@@ -3439,6 +3435,16 @@ class ROIPlotter(pg.PlotWidget):
             self.removeItem(line_item)
         if roi_id in self.roi_highlights:
             self.remove_highlight(roi_id)
+
+    def set_axis_labels(self, labels):
+        self.axis_labels = None if labels is None else [str(label) for label in labels]
+        self.set_spectral_units(self.spectral_units)
+
+    def set_spectral_units(self, unit: str):
+        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
+        self.spectral_units = unit
+        axis_labels = getattr(self, "axis_labels", None)
+        self.setLabel('bottom', 'Channel' if axis_labels is not None else ('Wavelength [nm]' if unit == "nm" else 'Wavenumber [cm⁻¹]'))
 
     @staticmethod
     def _generate_gaussian(wavenumbers: np.ndarray, center_wavenumber: float, hwhm: float, amp: float = 1.0, eliminate_zeros=True) -> np.ndarray:

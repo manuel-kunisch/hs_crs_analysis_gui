@@ -59,7 +59,7 @@ class ROIManager(QtCore.QObject):
     processed_data_signal = QtCore.pyqtSignal(np.ndarray)  # Signal to send the processed data to the main composite_image
     color_change_signal = QtCore.pyqtSignal(int, tuple)  # Signal when color is changed in the ROI table
     label_change_signal = QtCore.pyqtSignal(int, str)  # Signal when label is changed in the ROI table
-    preset_load_signal = QtCore.pyqtSignal(int, list, list)  # Signal to load a preset
+    preset_load_signal = QtCore.pyqtSignal(int, object, object)  # Signal to load a preset
 
     def __init__(self, image_view: pg.ImageView, color_manager=None):
         super().__init__()
@@ -644,7 +644,14 @@ class ROIManager(QtCore.QObject):
         row = self._row_for_table_widget(widget)
         if row is None or not 0 <= row < len(self.rois):
             return
-        self.roi_plotter.roi_component_changed(str(self.rois[row]), self.component_number_from_table_index(row))
+        old_component = widget.property("last_component_number")
+        new_component = self.component_number_from_table_index(row)
+        widget.setProperty("last_component_number", new_component)
+        self.roi_plotter.roi_component_changed(str(self.rois[row]), new_component)
+        if old_component is not None and old_component != new_component:
+            self._emit_label_for_component(int(old_component))
+        if new_component is not None:
+            self._emit_label_for_component(new_component, preferred_row=row)
 
     def _handle_shape_changed(self, widget: QtWidgets.QWidget | None, roi_shape: str):
         row = self._row_for_table_widget(widget)
@@ -670,7 +677,43 @@ class ROIManager(QtCore.QObject):
         )
         component_number = self.component_number_from_table_index(row)
         if component_number is not None:
-            self.label_change_signal.emit(component_number, text)
+            self._emit_label_for_component(component_number, preferred_row=row)
+
+    def _component_label_text_from_row(self, row: int) -> str:
+        name_widget = self.roi_table.cellWidget(row, self.widget_columns['Name'])
+        if name_widget is None:
+            return ""
+        try:
+            return str(name_widget.text())
+        except Exception:
+            return ""
+
+    def _emit_label_for_component(self, component_number: int, preferred_row: int | None = None):
+        candidate_rows = []
+        if preferred_row is not None and 0 <= preferred_row < self.roi_table.rowCount():
+            candidate_rows.append(preferred_row)
+        candidate_rows.extend(
+            row for row in range(self.roi_table.rowCount())
+            if row != preferred_row and self.component_number_from_table_index(row) == component_number
+        )
+
+        for row in candidate_rows:
+            if self.component_number_from_table_index(row) != component_number:
+                continue
+            text = self._component_label_text_from_row(row)
+            self.label_change_signal.emit(component_number, text or f"Component {component_number}")
+            return
+
+        self.label_change_signal.emit(component_number, f"Component {component_number}")
+
+    def _emit_all_component_labels(self):
+        seen_components = set()
+        for row in range(self.roi_table.rowCount()):
+            component_number = self.component_number_from_table_index(row)
+            if component_number is None or component_number in seen_components:
+                continue
+            seen_components.add(component_number)
+            self._emit_label_for_component(component_number, preferred_row=row)
 
     def _handle_remove_button_clicked(self, widget: QtWidgets.QWidget | None):
         _, roi = self._row_and_roi_for_table_widget(widget)
@@ -1677,6 +1720,7 @@ class ROIManager(QtCore.QObject):
         if component_number is not None:
             index = component_number
         resonance_combobox.setCurrentIndex(index % max_cmp_number)
+        resonance_combobox.setProperty("last_component_number", index % max_cmp_number)
         resonance_combobox.currentIndexChanged.connect(lambda idx, combo=resonance_combobox: self._handle_component_changed(combo))
         remove_button = QtWidgets.QPushButton("Remove")
         remove_button.clicked.connect(lambda state, button=remove_button: self._handle_remove_button_clicked(button))
@@ -1761,6 +1805,8 @@ class ROIManager(QtCore.QObject):
         background_checkbox.setChecked(state)
 
         self._refresh_roi_table_layout()
+        if component_number is not None:
+            self._emit_label_for_component(int(component_number), preferred_row=new_row_idx)
         return new_row_idx
 
     from contents.spectrum_loader import SpectrumLoader
@@ -2031,54 +2077,67 @@ class ROIManager(QtCore.QObject):
         if not fpath:
             return
 
-        colormap_colors, vmin_vmax, wavenumbers, seeds = ci.load_from_presets(fpath)
+        colormap_colors, histogram_states, wavenumbers, seeds = ci.load_from_presets(fpath)
 
         fname = fpath.split('/')[-1].split('.')[0]
 
-        # Check if ROIs exist and ask user to delete them
-        if len(self.rois) > 0:
-            reply = QtWidgets.QMessageBox.question(None, 'Delete all ROIs?',
-                                                   'Do you want to delete all previous ROIs?',
-                                                   QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                                                   QtWidgets.QMessageBox.No)
-            if reply == QtWidgets.QMessageBox.Yes:
-                # We must iterate over a copy of the list because remove_roi modifies self.rois
-                for roi in self.rois.copy():
-                    self.remove_roi(roi)
+        mode_box = QtWidgets.QMessageBox()
+        mode_box.setWindowTitle("Load LUT Preset")
+        mode_box.setText("How should the preset be applied?")
+        mode_box.setInformativeText(
+            "You can import the saved spectra as dummy ROIs or only apply the LUT/histogram settings "
+            "to the existing components."
+        )
+        load_lut_only_button = mode_box.addButton("LUTs Only", QtWidgets.QMessageBox.ActionRole)
+        load_lut_and_rois_button = mode_box.addButton("LUTs + ROIs", QtWidgets.QMessageBox.ActionRole)
+        cancel_button = mode_box.addButton(QtWidgets.QMessageBox.Cancel)
+        mode_box.setDefaultButton(load_lut_only_button)
+        mode_box.exec_()
 
-        # 1. Initialize the SpectrumLoader ONCE
-        spectrum_loader = SpectrumLoader(self.wavenumbers)
-        spectrum_loader.wavenumbers = np.array(wavenumbers)
-
-        # 2. Populate the SpectrumLoader's internal lists (spectra and names)
-        for idx, seed in enumerate(seeds):
-            # Add the seed array to the list of spectra
-            spectrum_loader.spectra.append(np.array(seed))
-
-            # Add a name to the list of names
-            name = f"{fname} H{idx}"
-            spectrum_loader.names.append(name)
-
-        # 3. Process all spectra (interpolation/cutting) simultaneously
-        # This populates spectrum_loader.target_spectra
-        spectrum_loader.prepare_spectrum()
+        clicked = mode_box.clickedButton()
+        if clicked == cancel_button or clicked is None:
+            return
 
         preset_components = list(range(len(colormap_colors)))
         for idx, color in enumerate(colormap_colors):
             self._set_component_color(idx, QColor(*color), emit_signal=False)
 
-        # 4. Loop through the resulting target spectra and create ROIs
-        for idx in range(len(spectrum_loader.target_spectra)):
-            # Component number for the ROI table (starts at 1)
-            component_number = idx + 1
+        if clicked == load_lut_and_rois_button:
+            # Check if ROIs exist and ask user to delete them before importing new spectra.
+            if len(self.rois) > 0:
+                reply = QtWidgets.QMessageBox.question(
+                    None,
+                    'Delete all ROIs?',
+                    'Do you want to delete all previous ROIs before importing the preset spectra?',
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No,
+                )
+                if reply == QtWidgets.QMessageBox.Yes:
+                    # We must iterate over a copy of the list because remove_roi modifies self.rois
+                    for roi in self.rois.copy():
+                        self.remove_roi(roi)
 
-            # FIX: Call the updated prepare_roi function with the required index
-            self.prepare_roi_from_external_spectrum(spectrum_loader, component_number, index=idx)
+            # 1. Initialize the SpectrumLoader ONCE
+            spectrum_loader = SpectrumLoader(self.wavenumbers)
+            spectrum_loader.wavenumbers = np.array(wavenumbers)
+
+            # 2. Populate the SpectrumLoader's internal lists (spectra and names)
+            for idx, seed in enumerate(seeds):
+                spectrum_loader.spectra.append(np.array(seed))
+                spectrum_loader.names.append(f"{fname} H{idx}")
+
+            # 3. Process all spectra (interpolation/cutting) simultaneously.
+            spectrum_loader.prepare_spectrum()
+
+            # 4. Create ROI rows from the imported spectra.
+            for idx in range(len(spectrum_loader.target_spectra)):
+                component_number = idx + 1
+                self.prepare_roi_from_external_spectrum(spectrum_loader, component_number, index=idx)
 
         self.reload_colors()
         self._emit_component_color_updates(preset_components)
 
-        self.preset_load_signal.emit(len(seeds), vmin_vmax, colormap_colors)
+        self.preset_load_signal.emit(len(seeds), histogram_states, colormap_colors)
 
     def get_color_rgba(self, component_number):
         # find the desired row of the component in the table
@@ -2976,6 +3035,8 @@ class ROIManager(QtCore.QObject):
         if imported_component_colors:
             self.reload_colors()
             self._emit_component_color_updates(imported_component_colors.keys())
+
+        self._emit_all_component_labels()
 
         try:
             self.replot_all_rois()

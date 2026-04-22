@@ -95,7 +95,30 @@ For figure preparation, save the preset after finalizing:
 
 ## Result-Viewer Presets
 
-The result viewer can also save presets for seeds or results. These are useful for transferring H spectra, colors, and display ranges, but the main JSON preset is more complete for reproducing a whole analysis session.
+The result viewer can also save `.preset` files for seeds or results. These are useful for transferring H spectra, colors, and display ranges, but the main JSON preset is more complete for reproducing a whole analysis session.
+
+The `.preset` workflow is designed for two use cases:
+
+- transfer result spectra into the ROI Manager as dummy seed rows,
+- reuse the same LUT colors and histogram settings on another result without changing the ROI list.
+
+When a `.preset` is loaded from the ROI Manager, the GUI asks how it should be applied:
+
+- `LUTs Only`: reuse the saved component colors and histogram/LUT settings for the current components.
+- `LUTs + ROIs`: also import the saved spectra as dummy ROI rows.
+
+This is useful when a representative field of view has already been styled carefully for figure preparation and the same display settings should be reused elsewhere.
+
+The `.preset` file stores:
+
+- component colors,
+- histogram/contrast settings for each component,
+- saved H spectra,
+- spectral axis values stored with the preset.
+
+It does not replace the full JSON application preset because it does not capture the entire GUI state, ROI geometry, physical units, 4D slice selection, solver settings, or all preprocessing choices.
+
+> GIF placeholder: loading a result-viewer `.preset` as `LUTs Only` and as `LUTs + ROIs`.
 
 ## Reusing A Preset On Another Field Of View
 

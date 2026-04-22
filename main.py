@@ -319,7 +319,20 @@ class MainApplication(QtWidgets.QMainWindow):
     def preset_loaded(self, n_components: int, v_min_vmax_states: list, color_states: list):
         self.analysis_manager.num_components_spinbox.setValue(n_components)
         self.analysis_manager.num_components_spinbox.valueChanged.emit(n_components)
-        # create the histogram for the color states
+        # new more sophisticated method guaranteeing full restoration of the histograms
+        if isinstance(v_min_vmax_states, dict):
+            for key, state in sorted(v_min_vmax_states.items(), key=lambda item: int(item[0])):
+                self.result_viewer_widget.restore_histogram_state_from_preset(int(key), state)
+            logger.info('Loaded %s saved histogram color states from preset.', len(v_min_vmax_states))
+            return
+
+        if v_min_vmax_states and isinstance(v_min_vmax_states[0], dict):
+            for index, state in enumerate(v_min_vmax_states):
+                self.result_viewer_widget.restore_histogram_state_from_preset(index, state)
+            logger.info('Loaded %s saved histogram color states from preset.', len(v_min_vmax_states))
+            return
+
+        # legacy .preset fallback
         for index, state in enumerate(v_min_vmax_states):
             self.result_viewer_widget.make_color_state(index, state, color_states[index])
         logger.info('Loaded %s saved histogram color states from preset.', len(v_min_vmax_states))
@@ -384,16 +397,9 @@ class MainApplication(QtWidgets.QMainWindow):
             # export roi manager state
             "roi_manager": self.data_widget.roi_manager.export_state(),
             
-            "histogram_states": {
-                k: {
-                    "levels": v["levels"],
-                    "top_color": v["gradient"]["ticks"][1][1],  # top tick color
-                    "bottom_color": v["gradient"]["ticks"][0][1],
-                    "top_pos": v['levels'][1],
-                    "bottom_pos": v['levels'][0],
-                }
-                for k, v in self.result_viewer_widget.histogram_states.items()
-            },
+            "histogram_states": self.result_viewer_widget.export_histogram_states_for_preset(
+                self.result_viewer_widget.histogram_states
+            ),
             "labels": self.result_viewer_widget.custom_labels
         }
 

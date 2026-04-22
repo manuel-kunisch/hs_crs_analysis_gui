@@ -1,5 +1,6 @@
 import logging
 import os
+import ast
 
 import numpy as np
 import pyqtgraph as pg
@@ -662,7 +663,6 @@ class CompositeImageViewWidget(QMainWindow):
         Returns:
 
         """
-        #TODO: add labels with the custom label name from the user or at least the index of the component
         self.spectrum_view.clear()
         self.spectrum_lines = []
         self.seed_lines = []
@@ -1121,14 +1121,56 @@ class CompositeImageViewWidget(QMainWindow):
         logger.info(f"Saved H components to {file_path}")
 
     @staticmethod
+    def serialize_histogram_state(state: dict) -> dict:
+        levels = state.get('levels', (0, max_dtype_val))
+        try:
+            vmin = float(levels[0])
+            vmax = float(levels[1])
+        except Exception:
+            vmin, vmax = 0.0, float(max_dtype_val)
+
+        gradient = state.get('gradient', {}) if isinstance(state, dict) else {}
+        ticks = list(gradient.get('ticks', [])) if isinstance(gradient, dict) else []
+        if len(ticks) >= 2:
+            ticks = sorted(ticks, key=lambda tick: tick[0])
+            bottom_tick = ticks[0]
+            top_tick = ticks[-1]
+            bottom_pos = float(bottom_tick[0])
+            top_pos = float(top_tick[0])
+            bottom_color = tuple(bottom_tick[1])
+            top_color = tuple(top_tick[1])
+        else:
+            bottom_pos = 0.0
+            top_pos = 1.0
+            bottom_color = (0, 0, 0, 255)
+            top_color = (255, 255, 255, 255)
+
+        return {
+            "levels": (vmin, vmax),
+            "bottom_color": bottom_color,
+            "top_color": top_color,
+            "bottom_pos": bottom_pos,
+            "top_pos": top_pos,
+        }
+
+    @classmethod
+    def export_histogram_states_for_preset(cls, histogram_states: dict) -> dict:
+        exported = {}
+        for key, state in sorted(histogram_states.items(), key=lambda item: int(item[0])):
+            exported[int(key)] = cls.serialize_histogram_state(state)
+        return exported
+
+    @staticmethod
     def save_to_presets(fpath: str, seeds: np.array, wavenumbers: np.array,
                         colormap_colors: list[tuple[int, int, int]], histogram_states: dict):
         if not fpath.lower().endswith(".preset"):
             fpath += ".preset"
 
+        exported_hist_states = CompositeImageViewWidget.export_histogram_states_for_preset(histogram_states)
         with open(fpath, "w") as f:
             # Save the colormap colors
             f.write(f"colormap_colors = {colormap_colors}\n")
+            f.write(f"histogram_states = {exported_hist_states}\n")
             # Save the vmin and vmax positions
             f.write("vmin_vmax = [")
             for i in range(len(histogram_states)):
@@ -1139,6 +1181,11 @@ class CompositeImageViewWidget(QMainWindow):
             for i in range(len(histogram_states)):
                 f.write(f"({histogram_states[i]['gradient']['ticks'][0][1]}, {histogram_states[i]['gradient']['ticks'][1][1]}), ")
             f.write("]\n")
+            f.write("slider_positions = [")
+            for i in range(len(histogram_states)):
+                ticks = sorted(histogram_states[i]['gradient']['ticks'], key=lambda tick: tick[0])
+                f.write(f"({ticks[0][0]}, {ticks[-1][0]}), ")
+            f.write("]\n")
             f.write(f"wave_numbers = {wavenumbers.tolist()}\n")
             # Save the H seeds
             f.write(f"seeds = {seeds.tolist()}")
@@ -1147,9 +1194,12 @@ class CompositeImageViewWidget(QMainWindow):
 
     @staticmethod
     def load_from_presets(fpath: str) -> tuple[
-        list[tuple[int, int, int]], list[tuple[int, int]], np.ndarray, np.ndarray]:
+        list[tuple[int, int, int]], dict, np.ndarray, np.ndarray]:
         save_keys = {
+            'histogram_states': 'histogram_states',
             'vmin_vmax': 'vmin_vmax',
+            'slider_colors': 'slider_colors',
+            'slider_positions': 'slider_positions',
             'colormap_colors': 'colormap_colors',
             'wave_numbers': 'wavenumbers',
             'seeds': 'seeds'
@@ -1157,7 +1207,10 @@ class CompositeImageViewWidget(QMainWindow):
 
         # Store loaded variables temporarily
         locals_ = {
+            'histogram_states': None,
             'vmin_vmax': None,
+            'slider_colors': None,
+            'slider_positions': None,
             'colormap_colors': None,
             'wavenumbers': None,
             'seeds': None
@@ -1167,9 +1220,10 @@ class CompositeImageViewWidget(QMainWindow):
             lines = f.readlines()
             for key, varname in save_keys.items():
                 for line in lines:
-                    if key in line:
-                        # Evaluate the value and assign to locals_ dictionary
-                        value = eval(line.split('=', 1)[1].strip())
+                    # use eval
+                    lhs, sep, rhs = line.partition('=')
+                    if sep and lhs.strip() == key:
+                        value = ast.literal_eval(rhs.strip())
                         locals_[varname] = value
                         break  # Stop after the first match for each key
 
@@ -1177,9 +1231,26 @@ class CompositeImageViewWidget(QMainWindow):
         locals_['wavenumbers'] = np.array(locals_['wavenumbers'])
         locals_['seeds'] = np.array(locals_['seeds'])
 
+        histogram_states = locals_['histogram_states']
+        if histogram_states is None:
+            histogram_states = {}
+            vmin_vmax = locals_.get('vmin_vmax') or []
+            slider_colors = locals_.get('slider_colors') or []
+            slider_positions = locals_.get('slider_positions') or []
+            for idx, levels in enumerate(vmin_vmax):
+                colors = slider_colors[idx] if idx < len(slider_colors) else ((0, 0, 0, 255), (255, 255, 255, 255))
+                positions = slider_positions[idx] if idx < len(slider_positions) else (0.0, 1.0)
+                histogram_states[idx] = {
+                    "levels": tuple(levels),
+                    "bottom_color": tuple(colors[0]),
+                    "top_color": tuple(colors[1]),
+                    "bottom_pos": float(positions[0]),
+                    "top_pos": float(positions[1]),
+                }
+
         return (
             locals_['colormap_colors'],
-            locals_['vmin_vmax'],
+            histogram_states,
             locals_['wavenumbers'],
             locals_['seeds']
         )

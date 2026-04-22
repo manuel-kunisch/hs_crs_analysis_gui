@@ -43,7 +43,14 @@ Loads external spectra from CSV, TXT, or ASC files. Loaded spectra appear as dum
 
 `Load Lookup Table and Spectra Preset`
 
-Loads a result-viewer preset containing colors and spectra. The spectra are added as dummy ROI rows and can be used as seed spectra.
+Loads a result-viewer `.preset` file created from the result viewer.
+
+When the preset is loaded, the GUI asks how it should be applied:
+
+- `LUTs Only`: apply the saved component colors and histogram/LUT settings to the current result/component setup without importing new dummy ROI rows.
+- `LUTs + ROIs`: also import the saved spectra as dummy ROI rows so they can be reused as H seeds.
+
+Use `LUTs Only` when you already have the correct ROI/component setup and only want to reuse the visual style. Use `LUTs + ROIs` when the preset should also transfer spectral seeds into the ROI Manager.
 
 ## Row types
 
@@ -167,7 +174,7 @@ Loaded spectra and imported result spectra are stored as dummy ROIs. A dummy row
 Dummy rows are the correct representation for:
 
 - External spectra from CSV/TXT/ASC files.
-- Spectra loaded from `.preset` files.
+- Spectra loaded from `.preset` files when `LUTs + ROIs` is selected.
 - Gaussian/model spectra.
 - Result spectra imported back from the result viewer.
 
@@ -245,6 +252,13 @@ The main application preset saves ROI Manager state, including:
 - Plot/live-update state.
 
 Gaussian model rows are regenerated from the resonance/spectral settings instead of being stored as normal ROI rows.
+
+The result-viewer `.preset` is different:
+
+- it stores result-viewer spectra, component colors, and histogram/LUT settings,
+- it can be loaded as `LUTs Only` or `LUTs + ROIs`,
+- it is useful for transferring a visual style or a seed spectrum set,
+- it is not a full substitute for the main JSON application preset.
 
 ## Recommended workflow
 

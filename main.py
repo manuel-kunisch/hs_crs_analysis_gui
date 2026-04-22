@@ -309,6 +309,7 @@ class MainApplication(QtWidgets.QMainWindow):
                                                spectral_cmps=spectral_cmps,
                                                spectral_cmps_seed=self.analysis_manager.mv_analyzer.seed_H if is_nnmf else None,
                                                custom_model=self.analysis_manager.mv_analyzer.custom_nnmf_init if is_nnmf else False,
+                                               fit_info=self.analysis_manager.get_analysis_fit_info(),
                                                spectral_axis=result_spectral_axis,
                                                outer_axis_label=self.analysis_manager.get_analysis_series_label())
 

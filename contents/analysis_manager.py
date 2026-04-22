@@ -74,6 +74,7 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_series_index: int = 0
         self._analysis_result_spectra: np.ndarray | None = None
         self._analysis_result_images: np.ndarray | None = None
+        self._analysis_fit_info: dict | list[dict | None] | None = None
 
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
         # Main widget instantiated in the init_ui method
@@ -657,6 +658,7 @@ class AnalysisManager(QtCore.QObject):
         """
         self._analysis_result_spectra = None
         self._analysis_result_images = None
+        self._analysis_fit_info = None
         if self._analysis_series_4d is not None:
             self._begin_analysis_progress(int(self._analysis_series_4d.shape[0]))
         else:
@@ -719,6 +721,7 @@ class AnalysisManager(QtCore.QObject):
             ).transpose(2, 0, 1)
             self._analysis_result_spectra = np.array(self.mv_analyzer.seed_H, copy=True)
             self._analysis_result_images = np.array(self.mv_analyzer.fixed_W_2D, copy=True)
+            self._analysis_fit_info = None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
             return
 
         if self._analysis_series_4d is not None:
@@ -729,9 +732,11 @@ class AnalysisManager(QtCore.QObject):
         if self.mv_analyzer.analysis_method == "PCA":
             self._analysis_result_spectra = self.mv_analyzer.PCs
             self._analysis_result_images = self.mv_analyzer.pca_2DX
+            self._analysis_fit_info = None
         else:
             self._analysis_result_spectra = self.mv_analyzer.fixed_H
             self._analysis_result_images = self.mv_analyzer.fixed_W_2D
+            self._analysis_fit_info = None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
 
     def _run_multislice_analysis(self):
         series = self._analysis_series_4d
@@ -761,6 +766,8 @@ class AnalysisManager(QtCore.QObject):
         spectra_per_slice = []
         images_per_slice = []
         reference_result = None
+        fit_info_per_slice: list[dict | None] | None = [] if analysis_method != "PCA" else None
+        reference_fit_info = None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
 
         if fast_mode:
             logger.info(
@@ -785,6 +792,8 @@ class AnalysisManager(QtCore.QObject):
             if fast_mode and slice_index == reference_slice_index and reference_result is not None:
                 spectra_per_slice.append(np.array(reference_result["H"], copy=True))
                 images_per_slice.append(np.array(reference_result["W"], copy=True))
+                if fit_info_per_slice is not None:
+                    fit_info_per_slice.append(None if reference_fit_info is None else dict(reference_fit_info))
                 self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
                 continue
 
@@ -813,6 +822,10 @@ class AnalysisManager(QtCore.QObject):
                 )
                 spectra_per_slice.append(np.array(seed_result["H"][:n_components], copy=True))
                 images_per_slice.append(np.array(seed_result["W"][:n_components], copy=True))
+                if fit_info_per_slice is not None:
+                    fit_info_per_slice.append(
+                        None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
+                    )
                 self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
                 continue
 
@@ -838,10 +851,15 @@ class AnalysisManager(QtCore.QObject):
 
             spectra_per_slice.append(np.array(self.mv_analyzer.fixed_H[:n_components], copy=True))
             images_per_slice.append(np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True))
+            if fit_info_per_slice is not None:
+                fit_info_per_slice.append(
+                    None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
+                )
             self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
 
         self._analysis_result_spectra = np.stack(spectra_per_slice, axis=0)
         self._analysis_result_images = np.stack(images_per_slice, axis=0)
+        self._analysis_fit_info = fit_info_per_slice
         self.worker.progress.emit(100)
 
         if display_data is not None:
@@ -959,6 +977,7 @@ class AnalysisManager(QtCore.QObject):
         algorithm = info.get("algorithm", "nnls")
         source = info.get("source", "unknown")
         final_error = info.get("final_error")
+        relative_error = info.get("relative_error")
         tol = info.get("tol")
         cache_hit = bool(info.get("cache_hit", False))
         n_iter = info.get("n_iter")
@@ -966,12 +985,13 @@ class AnalysisManager(QtCore.QObject):
         mean_chunk_iter = info.get("mean_chunk_iter")
 
         logger.info(
-            "NNLS finished: backend=%s, algorithm=%s, source=%s, cache_hit=%s, final_error=%s, tol=%s",
+            "NNLS finished: backend=%s, algorithm=%s, source=%s, cache_hit=%s, final_error=%s, relative_error=%s, tol=%s",
             backend,
             algorithm,
             source,
             cache_hit,
             final_error,
+            relative_error,
             tol,
         )
         if n_iter is not None:
@@ -1321,6 +1341,17 @@ class AnalysisManager(QtCore.QObject):
         if self.pca_radio.isChecked():
             return self.mv_analyzer.PCs, self.mv_analyzer.pca_2DX
         return self.mv_analyzer.fixed_H, self.mv_analyzer.fixed_W_2D
+
+    def get_analysis_fit_info(self) -> dict | list[dict | None] | None:
+        if self._analysis_fit_info is not None:
+            return self._analysis_fit_info
+        if self.pca_radio.isChecked():
+            return None
+        if self.mv_analyzer.last_nnmf_info is not None:
+            return dict(self.mv_analyzer.last_nnmf_info)
+        if self.mv_analyzer.last_nnls_info is not None:
+            return dict(self.mv_analyzer.last_nnls_info)
+        return None
 
     def _refresh_resonance_table_layout(self):
         header = self.resonance_table.horizontalHeader()

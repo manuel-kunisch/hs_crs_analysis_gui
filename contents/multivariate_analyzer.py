@@ -59,6 +59,7 @@ class MultivariateAnalyzer(object):
         self.torch_nnls_chunk_size = 32768
         self._nnls_abundance_cache = {}
         self.last_nnls_info: dict | None = None
+        self.last_nnmf_info: dict | None = None
         self.update_image_data(data, n_components, wavenumbers)
 
     def update_spectral_info(self, spectral_info: list[dict[str, float | int]]):
@@ -69,6 +70,26 @@ class MultivariateAnalyzer(object):
     def _clear_nnls_abundance_cache(self):
         self._nnls_abundance_cache = {}
         self.last_nnls_info = None
+
+    @staticmethod
+    def _matrix_fro_norm(data: np.ndarray) -> float:
+        working_data = np.asarray(data, dtype=np.float64)
+        working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
+        return float(np.linalg.norm(working_data, ord='fro'))
+
+    def _finalize_fit_info(self, info: dict, data: np.ndarray) -> dict:
+        info = dict(info)
+        final_error = info.get("final_error")
+        data_norm = self._matrix_fro_norm(data)
+        info["data_norm"] = data_norm
+        if final_error is None:
+            info["relative_error"] = None
+            return info
+        if data_norm <= np.finfo(np.float64).eps:
+            info["relative_error"] = 0.0 if abs(float(final_error)) <= np.finfo(np.float64).eps else None
+            return info
+        info["relative_error"] = float(final_error) / data_norm
+        return info
 
     def update_image_data(self, data: np.ndarray, n_components: int, wavenumbers: np.ndarray):
         self.prepared = False
@@ -95,6 +116,7 @@ class MultivariateAnalyzer(object):
         self.H_weighted_W_seed = False
         self.w_seed_mode = 'nnls'
         self._clear_nnls_abundance_cache()
+        self.last_nnmf_info = None
         self.wavenumbers = wavenumbers
         if self.raw_data_3d is not None:
             logger.info(f'{self.raw_data_3d.shape=}')
@@ -109,6 +131,7 @@ class MultivariateAnalyzer(object):
     def update_resonance_image_data(self, data: np.ndarray):
         logger.info('Updated resonance/subtracted data in the MV analyzer')
         self._clear_nnls_abundance_cache()
+        self.last_nnmf_info = None
         # check if the emitted data is non-empty
         if data.size:
             self.resonance_data_zyx = data
@@ -245,8 +268,9 @@ class MultivariateAnalyzer(object):
                     h_init=h_init,
                     device=torch_device,
                 )
-                info = dict(info)
-                info["backend"] = "torch"
+                info = self._finalize_fit_info(info, data_f32)
+                info["backend"] = f"torch-{torch_device}"
+                info["solver"] = self.nnmf_solver
                 return fixed_W, fixed_H, info
             except Exception as exc:
                 if torch_nmf.import_error() is not None and not torch_nmf.torch_available():
@@ -272,12 +296,15 @@ class MultivariateAnalyzer(object):
         else:
             fixed_W = nnmf_model.fit_transform(data_f32)
         fixed_H = nnmf_model.components_
-        info = {
+        info = self._finalize_fit_info({
             "backend": "sklearn",
+            "algorithm": f"{self.nnmf_solver}_nmf",
             "solver": self.nnmf_solver,
             "n_iter": int(nnmf_model.n_iter_),
+            "max_iter": int(self.nnmf_max_iter),
+            "final_error": float(getattr(nnmf_model, "reconstruction_err_", torch_nmf.reconstruction_error(data_f32, fixed_W, fixed_H))),
             "params": nnmf_model.get_params(),
-        }
+        }, data_f32)
         return fixed_W, fixed_H, info
 
     @staticmethod
@@ -459,7 +486,7 @@ class MultivariateAnalyzer(object):
             "max_iter": int(self.nnls_max_iter),
             "final_error": float(residual_sq ** 0.5),
         }
-        return abundance, info
+        return abundance, self._finalize_fit_info(info, working_data)
 
     def _build_nnls_abundance_matrix(
             self,
@@ -509,7 +536,7 @@ class MultivariateAnalyzer(object):
                 "n_iter": 1,
                 "final_error": float(np.linalg.norm(residual, ord="fro")),
             }
-            return abundance, info
+            return abundance, self._finalize_fit_info(info, working_data)
 
         if self.prefer_torch_nnls and nnls_pytorch.cuda_available():
             try:
@@ -523,7 +550,7 @@ class MultivariateAnalyzer(object):
                     eps=eps,
                     chunk_size=self.torch_nnls_chunk_size,
                 )
-                info = dict(info)
+                info = self._finalize_fit_info(info, image_data)
                 info["backend"] = "torch-cuda"
                 return np.maximum(abundance, eps).astype(np.float32, copy=False), info
             except Exception as exc:
@@ -760,6 +787,8 @@ class MultivariateAnalyzer(object):
     def randomNNMF(self) -> None:
         logger.info(f'{self.data_2d.shape =}')
         self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(self.data_2d, init='random')
+        self.last_nnmf_info = dict(fit_info)
+        self.last_nnmf_info["mode"] = "random_nnmf"
         normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
         # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
         self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H * normalization_factor
@@ -1296,6 +1325,8 @@ class MultivariateAnalyzer(object):
             w_init=self.seed_W.astype(np.float32),
             h_init=self.seed_H.astype(np.float32),
         )
+        self.last_nnmf_info = dict(fit_info)
+        self.last_nnmf_info["mode"] = "seeded_nnmf"
         normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
         # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
         self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H
@@ -1323,6 +1354,8 @@ class MultivariateAnalyzer(object):
         self.seed_H = None
         self.seed_W = None
         self._W_prepared = False
+        self.last_nnls_info = None
+        self.last_nnmf_info = None
 
     # Optional matplotlib helpers for manual inspection.
     def plot_PCA_mpl(self):

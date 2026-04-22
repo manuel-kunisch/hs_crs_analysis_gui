@@ -59,6 +59,8 @@ class CompositeImageViewWidget(QMainWindow):
         self.result_mode = None
         self.outer_axis_label = "Slice"
         self.current_result_slice_index = 0
+        self.fit_info = None
+        self.fit_info_series = None
         self.fiji_saver = FIJISaver(self.img, f'{os.path.join(os.getcwd(), "result.tif")}',
                                     colors=self.colormap_colors, dtype=np.uint16)
         self.custom_model = False
@@ -282,6 +284,24 @@ class CompositeImageViewWidget(QMainWindow):
         import_seed_controls_layout.addWidget(promote_seed_target_combobox)
         import_seed_controls_layout.addWidget(promote_seed_button)
         import_seed_controls_layout.addStretch(1)
+        self.fit_summary_widget = QWidget()
+        self.fit_summary_widget.setObjectName("resultSubpanel")
+        self.fit_summary_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        fit_summary_layout = QVBoxLayout(self.fit_summary_widget)
+        fit_summary_layout.setContentsMargins(10, 10, 10, 10)
+        fit_summary_layout.setSpacing(6)
+        self.fit_summary_title = QLabel("Fit Summary")
+        self.fit_summary_title.setProperty("role", "sectionTitle")
+        self.fit_summary_label = QLabel("")
+        self.fit_summary_label.setProperty("role", "sectionMeta")
+        self.fit_summary_label.setWordWrap(True)
+        self.fit_summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        fit_summary_layout.addWidget(self.fit_summary_title)
+        fit_summary_layout.addWidget(self.fit_summary_label)
+        fit_summary_layout.addStretch(1)
+        self.fit_summary_widget.setMinimumWidth(300)
+        self.fit_summary_widget.setMaximumWidth(380)
+        self.fit_summary_widget.hide()
 
         import_seed_panel = QWidget()
         import_seed_panel.setObjectName("resultSubpanel")
@@ -297,7 +317,13 @@ class CompositeImageViewWidget(QMainWindow):
         composite_panel_layout.setContentsMargins(12, 12, 12, 12)
         composite_panel_layout.setSpacing(10)
         composite_panel_layout.addWidget(composite_header)
-        composite_panel_layout.addWidget(self.composite_view, stretch=1)
+        composite_content_widget = QWidget()
+        composite_content_layout = QHBoxLayout(composite_content_widget)
+        composite_content_layout.setContentsMargins(0, 0, 0, 0)
+        composite_content_layout.setSpacing(10)
+        composite_content_layout.addWidget(self.composite_view, stretch=1)
+        composite_content_layout.addWidget(self.fit_summary_widget)
+        composite_panel_layout.addWidget(composite_content_widget, stretch=1)
         composite_panel_layout.addWidget(composite_controls_widget)
         composite_panel_layout.addWidget(import_seed_panel)
 
@@ -488,6 +514,143 @@ class CompositeImageViewWidget(QMainWindow):
                 )
             else:
                 self.promote_seed_button.setToolTip("Result import is only available for NNMF results.")
+        self._update_fit_info_label()
+
+    @staticmethod
+    def _format_fit_scalar(value) -> str | None:
+        if value is None:
+            return None
+        try:
+            scalar = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if not np.isfinite(scalar):
+            return None
+        if scalar == 0:
+            return "0"
+        magnitude = abs(scalar)
+        if magnitude >= 1e4 or magnitude < 1e-3:
+            return f"{scalar:.3e}"
+        if magnitude >= 100:
+            return f"{scalar:.1f}"
+        if magnitude >= 10:
+            return f"{scalar:.2f}"
+        return f"{scalar:.4f}"
+
+    @classmethod
+    def _format_relative_error(cls, value) -> str | None:
+        formatted = cls._format_fit_scalar(value)
+        if formatted is None:
+            return None
+        try:
+            scalar = float(value)
+        except (TypeError, ValueError):
+            return formatted
+        if not np.isfinite(scalar):
+            return None
+        return f"{formatted} ({scalar * 100:.2f}%)"
+
+    def _current_fit_info(self) -> dict | None:
+        if self.fit_info_series is not None:
+            if 0 <= self.current_result_slice_index < len(self.fit_info_series):
+                info = self.fit_info_series[self.current_result_slice_index]
+                return info if isinstance(info, dict) else None
+            return None
+        return self.fit_info if isinstance(self.fit_info, dict) else None
+
+    def _fit_series_relative_stats(self) -> tuple[float, float, float] | None:
+        if not isinstance(self.fit_info_series, list):
+            return None
+        rel_values = []
+        for info in self.fit_info_series:
+            if not isinstance(info, dict):
+                continue
+            rel = info.get("relative_error")
+            try:
+                rel = float(rel)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(rel):
+                rel_values.append(rel)
+        if not rel_values:
+            return None
+        rel_array = np.asarray(rel_values, dtype=np.float64)
+        return float(np.mean(rel_array)), float(np.min(rel_array)), float(np.max(rel_array))
+
+    def _fit_model_label(self, info: dict) -> str:
+        mode = info.get("mode")
+        if mode == "seeded_nnmf":
+            return "Seeded NNMF"
+        if mode == "random_nnmf":
+            return "Random NNMF"
+        algorithm = str(info.get("algorithm", "")).lower()
+        if algorithm == "fixed_h_nnls":
+            return "Fixed-H NNLS"
+        if "nnls" in algorithm:
+            return "NNLS"
+        if self.result_mode == "NNMF":
+            return "NNMF"
+        if self.result_mode:
+            return str(self.result_mode)
+        return "Fit"
+
+    def _update_fit_info_label(self):
+        if not hasattr(self, "fit_summary_label") or not hasattr(self, "fit_summary_widget"):
+            return
+        info = self._current_fit_info()
+        if self.result_mode == "PCA" or info is None:
+            self.fit_summary_label.clear()
+            self.fit_summary_widget.hide()
+            return
+
+        lines = [f"Fit: {self._fit_model_label(info)}"]
+        if self.fit_info_series is not None and len(self.fit_info_series) > 1:
+            lines.append(f"{self.outer_axis_label}: {self.current_result_slice_index + 1}/{len(self.fit_info_series)}")
+
+        backend = info.get("backend")
+        solver = info.get("solver")
+        if backend:
+            backend_line = f"Backend: {backend}"
+            if solver and "NNMF" in lines[0]:
+                backend_line += f" | Solver: {solver}"
+            lines.append(backend_line)
+
+        n_iter = info.get("n_iter")
+        max_iter = info.get("max_iter")
+        if n_iter is not None and max_iter is not None:
+            lines.append(f"Iterations until convergence: {n_iter}/{max_iter}")
+        elif n_iter is not None:
+            lines.append(f"Iterations until convergence: {n_iter}")
+        else:
+            max_chunk_iter = info.get("max_chunk_iter")
+            mean_chunk_iter = info.get("mean_chunk_iter")
+            if max_chunk_iter is not None:
+                chunk_line = f"Iterations until convergence: max chunk {max_chunk_iter}"
+                if mean_chunk_iter is not None:
+                    chunk_line += f", mean chunk {self._format_fit_scalar(mean_chunk_iter)}"
+                lines.append(chunk_line)
+            elif mean_chunk_iter is not None:
+                lines.append(f"Iterations until convergence: mean chunk {self._format_fit_scalar(mean_chunk_iter)}")
+
+        final_error = self._format_fit_scalar(info.get("final_error"))
+        if final_error is not None:
+            lines.append(f"Absolute error: {final_error}")
+
+        relative_error = self._format_relative_error(info.get("relative_error"))
+        if relative_error is not None:
+            lines.append(f"Relative error: {relative_error}")
+
+        series_stats = self._fit_series_relative_stats()
+        if series_stats is not None and self.fit_info_series is not None and len(self.fit_info_series) > 1:
+            mean_rel, min_rel, max_rel = series_stats
+            lines.append(
+                "Series relative error: "
+                f"mean {self._format_fit_scalar(mean_rel)}, "
+                f"range {self._format_fit_scalar(min_rel)} to {self._format_fit_scalar(max_rel)}"
+            )
+
+        self.fit_summary_label.setText("\n".join(lines))
+        self.fit_summary_widget.show()
 
     def plot_components(self, spectral_components: np.ndarray):
         """
@@ -570,6 +733,7 @@ class CompositeImageViewWidget(QMainWindow):
                      spectral_cmps_seed: np.ndarray|None = None,
                      custom_model: bool = False,
                      update_gamma_curve=False,
+                     fit_info: dict | list[dict | None] | None = None,
                      outer_axis_label: str = "Slice"):
         """
         Update the data with new multivariate results of shape (y, x, z)
@@ -621,6 +785,9 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectral_cmps = None if self.spectral_cmps_series is not None else spectral_cmps
         self.spectral_cmps_seed = spectral_cmps_seed
         self.custom_model = custom_model
+        self.fit_info_series = fit_info if isinstance(fit_info, list) else None
+        self.fit_info = None if self.fit_info_series is not None else fit_info
+        self._update_fit_info_label()
         result_components = 1
         if spectral_cmps is not None:
             result_components = max(1, int(spectral_cmps.shape[1] if spectral_cmps.ndim == 3 else spectral_cmps.shape[0]))
@@ -648,6 +815,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.img = self.img_series[self.current_result_slice_index]
         composite_view_range = self._capture_viewbox_range(self.composite_view)
         self.composite_view.setImage(self.img, autoLevels=False)
+        self._update_fit_info_label()
         self._restore_viewbox_range(self.composite_view, composite_view_range)
         self.update_channel_view(min(self.channel_slider.value(), self.img.shape[-1] - 1))
         self.plot_components(self.spectral_cmps_series if self.spectral_cmps_series is not None else self.spectral_cmps)

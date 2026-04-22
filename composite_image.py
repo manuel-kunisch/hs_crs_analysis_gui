@@ -140,7 +140,7 @@ class CompositeImageViewWidget(QMainWindow):
         save_tiff_button.clicked.connect(self.save_data)
         
         # add button to save the H seeds with combobox to select the mode
-        save_seeds_button = QPushButton("Save Preset")
+        save_seeds_button = QPushButton("Save Histogram Preset")
         save_seed_mode_combobox = QComboBox()
         save_seed_mode_combobox.addItem("Results")
         save_seed_mode_combobox.addItem("Seeds")
@@ -1232,6 +1232,69 @@ class CompositeImageViewWidget(QMainWindow):
         logger.info(f'Created histogram state for channel {index} with info {self.histogram_states[index]}')
 
         # set the current histogram state in the channel view
+        if index == self.channel_slider.value():
+            self.channel_view.getHistogramWidget().restoreState(self.histogram_states[index])
+
+    def restore_histogram_state_from_preset(self, index: int, preset_state: dict):
+        """
+        Restore a saved histogram/LUT state from the JSON preset format.
+
+        The JSON stores absolute level values plus optional bottom/top tick colors and
+        positions. Older presets may only contain levels and top_color.
+        """
+        if not isinstance(preset_state, dict):
+            return
+
+        levels = preset_state.get("levels", (0, max_dtype_val))
+        try:
+            vmin = float(levels[0])
+            vmax = float(levels[1])
+        except Exception:
+            vmin, vmax = 0.0, float(max_dtype_val)
+
+        bottom_color = tuple(preset_state.get("bottom_color", (0, 0, 0, 255)))
+        top_color = tuple(preset_state.get("top_color", self.get_color(index) + (255,)))
+        if len(bottom_color) == 3:
+            bottom_color = bottom_color + (255,)
+        if len(top_color) == 3:
+            top_color = top_color + (255,)
+
+        bottom_pos = preset_state.get("bottom_pos", vmin)
+        top_pos = preset_state.get("top_pos", vmax)
+        try:
+            bottom_pos = float(bottom_pos)
+        except Exception:
+            bottom_pos = vmin
+        try:
+            top_pos = float(top_pos)
+        except Exception:
+            top_pos = vmax
+
+        # JSON presets store tick positions in data units. Convert them back to the
+        # histogram gradient's normalized 0..1 coordinates used by pyqtgraph.
+        if bottom_pos < 0 or bottom_pos > 1:
+            bottom_pos /= max_dtype_val
+        if top_pos < 0 or top_pos > 1:
+            top_pos /= max_dtype_val
+        bottom_pos = float(np.clip(bottom_pos, 0.0, 1.0))
+        top_pos = float(np.clip(top_pos, 0.0, 1.0))
+        if bottom_pos >= top_pos:
+            bottom_pos, top_pos = 0.0, 1.0
+
+        self.histogram_states[index] = {
+            'gradient': {
+                'mode': 'rgb',
+                'ticks': [
+                    (bottom_pos, tuple(bottom_color)),
+                    (top_pos, tuple(top_color))
+                ],
+                'ticksVisible': False
+            },
+            'levels': (vmin, vmax),
+            'mode': 'mono'
+        }
+        logger.info('Restored histogram state for channel %s from preset: %s', index, self.histogram_states[index])
+
         if index == self.channel_slider.value():
             self.channel_view.getHistogramWidget().restoreState(self.histogram_states[index])
 

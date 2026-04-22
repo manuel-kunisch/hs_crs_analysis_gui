@@ -49,11 +49,11 @@ class MultivariateAnalyzer(object):
         self.nnmf_solver = 'mu'
         self.nnmf_backend_preference = 'auto'
         self.prefer_torch_nmf = True
-        self.nnmf_max_iter = 5000
+        self.nnmf_max_iter = 1000
         self.torch_nmf_max_iter = self.nnmf_max_iter
         self.torch_nmf_tol = 1e-4
         self.prefer_torch_nnls = True
-        self.nnls_max_iter = 2500
+        self.nnls_max_iter = 1000
         self.torch_nnls_max_iter = self.nnls_max_iter
         self.torch_nnls_tol = 1e-4
         self.torch_nnls_chunk_size = 32768

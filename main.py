@@ -568,10 +568,10 @@ class MainApplication(QtWidgets.QMainWindow):
             for k, st in hist.items():
                 try:
                     idx = int(k)
-                    logger.info(f"Restoring histogram state for component {idx} with levels {st['levels']} and top color {st['top_color']}")
-                    self.result_viewer_widget.make_color_state(idx, st["levels"], st["top_color"])
-                except Exception:
-                    pass
+                    logger.info("Restoring histogram preset for component %s", idx)
+                    self.result_viewer_widget.restore_histogram_state_from_preset(idx, st)
+                except Exception as exc:
+                    logger.warning("Failed to restore histogram preset for component %s: %s", k, exc)
 
     def switch_section(self, index):
         self.stack_widget.setCurrentIndex(index)

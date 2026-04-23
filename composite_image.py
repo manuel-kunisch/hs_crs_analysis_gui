@@ -63,6 +63,9 @@ class CompositeImageViewWidget(QMainWindow):
         self.current_result_slice_index = 0
         self.fit_info = None
         self.fit_info_series = None
+        self.display_w_scale_factor = None
+        self.display_w_raw_max = None
+        self.scale_w_to_uint16_enabled = True
         self.fiji_saver = FIJISaver(self.img, f'{os.path.join(os.getcwd(), "result.tif")}',
                                     colors=self.colormap_colors, dtype=np.uint16)
         self.custom_model = False
@@ -607,56 +610,72 @@ class CompositeImageViewWidget(QMainWindow):
         if not hasattr(self, "fit_summary_label") or not hasattr(self, "fit_summary_widget"):
             return
         info = self._current_fit_info()
-        if self.result_mode == "PCA" or info is None:
+        if self.result_mode == "PCA":
             self.fit_summary_label.clear()
             self.fit_summary_widget.hide()
             return
 
-        lines = [f"Fit: {self._fit_model_label(info)}"]
-        if self.fit_info_series is not None and len(self.fit_info_series) > 1:
-            lines.append(f"{self.outer_axis_label}: {self.current_result_slice_index + 1}/{len(self.fit_info_series)}")
+        lines = []
+        if info is not None:
+            lines = [f"Fit: {self._fit_model_label(info)}"]
+            if self.fit_info_series is not None and len(self.fit_info_series) > 1:
+                lines.append(f"{self.outer_axis_label}: {self.current_result_slice_index + 1}/{len(self.fit_info_series)}")
 
-        backend = info.get("backend")
-        solver = info.get("solver")
-        if backend:
-            backend_line = f"Backend: {backend}"
-            if solver and "NNMF" in lines[0]:
-                backend_line += f" | Solver: {solver}"
-            lines.append(backend_line)
+            backend = info.get("backend")
+            solver = info.get("solver")
+            if backend:
+                backend_line = f"Backend: {backend}"
+                if solver and "NNMF" in lines[0]:
+                    backend_line += f" | Solver: {solver}"
+                lines.append(backend_line)
 
-        n_iter = info.get("n_iter")
-        max_iter = info.get("max_iter")
-        if n_iter is not None and max_iter is not None:
-            lines.append(f"Iterations until convergence: {n_iter}/{max_iter}")
-        elif n_iter is not None:
-            lines.append(f"Iterations until convergence: {n_iter}")
-        else:
-            max_chunk_iter = info.get("max_chunk_iter")
-            mean_chunk_iter = info.get("mean_chunk_iter")
-            if max_chunk_iter is not None:
-                chunk_line = f"Iterations until convergence: max chunk {max_chunk_iter}"
-                if mean_chunk_iter is not None:
-                    chunk_line += f", mean chunk {self._format_fit_scalar(mean_chunk_iter)}"
-                lines.append(chunk_line)
-            elif mean_chunk_iter is not None:
-                lines.append(f"Iterations until convergence: mean chunk {self._format_fit_scalar(mean_chunk_iter)}")
+            n_iter = info.get("n_iter")
+            max_iter = info.get("max_iter")
+            if n_iter is not None and max_iter is not None:
+                lines.append(f"Iterations until convergence: {n_iter}/{max_iter}")
+            elif n_iter is not None:
+                lines.append(f"Iterations until convergence: {n_iter}")
+            else:
+                max_chunk_iter = info.get("max_chunk_iter")
+                mean_chunk_iter = info.get("mean_chunk_iter")
+                if max_chunk_iter is not None:
+                    chunk_line = f"Iterations until convergence: max chunk {max_chunk_iter}"
+                    if mean_chunk_iter is not None:
+                        chunk_line += f", mean chunk {self._format_fit_scalar(mean_chunk_iter)}"
+                    lines.append(chunk_line)
+                elif mean_chunk_iter is not None:
+                    lines.append(f"Iterations until convergence: mean chunk {self._format_fit_scalar(mean_chunk_iter)}")
 
-        final_error = self._format_fit_scalar(info.get("final_error"))
-        if final_error is not None:
-            lines.append(f"Absolute error: {final_error}")
+            final_error = self._format_fit_scalar(info.get("final_error"))
+            if final_error is not None:
+                lines.append(f"Absolute error: {final_error}")
 
-        relative_error = self._format_relative_error(info.get("relative_error"))
-        if relative_error is not None:
-            lines.append(f"Relative error: {relative_error}")
+            relative_error = self._format_relative_error(info.get("relative_error"))
+            if relative_error is not None:
+                lines.append(f"Relative error: {relative_error}")
 
-        series_stats = self._fit_series_relative_stats()
-        if series_stats is not None and self.fit_info_series is not None and len(self.fit_info_series) > 1:
-            mean_rel, min_rel, max_rel = series_stats
-            lines.append(
-                "Series relative error: "
-                f"mean {self._format_fit_scalar(mean_rel)}, "
-                f"range {self._format_fit_scalar(min_rel)} to {self._format_fit_scalar(max_rel)}"
-            )
+            series_stats = self._fit_series_relative_stats()
+            if series_stats is not None and self.fit_info_series is not None and len(self.fit_info_series) > 1:
+                mean_rel, min_rel, max_rel = series_stats
+                lines.append(
+                    "Series relative error: "
+                    f"mean {self._format_fit_scalar(mean_rel)}, "
+                    f"range {self._format_fit_scalar(min_rel)} to {self._format_fit_scalar(max_rel)}"
+                )
+
+        if self.display_w_scale_factor is not None:
+            if lines:
+                lines.append("")
+            scale_text = self._format_fit_scalar(self.display_w_scale_factor)
+            raw_max_text = self._format_fit_scalar(self.display_w_raw_max)
+            lines.append(f"W display scale a: {scale_text}")
+            lines.append(f"Raw W max: {raw_max_text}")
+            lines.append("Displayed W' = a W; reconstruct with H/a.")
+
+        if not lines:
+            self.fit_summary_label.clear()
+            self.fit_summary_widget.hide()
+            return
 
         self.fit_summary_label.setText("\n".join(lines))
         self.fit_summary_widget.show()
@@ -736,6 +755,48 @@ class CompositeImageViewWidget(QMainWindow):
             self.seed_lines.append(line)
         # raise NotImplementedError("Plotting seeds is not yet implemented,\nPlease do not pass seeds to the result viewer")
 
+    def _scale_w_result_for_display(self, img_file: np.ndarray) -> np.ndarray:
+        """
+        Scales the received abundance map from image file to uint16
+        """
+        self.display_w_scale_factor = None
+        self.display_w_raw_max = None
+        if self.result_mode != "NNMF" or img_file is None:
+            return img_file
+
+        working_img = np.asarray(img_file, dtype=np.float32)
+        if working_img.size == 0:
+            return working_img.astype(dtype)
+
+        working_img = np.nan_to_num(working_img, nan=0.0, posinf=0.0, neginf=0.0)
+        working_img = np.maximum(working_img, 0.0)
+        raw_max = float(np.max(working_img))
+        self.display_w_raw_max = raw_max
+
+        if not self.scale_w_to_uint16_enabled:
+            logger.info("Displaying W result without uint16 scaling.")
+            return working_img
+
+        scale_factor = 1.0 if raw_max <= 0.0 else float(max_dtype_val) / raw_max
+
+        self.display_w_scale_factor = scale_factor
+        logger.info("Scaled displayed W result by factor %.6g to uint16.", scale_factor)
+        return np.clip(working_img * scale_factor, 0.0, float(max_dtype_val)).astype(dtype)
+
+    def set_scale_w_to_uint16(self, enabled: bool):
+        self.scale_w_to_uint16_enabled = bool(enabled)
+
+    def _channel_histogram_upper_bound(self) -> float:
+        if (
+                self.result_mode == "NNMF"
+                and not self.scale_w_to_uint16_enabled
+                and self.display_w_raw_max is not None
+                and np.isfinite(self.display_w_raw_max)
+                and self.display_w_raw_max > 0
+        ):
+            return float(self.display_w_raw_max)
+        return float(max_dtype_val)
+
     def update_image(self, img_file: np.ndarray, spectral_axis: int | None = None,
                      spectral_cmps:np.ndarray|None = None,
                      spectral_cmps_seed: np.ndarray|None = None,
@@ -757,7 +818,7 @@ class CompositeImageViewWidget(QMainWindow):
             None
         """
         self.timeout_callbacks = True
-        self.img = img_file
+        self.img = self._scale_w_result_for_display(img_file)
         if spectral_axis is not None:
             if spectral_axis != -1:
                 self.img = np.moveaxis(self.img, spectral_axis, -1)
@@ -906,7 +967,7 @@ class CompositeImageViewWidget(QMainWindow):
         if channel_index in self.histogram_states:
             histogram_state = self.histogram_states[channel_index]
             self.channel_view.getHistogramWidget().restoreState(histogram_state)
-            self.channel_view.ui.histogram.setHistogramRange(0, max_dtype_val)
+            self.channel_view.ui.histogram.setHistogramRange(0, self._channel_histogram_upper_bound())
             # self.channel_view.ui.histogram.setHistogramRange(np.amin(selected_im), np.amax(selected_im))
             # 4th value of the histogram_state['gradient']['ticks'][1][1] is opacity of the top color and should be omitted
             colormap_color = histogram_state['gradient']['ticks'][1][1][:3]
@@ -921,8 +982,9 @@ class CompositeImageViewWidget(QMainWindow):
             self.channel_view.autoLevels()
             # self.channel_view.setLevels(0, max_dtype_val)
             # self.channel_view.setLevels(np.amin(selected_im), np.amax(selected_im))
-            self.channel_view.ui.histogram.setHistogramRange(0, max_dtype_val)
-            self.make_color_state(channel_index, (0, max_dtype_val), colormap_color, colorpos='default')
+            channel_histogram_max = self._channel_histogram_upper_bound()
+            self.channel_view.ui.histogram.setHistogramRange(0, channel_histogram_max)
+            self.make_color_state(channel_index, (0, channel_histogram_max), colormap_color, colorpos='default')
             # self.update_levels()
             logger.debug("Channel unknown")
         # Update the QSpinBox with the current channel index
@@ -1484,6 +1546,7 @@ class CompositeImageViewWidget(QMainWindow):
 
         gradient = state.get('gradient', {}) if isinstance(state, dict) else {}
         ticks = list(gradient.get('ticks', [])) if isinstance(gradient, dict) else []
+        # save the tick colors and their positions (norm. between 0 and 1 for the color gradient)
         if len(ticks) >= 2:
             ticks = sorted(ticks, key=lambda tick: tick[0])
             bottom_tick = ticks[0]
@@ -1648,7 +1711,7 @@ class CompositeImageViewWidget(QMainWindow):
                     (colormin_pos, (0, 0, 0, 255)),
                     (colormax_pos, color + (255,))
                 ],
-                'ticksVisible': False
+                'ticksVisible': True
             },
             'levels': (vmin, vmax),
             'mode': 'mono'
@@ -1683,8 +1746,8 @@ class CompositeImageViewWidget(QMainWindow):
         if len(top_color) == 3:
             top_color = top_color + (255,)
 
-        bottom_pos = preset_state.get("bottom_pos", vmin)
-        top_pos = preset_state.get("top_pos", vmax)
+        bottom_pos = preset_state.get("bottom_pos", 0.0)
+        top_pos = preset_state.get("top_pos", 1.0)
         try:
             bottom_pos = float(bottom_pos)
         except Exception:
@@ -1705,6 +1768,7 @@ class CompositeImageViewWidget(QMainWindow):
         if bottom_pos >= top_pos:
             bottom_pos, top_pos = 0.0, 1.0
 
+        self.set_colormap(index, tuple(top_color[:3]))
         self.histogram_states[index] = {
             'gradient': {
                 'mode': 'rgb',
@@ -1712,7 +1776,7 @@ class CompositeImageViewWidget(QMainWindow):
                     (bottom_pos, tuple(bottom_color)),
                     (top_pos, tuple(top_color))
                 ],
-                'ticksVisible': False
+                'ticksVisible': True
             },
             'levels': (vmin, vmax),
             'mode': 'mono'

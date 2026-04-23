@@ -24,6 +24,8 @@ nav:
   - Quickstart: quickstart.md
   - Concepts: concepts.md
   - Tutorials:
+      - 00 GUI basics:
+          - GUI and pyqtgraph basics: tutorials/00_gui_and_pyqtgraph_basics.md
       - 01 Data loading:
           - Loading 3D TIFF and 4D data: tutorials/01_loading_data.md
           - Spectral axis and channel labels: tutorials/01a_spectral_axis_and_channel_labels.md

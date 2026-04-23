@@ -91,6 +91,72 @@ If a `wavelength.json` file is present in the same folder as the TIFF, the GUI t
 
 > Screenshot placeholder: loaded 3D stack with channel slider, LUT controls, and spectral-axis widget.
 
+## Data Types And Intensity Handling
+
+The GUI uses a 16-bit-style loading pipeline so that very different TIFF inputs can still be handled consistently in the same analysis workflow.
+
+### What happens during TIFF loading
+
+When a TIFF is opened, the loader first converts the input array into the GUI's working intensity range:
+
+- `uint16` input is kept unchanged.
+- Smaller non-negative integer types are cast safely to `uint16`.
+- Integer types with values above `65535` are scaled down to `0 .. 65535` to avoid wrap-around.
+- Floating-point TIFFs are scaled to `0 .. 65535`.
+- Complex TIFFs are converted to absolute values first, then treated like floating-point data.
+- If negative values are present, the image is shifted to become non-negative before the `uint16` conversion.
+
+This means that unusual TIFF types such as `float32`, `float64`, `int32`, or `uint32` can be loaded, but their original absolute numeric scale is not preserved automatically. The loader maps them into the GUI's 16-bit working range.
+
+### Normalization after loading
+
+By default, newly loaded images are normalized once more to the full 16-bit display range:
+
+```text
+0 .. 65535
+```
+
+This is a global normalization over the loaded stack. It makes datasets with very different raw brightness easier to inspect, but it also means that the loaded values should be interpreted as a GUI working scale, not necessarily as untouched detector counts.
+
+### Invalid values and zeros
+
+Before the image enters the analysis pipeline:
+
+- `NaN` and `Inf` are replaced by `0`,
+- exact zeros are replaced by a very small positive epsilon.
+
+The epsilon replacement avoids later numerical issues in operations that assume strictly positive values. If this replacement is needed, the array is promoted to floating point internally.
+
+### What binning changes
+
+Spatial binning averages neighboring pixels. Averaging usually produces floating-point arrays even if the TIFF started as `uint16`.
+
+So the practical pipeline is often:
+
+```text
+TIFF -> uint16 working range -> optional normalization -> optional epsilon cleanup -> optional binned float image
+```
+
+The binned image is then the canonical image used for analysis and display.
+
+### What the analysis backends actually use
+
+PCA, NNMF, and fixed-H NNLS do not operate on integer math internally. The analysis code converts the working image into floating-point arrays where needed:
+
+- PCA works on floating-point data matrices,
+- scikit-learn NNMF uses `float32` input,
+- seed generation and similarity/NNLS-related steps often use `float64`,
+- fixed-H NNLS abundance maps are floating-point outputs.
+
+This is expected. The input TIFF may be 16-bit, but the fitted matrices and intermediate arrays are not limited to the original integer range.
+
+### Practical consequences
+
+- A `32-bit` TIFF can be loaded, but it will be remapped into the GUI's 16-bit working intensity range.
+- Binning can change the in-memory dtype from integer to floating point.
+- Exact raw detector units are only preserved if the original data already fit the current 16-bit workflow and no global renormalization is applied.
+- High abundance values in NNMF or NNLS results are not automatically a bug. `W` is a fitted coefficient map, not a copy of the original TIFF intensities.
+
 ## Loading 4D TIFF / Hyperstack Data
 
 When the loaded TIFF is 4D, an axis selection dialog appears. Choose:

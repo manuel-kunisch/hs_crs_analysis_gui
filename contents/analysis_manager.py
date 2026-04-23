@@ -69,6 +69,8 @@ class AnalysisManager(QtCore.QObject):
         self._fixed_seed_W_counts: dict[int, int] = {}  # component -> number of fixed W maps averaged into the stored mean
         self.rolling_ball_preview_dialog: QtWidgets.QDialog | None = None
         self.wavenumbers = None
+        self.spectral_units = "cm⁻¹"
+        self.axis_labels = None
         self._analysis_series_4d: np.ndarray | None = None
         self._analysis_series_label: str = "Slice"
         self._analysis_series_index: int = 0
@@ -95,6 +97,7 @@ class AnalysisManager(QtCore.QObject):
         self.custom_init_check: QtWidgets.QCheckBox | None = None
         self.fixed_h_nnls_only_check: QtWidgets.QCheckBox | None = None
         self.fast_multislice_nnmf_check: QtWidgets.QCheckBox | None = None
+        self.scale_w_to_16bit_check: QtWidgets.QCheckBox | None = None
 
         # set up thread for analysis
         self.thread_analysis = QtCore.QThread()
@@ -421,7 +424,21 @@ class AnalysisManager(QtCore.QObject):
         self.analyze_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         self.analyze_button.setMinimumSize(170, 52)
         self.analyze_button.clicked.connect(self.analyze_data)
-        run_layout.addWidget(self.analyze_button)
+
+        self.scale_w_to_16bit_check = QtWidgets.QCheckBox("Scale W to 16-bit")
+        self.scale_w_to_16bit_check.setChecked(True)
+        self.scale_w_to_16bit_check.setToolTip(
+            "Globally scale displayed NNMF/NNLS W maps to uint16. "
+            "Disable this to inspect raw floating-point W values."
+        )
+
+        run_button_row = QtWidgets.QHBoxLayout()
+        run_button_row.setContentsMargins(0, 0, 0, 0)
+        run_button_row.setSpacing(10)
+        run_button_row.addWidget(self.analyze_button)
+        run_button_row.addWidget(self.scale_w_to_16bit_check, alignment=QtCore.Qt.AlignVCenter)
+        run_button_row.addStretch(1)
+        run_layout.addLayout(run_button_row)
 
         self.analysis_progress_widget = QtWidgets.QWidget()
         progress_layout = QtWidgets.QHBoxLayout(self.analysis_progress_widget)
@@ -469,6 +486,7 @@ class AnalysisManager(QtCore.QObject):
         self.res_settings_widget_columns = {option: i for i, option in enumerate(res_settings_options)}
         self.resonance_table.setColumnCount(len(res_settings_options))
         self.resonance_table.setHorizontalHeaderLabels(res_settings_options)
+        self._refresh_spectral_column_labels()
         self.resonance_table.setAcceptDrops(True)
         self.resonance_table.setAlternatingRowColors(True)
         self.resonance_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
@@ -1493,6 +1511,7 @@ class AnalysisManager(QtCore.QObject):
                      self.res_settings_widget_columns["Amplitude"]]:
             item = self.resonance_table.cellWidget(row_position, cell)
             item.valueChanged.connect(lambda: self.callback_res_settings(self.resonance_table.currentRow()))
+        self._refresh_spectral_column_labels()
         self.callback_res_settings(row_position)
         self._refresh_resonance_table_layout()
 
@@ -1504,6 +1523,11 @@ class AnalysisManager(QtCore.QObject):
             color = self.color_manager.get_qcolor(comp_idx)
             btn_color: ColorButton = self.resonance_table.cellWidget(row, self.res_settings_widget_columns["Color"])
             btn_color.setColor(color)
+
+    def scale_w_to_16bit_enabled(self) -> bool:
+        if self.scale_w_to_16bit_check is None:
+            return True
+        return bool(self.scale_w_to_16bit_check.isChecked())
 
     def remove_res_settings(self, row):
         self.resonance_table.removeRow(row)
@@ -2409,6 +2433,11 @@ class AnalysisManager(QtCore.QObject):
 
             del blockers
 
+        # The component combobox is restored under signal blockers above, so the
+        # usual currentIndexChanged path never gets a chance to sync the row color
+        # button from the shared component color manager.
+        self.reload_colors()
+
         # now propagate to analyzer + gaussian dummy ROIs + highlights
         self.update_spectral_info()
         self.highlight_all_resonances()
@@ -2429,6 +2458,7 @@ class AnalysisManager(QtCore.QObject):
             "fixed_h_nnls_mode": bool(self._fixed_h_mode_enabled()),
             "fixed_h_nnls_only": bool(self._use_fixed_h_nnls_only()),
             "fast_multislice_nnmf": bool(self._use_fast_multislice_nnmf()),
+            "scale_w_to_16bit": bool(self.scale_w_to_16bit_enabled()),
         }
 
     def import_seed_init_state(self, state: dict | list | tuple | None):
@@ -2491,24 +2521,30 @@ class AnalysisManager(QtCore.QObject):
             del blocker
         self._sync_fixed_h_mode_seed_requirements()
 
-    def set_spectral_units(self, unit: str):
-        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
-        self.spectral_units = unit
+        if self.scale_w_to_16bit_check is not None:
+            blocker = QtCore.QSignalBlocker(self.scale_w_to_16bit_check)
+            self.scale_w_to_16bit_check.setChecked(bool(settings.get("scale_w_to_16bit", True)))
+            del blocker
 
+    def _refresh_spectral_column_labels(self):
         # Header text (keep your internal column keys "Wavenumber"/"Width"!)
         wn_col = self.res_settings_widget_columns.get("Wavenumber")
         wd_col = self.res_settings_widget_columns.get("Width")
+        axis_labels = getattr(self, "axis_labels", None)
+        unit = getattr(self, "spectral_units", "cm⁻¹")
+        wn_label = "Channel" if axis_labels is not None else ("Wavelength (nm)" if unit == "nm" else "Wavenumber (cm⁻¹)")
+        wd_label = "Width (channels)" if axis_labels is not None else ("Width (nm)" if unit == "nm" else "Width (cm⁻¹)")
+        suffix = " ch" if axis_labels is not None else (" nm" if unit == "nm" else " cm⁻¹")
         if wn_col is not None:
             item = self.resonance_table.horizontalHeaderItem(wn_col)
             if item:
-                item.setText("Wavelength (nm)" if unit == "nm" else "Wavenumber (cm⁻¹)")
+                item.setText(wn_label)
         if wd_col is not None:
             item = self.resonance_table.horizontalHeaderItem(wd_col)
             if item:
-                item.setText("Width (nm)" if unit == "nm" else "Width (cm⁻¹)")
+                item.setText(wd_label)
 
         # Spinbox suffixes for existing rows
-        suffix = (" nm" if unit == "nm" else " cm⁻¹")
         for row in range(self.resonance_table.rowCount()):
             wn_sb = self.resonance_table.cellWidget(row, wn_col) if wn_col is not None else None
             wd_sb = self.resonance_table.cellWidget(row, wd_col) if wd_col is not None else None
@@ -2516,6 +2552,15 @@ class AnalysisManager(QtCore.QObject):
                 wn_sb.setSuffix(suffix)
             if hasattr(wd_sb, "setSuffix"):
                 wd_sb.setSuffix(suffix)
+
+    def set_axis_labels(self, labels):
+        self.axis_labels = None if labels is None else [str(label) for label in labels]
+        self._refresh_spectral_column_labels()
+
+    def set_spectral_units(self, unit: str):
+        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
+        self.spectral_units = unit
+        self._refresh_spectral_column_labels()
 
         # If seed window is open, update its axis label too
         if getattr(self, "seed_window", None) is not None:

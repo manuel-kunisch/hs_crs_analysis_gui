@@ -224,6 +224,7 @@ class MainApplication(QtWidgets.QMainWindow):
         self.result_viewer_widget.update_wavenumbers(wavenumbers)
         axis_labels = self.data_handler.wavenumber_widget.custom_axis_labels
         self.data_widget.set_spectral_axis_labels(axis_labels)
+        self.analysis_manager.set_axis_labels(axis_labels)
         self.result_viewer_widget.set_axis_labels(axis_labels)
         # Inform Analyzer
 
@@ -323,6 +324,7 @@ class MainApplication(QtWidgets.QMainWindow):
         logger.info(f'Results data {analyzed_img.shape = }')
         is_nnmf = self.analysis_manager.nnmf_radio.isChecked()
         self.result_viewer_widget.set_result_mode("NNMF" if is_nnmf else "PCA")
+        self.result_viewer_widget.set_scale_w_to_uint16(self.analysis_manager.scale_w_to_16bit_enabled())
         result_spectral_axis = 1 if analyzed_img.ndim == 4 else 0
         self.result_viewer_widget.update_image(analyzed_img,
                                                spectral_cmps=spectral_cmps,
@@ -503,7 +505,21 @@ class MainApplication(QtWidgets.QMainWindow):
                 self.data_handler.set_current_slice_index(int(saved_slice_index))
             except Exception as exc:
                 logger.warning("Could not restore preset slice index %s: %s", saved_slice_index, exc)
-        # 5) ROIs (after image+binning+wavenumbers exist)
+
+        # 5) Restore color manager states and in result viewer
+        hist = preset.get("histogram_states", None)
+        if isinstance(hist, dict):
+            # Restore saved LUT colors before ROIs/resonance rows are rebuilt so
+            # generated Gaussian model ROIs pick up the preset component colors.
+            for k, st in hist.items():
+                try:
+                    idx = int(k)
+                    logger.info("Restoring histogram preset for component %s", idx)
+                    self.result_viewer_widget.restore_histogram_state_from_preset(idx, st)
+                except Exception as exc:
+                    logger.warning("Failed to restore histogram preset for component %s: %s", k, exc)
+
+        # 6) ROIs (after image+binning+wavenumbers exist)
         roi_state = preset.get("roi_manager", None)
         if roi_state and hasattr(self.data_widget.roi_manager, "import_state"):
             try:
@@ -514,7 +530,7 @@ class MainApplication(QtWidgets.QMainWindow):
                 else:
                     logger.warning("Preset image is missing; ROI import could not be restored: %s", exc)
 
-        # 6) analysis settings + resonance table
+        # 7) analysis settings + resonance table
         self.analysis_manager.num_components_spinbox.setValue(int(preset.get("num_components", 3)))
         custom_model = bool(preset.get("custom_model", True))
         if self.analysis_manager.custom_init_check is not None:
@@ -572,7 +588,7 @@ class MainApplication(QtWidgets.QMainWindow):
             self.analysis_manager.import_resonance_table_state(rows)
 
 
-        # 7) result-viewer histograms + labels (your existing structure)
+        # 8) result-viewer histograms + labels
         labels = preset.get("labels", None)
         if isinstance(labels, dict) and labels:
             # snapshot so iteration can't be affected
@@ -586,17 +602,6 @@ class MainApplication(QtWidgets.QMainWindow):
                     self.result_viewer_widget.update_label(int(k), v)  # update_label should fill custom_labels
                 except Exception:
                     pass
-
-        hist = preset.get("histogram_states", None)
-        if isinstance(hist, dict):
-            # Restore saved color states when available.
-            for k, st in hist.items():
-                try:
-                    idx = int(k)
-                    logger.info("Restoring histogram preset for component %s", idx)
-                    self.result_viewer_widget.restore_histogram_state_from_preset(idx, st)
-                except Exception as exc:
-                    logger.warning("Failed to restore histogram preset for component %s: %s", k, exc)
 
     def switch_section(self, index):
         self.stack_widget.setCurrentIndex(index)

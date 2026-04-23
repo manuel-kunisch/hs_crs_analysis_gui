@@ -179,7 +179,7 @@ class ImageLoader(QtWidgets.QWidget):
     def load_tiff(self, fpath):
         # check if a wavelength json file is in the directory
         self.try_load_wavelength_json(os.path.dirname(fpath))
-        image = imread(fpath).astype(np.uint16)     # assume 16 bit image and read in as such
+        image = self._prepare_loaded_tiff_dtype(imread(fpath), fpath)
         self._apply_tiff_pixel_size_metadata(fpath)
         self.drag_label.setText(f"✔ Loaded: {fpath.split('/')[-1]}")
         logger.info(f"Loaded image from {fpath}")
@@ -206,6 +206,75 @@ class ImageLoader(QtWidgets.QWidget):
 
         self.image = corrected  # load as image and trigger callback attached to update_img_callback
         return self.image
+
+    @staticmethod
+    def _prepare_loaded_tiff_dtype(image: np.ndarray, fpath: str) -> np.ndarray:
+        """
+        Convert TIFF input to the GUI's current 16-bit working range without
+        silently wrapping 32-bit or float images.
+        """
+        image = np.asarray(image)
+        if image.dtype == np.uint16:
+            return image
+
+        original_dtype = image.dtype
+        is_float_input = np.issubdtype(original_dtype, np.floating)
+        if np.issubdtype(original_dtype, np.complexfloating):
+            logger.warning("Loaded complex TIFF %s. Using absolute values before conversion to uint16.", fpath)
+            image = np.abs(image)
+            is_float_input = True
+
+        working = np.asarray(image, dtype=np.float32)
+        finite_mask = np.isfinite(working)
+        if not np.any(finite_mask):
+            logger.warning("Loaded TIFF %s contains no finite values. Replacing image with zeros.", fpath)
+            return np.zeros(working.shape, dtype=np.uint16)
+
+        finite_values = working[finite_mask]
+        min_val = float(np.min(finite_values))
+        max_val = float(np.max(finite_values))
+
+        if min_val < 0:
+            logger.warning(
+                "Loaded TIFF %s has negative values (min %.6g). Shifting to non-negative before uint16 conversion.",
+                fpath,
+                min_val,
+            )
+            working = working - min_val
+            max_val -= min_val
+            min_val = 0.0
+
+        working = np.nan_to_num(working, nan=0.0, posinf=max_val, neginf=0.0)
+
+        if max_val <= 0:
+            logger.warning("Loaded TIFF %s has zero dynamic range after conversion. Returning zeros.", fpath)
+            return np.zeros(working.shape, dtype=np.uint16)
+
+        if is_float_input:
+            logger.info(
+                "Loaded %s TIFF %s. Scaling floating-point values [%.6g, %.6g] to 0..65535.",
+                original_dtype,
+                fpath,
+                min_val,
+                max_val,
+            )
+            scaled = working * (np.iinfo(np.uint16).max / max_val)
+            return np.clip(scaled, 0, np.iinfo(np.uint16).max).astype(np.uint16)
+
+        if max_val <= np.iinfo(np.uint16).max and min_val >= 0:
+            logger.info("Loaded %s TIFF %s; casting safely to uint16.", original_dtype, fpath)
+            return np.clip(working, 0, np.iinfo(np.uint16).max).astype(np.uint16)
+
+        logger.warning(
+            "Loaded %s TIFF %s with values outside uint16 range [%.6g, %.6g]. "
+            "Scaling to 0..65535 to avoid overflow/wrap-around.",
+            original_dtype,
+            fpath,
+            min_val,
+            max_val,
+        )
+        scaled = working * (np.iinfo(np.uint16).max / max_val)
+        return np.clip(scaled, 0, np.iinfo(np.uint16).max).astype(np.uint16)
 
     def _apply_tiff_pixel_size_metadata(self, fpath: str):
         pixel_size_meta = self._read_tiff_pixel_size_metadata(fpath)

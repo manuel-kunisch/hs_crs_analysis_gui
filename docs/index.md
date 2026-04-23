@@ -21,6 +21,10 @@ TODO:
 
 The tutorials explain the app from the basic workflow upward. They are intentionally modality-independent first; dataset-specific examples are listed separately below.
 
+### 00 GUI basics
+
+- [GUI and pyqtgraph basics](tutorials/00_gui_and_pyqtgraph_basics.md)
+
 ### 01 Data loading
 
 - [Loading 3D TIFF and 4D data](tutorials/01_loading_data.md)

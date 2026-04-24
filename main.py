@@ -228,7 +228,7 @@ class MainApplication(QtWidgets.QMainWindow):
         self.result_viewer_widget.set_axis_labels(axis_labels)
         # Inform Analyzer
 
-    def update_data(self, img_array=None):
+    def update_data(self, img_array=None, preserve_channel: bool = False):
         logging.warning('Updating data')
         if img_array is None:
             img_array = self.get_current_image()
@@ -238,7 +238,7 @@ class MainApplication(QtWidgets.QMainWindow):
             current_slice_index=self.data_handler.get_current_slice_index(),
         )
         self.analysis_manager.update_image_data(img_array, self.data_handler.wavenumber_widget.wavenumbers)
-        self.data_widget.update_img(img_array)
+        self.data_widget.update_img(img_array, preserve_channel=preserve_channel)
         # make the roi manager highlight all rois again if spectral info exists
         self.data_widget.roi_manager.roi_plotter.remove_all_highlights()
         self.analysis_manager.highlight_all_resonances()

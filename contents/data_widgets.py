@@ -396,11 +396,12 @@ class DataWidget(QtWidgets.QWidget):
     def autoscale_image(self):
         self.raman_raw_image_view.autoLevels()
 
-    def update_img(self, img: np.ndarray):
+    def update_img(self, img: np.ndarray, preserve_channel: bool = False):
         self.image = img
         logger.info("Updating ROI manager data")
         self.roi_manager.update_data(img)
-        self.raman_raw_image_view.request_single_autoplay_cycle(reset_to_start=True)
+        if not preserve_channel:
+            self.raman_raw_image_view.request_single_autoplay_cycle(reset_to_start=True)
         # pass data to ROI manager, calculate the subtracted data etc.
         if self.show_processed_image_check.isChecked():
             self.callback_processed_img(True)
@@ -408,7 +409,7 @@ class DataWidget(QtWidgets.QWidget):
         if self.show_average_image_check.isChecked():
             self.show_average_image(True)
             return
-        self.display_raw_image(keep_view=False)
+        self.display_raw_image(keep_view=preserve_channel)
 
     def display_raw_image(self, keep_view=True):
         logger.info('Displaying image')
@@ -1449,7 +1450,7 @@ class DataHandler(QtWidgets.QWidget):
         self._current_slice_index = index
         self._display_image = self._analysis_image[index]
         self._update_slice_selector()
-        self.update_image_callback(self._display_image)
+        self.update_image_callback(self._display_image, preserve_channel=True)
 
     def _apply_binning_to_canonical_image(self):
         if self._source_image is None:

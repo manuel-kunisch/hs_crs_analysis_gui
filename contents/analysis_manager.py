@@ -97,7 +97,7 @@ class AnalysisManager(QtCore.QObject):
         self.custom_init_check: QtWidgets.QCheckBox | None = None
         self.fixed_h_nnls_only_check: QtWidgets.QCheckBox | None = None
         self.fast_multislice_nnmf_check: QtWidgets.QCheckBox | None = None
-        self.scale_w_to_16bit_check: QtWidgets.QCheckBox | None = None
+        self.scale_nnmf_result_to_max_check: QtWidgets.QCheckBox | None = None
 
         # set up thread for analysis
         self.thread_analysis = QtCore.QThread()
@@ -306,7 +306,12 @@ class AnalysisManager(QtCore.QObject):
         )
         self.fixed_h_nnls_only_check.stateChanged.connect(self._sync_fixed_h_mode_seed_requirements)
         method_layout.addWidget(self.fixed_h_nnls_only_check)
-        self.fast_multislice_nnmf_check = None
+        self.fast_multislice_nnmf_check = QtWidgets.QCheckBox("4D: NNMF ref slice, NNLS others")
+        self.fast_multislice_nnmf_check.setToolTip(
+            "4D only: run full NNMF on the currently selected slice and reuse the resulting H "
+            "as fixed spectra for NNLS on the remaining slices."
+        )
+        method_layout.addWidget(self.fast_multislice_nnmf_check)
         method_layout.addStretch(1)
         analysis_layout.addWidget(method_panel)
         analysis_layout.addWidget(_make_divider())
@@ -382,7 +387,16 @@ class AnalysisManager(QtCore.QObject):
         self.nnls_max_iter_spinbox.valueChanged.connect(self.mv_analyzer.set_nnls_max_iter)
         options_form.addRow(nnls_iters_label, self.nnls_max_iter_spinbox)
 
+        self.scale_nnmf_result_to_max_check = QtWidgets.QCheckBox("Scale results to 16-bit")
+        self.scale_nnmf_result_to_max_check.setToolTip(
+            "Scale the W maps only in the result viewer to the 16-bit range. "
+            "Disable this to inspect raw floating-point W values."
+        )
+        self.scale_nnmf_result_to_max_check.setChecked(bool(self.mv_analyzer._scale_nnmf_result_to_max))
+        self.scale_nnmf_result_to_max_check.stateChanged.connect(self.mv_analyzer.set_scale_nnmf_result_to_max)
+
         options_layout.addLayout(options_form)
+        options_layout.addWidget(self.scale_nnmf_result_to_max_check)
         options_layout.addStretch(1)
         analysis_layout.addWidget(options_panel)
         analysis_layout.addStretch(1)
@@ -397,8 +411,10 @@ class AnalysisManager(QtCore.QObject):
             self.nnmf_max_iter_spinbox,
             nnls_iters_label,
             self.nnls_max_iter_spinbox,
+            self.scale_nnmf_result_to_max_check,
             custom_init_check,
             self.fixed_h_nnls_only_check,
+            self.fast_multislice_nnmf_check,
         ]
 
         self._sync_nnmf_backend_controls()
@@ -425,18 +441,10 @@ class AnalysisManager(QtCore.QObject):
         self.analyze_button.setMinimumSize(170, 52)
         self.analyze_button.clicked.connect(self.analyze_data)
 
-        self.scale_w_to_16bit_check = QtWidgets.QCheckBox("Scale W to 16-bit")
-        self.scale_w_to_16bit_check.setChecked(True)
-        self.scale_w_to_16bit_check.setToolTip(
-            "Globally scale displayed NNMF/NNLS W maps to uint16. "
-            "Disable this to inspect raw floating-point W values."
-        )
-
         run_button_row = QtWidgets.QHBoxLayout()
         run_button_row.setContentsMargins(0, 0, 0, 0)
         run_button_row.setSpacing(10)
         run_button_row.addWidget(self.analyze_button)
-        run_button_row.addWidget(self.scale_w_to_16bit_check, alignment=QtCore.Qt.AlignVCenter)
         run_button_row.addStretch(1)
         run_layout.addLayout(run_button_row)
 
@@ -730,6 +738,7 @@ class AnalysisManager(QtCore.QObject):
 
     def _run_analysis_job(self):
         if self._use_fixed_h_nnls_only():
+            # 3d fixed H NNLS
             self.mv_analyzer.fixed_H = np.array(self.mv_analyzer.seed_H, copy=True)
             self.mv_analyzer.fixed_W = np.array(self.mv_analyzer.seed_W, copy=True)
             self.mv_analyzer.fixed_W_2D = self.mv_analyzer.fixed_W.reshape(
@@ -772,7 +781,8 @@ class AnalysisManager(QtCore.QObject):
         solver = self.mv_analyzer.nnmf_solver
         backend_preference = self.mv_analyzer.nnmf_backend_preference
         w_seed_mode = self.mv_analyzer.w_seed_mode
-        fast_mode = bool(custom_init and self._use_fast_multislice_nnmf())
+        fixed_h_multislice_mode = bool(self._fixed_h_mode_enabled() and self._analysis_series_4d is not None)
+        fast_mode = bool(self._use_fast_multislice_nnmf())
         reference_slice_index = int(np.clip(self._analysis_series_index, 0, series.shape[0] - 1))
 
         display_data = None if self.z3D_data is None else np.array(self.z3D_data, copy=True)
@@ -785,23 +795,55 @@ class AnalysisManager(QtCore.QObject):
         images_per_slice = []
         reference_result = None
         fit_info_per_slice: list[dict | None] | None = [] if analysis_method != "PCA" else None
-        reference_fit_info = None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
+        reference_fit_info = None
 
         if fast_mode:
+            # first step in hybrid mode: run NNMF on the user-selected slice
             logger.info(
-                "4D fast mode enabled: reusing the reference-slice NNLS seed result on %s %s and "
-                "recomputing the same fixed-H NNLS seed maps on the remaining slices.",
+                "4D hybrid NNMF/NNLS mode enabled: running full NNMF on %s %s and "
+                "rebuilding the remaining slices with the fixed-H seed/NNLS path from that result.",
                 self._analysis_series_label.lower(),
                 reference_slice_index + 1,
             )
+            reference_slice = np.array(series[reference_slice_index], copy=True)
+            self.z3D_data = reference_slice
+            self.mv_analyzer.update_image_data(reference_slice, n_components, wavenumbers)
+            if spectral_info is not None:
+                self.mv_analyzer.update_spectral_info(spectral_info)
+            self.mv_analyzer.set_custom_nnmf_init(custom_init)
+            self.mv_analyzer.set_nnmf_solver(solver)
+            self.mv_analyzer.set_nnmf_backend_preference(backend_preference)
+            self.mv_analyzer.set_W_seed_mode(w_seed_mode)
+            self._update_multislice_modified_data(reference_slice)
+
+            if custom_init:
+                self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
+                self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
+                self.mv_analyzer.seed_W = None if display_seed_W is None else np.array(display_seed_W, copy=True)
+                self.mv_analyzer._W_prepared = bool(self.mv_analyzer.seed_W is not None and np.all(self.mv_analyzer.seed_W))
+                if not self.mv_analyzer._W_prepared:
+                    self.mv_analyzer.seed_W = None
+                    self.mv_analyzer.estimate_W_seed_matrix_from_H(
+                        overwrite=True,
+                        skip_components=fixed_seed_W.keys(),
+                    )
+                    self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
+                    if self.mv_analyzer.seed_W is None:
+                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
+                for comp, fixed_W in fixed_seed_W.items():
+                    if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
+                        self.mv_analyzer.seed_W[:, comp] = fixed_W
+                self.mv_analyzer._W_prepared = bool(self.mv_analyzer.seed_W is not None and np.all(self.mv_analyzer.seed_W))
+                self.mv_analyzer.NNMF(skip_seed_fining=True)
+            else:
+                self.mv_analyzer.randomNNMF()
+
+            self._apply_fixed_W_overrides_to_results(fixed_seed_W)
             reference_result = {
-                "H": None if display_seed_H is None else np.array(display_seed_H[:n_components], copy=True),
-                "W": None if display_seed_W is None else display_seed_W.reshape(
-                    self.mv_analyzer.raw_data_3d.shape[1],
-                    self.mv_analyzer.raw_data_3d.shape[2],
-                    -1,
-                ).transpose(2, 0, 1)[:n_components],
+                "H": np.array(self.mv_analyzer.fixed_H[:n_components], copy=True),
+                "W": np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True),
             }
+            reference_fit_info = None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
 
         for slice_index in range(series.shape[0]):
             slice_data = np.array(series[slice_index], copy=True)
@@ -832,9 +874,26 @@ class AnalysisManager(QtCore.QObject):
                 self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
                 continue
 
-            if fast_mode:
+            if fixed_h_multislice_mode:
+                # runs the NNLS with the H seeds by forcing the W seed mode to the abundance matrix
                 seed_result = self._build_fixed_h_seed_result(
                     H_template=display_seed_H,
+                    H_background_template=display_seed_H_bg,
+                    fixed_seed_W=fixed_seed_W,
+                )
+                spectra_per_slice.append(np.array(seed_result["H"][:n_components], copy=True))
+                images_per_slice.append(np.array(seed_result["W"][:n_components], copy=True))
+                if fit_info_per_slice is not None:
+                    fit_info_per_slice.append(
+                        None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
+                    )
+                self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
+                continue
+
+            if fast_mode:
+                # hybrid mode: user slice NNMF, rest NNLS
+                seed_result = self._build_fixed_h_seed_result(
+                    H_template=reference_result["H"],
                     H_background_template=display_seed_H_bg,
                     fixed_seed_W=fixed_seed_W,
                 )
@@ -934,7 +993,13 @@ class AnalysisManager(QtCore.QObject):
         return self._fixed_h_mode_enabled() and self._analysis_series_4d is None
 
     def _use_fast_multislice_nnmf(self) -> bool:
-        return self._fixed_h_mode_enabled() and self._analysis_series_4d is not None
+        return bool(
+            self.nnmf_radio.isChecked()
+            and not self._fixed_h_mode_enabled()
+            and self.fast_multislice_nnmf_check is not None
+            and self.fast_multislice_nnmf_check.isChecked()
+            and self._analysis_series_4d is not None
+        )
 
     def _sync_fixed_h_mode_seed_requirements(self, state=None):
         fixed_h_mode = self._fixed_h_mode_enabled()
@@ -942,6 +1007,8 @@ class AnalysisManager(QtCore.QObject):
             self._ensure_nnls_seed_mode_selected()
         if self.w_seed_mode_dropdown is not None:
             self.w_seed_mode_dropdown.setEnabled(not fixed_h_mode)
+        if self.fast_multislice_nnmf_check is not None:
+            self.fast_multislice_nnmf_check.setEnabled(not fixed_h_mode and self._analysis_series_4d is not None)
 
     def _ensure_nnls_seed_mode_selected(self):
         target_label = "NNLS abundance map"
@@ -962,11 +1029,16 @@ class AnalysisManager(QtCore.QObject):
             H_background_template: np.ndarray | None,
             fixed_seed_W: dict[int, np.ndarray],
     ) -> dict:
+        """
+        Run the NNLS with the finished H seeds in H_template
+        """
+        # importantly, this function modifies the analyzer's seed_H and seed_W in-place to run the NNLS with those seeds
         self._ensure_nnls_seed_mode_selected()
         self.mv_analyzer.seed_H = None if H_template is None else np.array(H_template, copy=True)
         self.mv_analyzer.seed_H_background_flag = None if H_background_template is None else np.array(H_background_template, copy=True)
         self.mv_analyzer.seed_W = None
         self.mv_analyzer._W_prepared = False
+        # by ensuring NNLS mode, the next method will compute the NNLS abundance maps from the H components
         self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
         self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
         if self.mv_analyzer.seed_W is None:
@@ -1525,9 +1597,9 @@ class AnalysisManager(QtCore.QObject):
             btn_color.setColor(color)
 
     def scale_w_to_16bit_enabled(self) -> bool:
-        if self.scale_w_to_16bit_check is None:
+        if self.scale_nnmf_result_to_max_check is None:
             return True
-        return bool(self.scale_w_to_16bit_check.isChecked())
+        return bool(self.scale_nnmf_result_to_max_check.isChecked())
 
     def remove_res_settings(self, row):
         self.resonance_table.removeRow(row)
@@ -2458,7 +2530,7 @@ class AnalysisManager(QtCore.QObject):
             "fixed_h_nnls_mode": bool(self._fixed_h_mode_enabled()),
             "fixed_h_nnls_only": bool(self._use_fixed_h_nnls_only()),
             "fast_multislice_nnmf": bool(self._use_fast_multislice_nnmf()),
-            "scale_w_to_16bit": bool(self.scale_w_to_16bit_enabled()),
+            "scale_results_to_16bit": bool(self.mv_analyzer._scale_nnmf_result_to_max),
         }
 
     def import_seed_init_state(self, state: dict | list | tuple | None):
@@ -2512,7 +2584,7 @@ class AnalysisManager(QtCore.QObject):
         fixed_h_mode = bool(
             settings.get(
                 "fixed_h_nnls_mode",
-                bool(settings.get("fixed_h_nnls_only", False) or settings.get("fast_multislice_nnmf", False)),
+                bool(settings.get("fixed_h_nnls_only", False)),
             )
         )
         if self.fixed_h_nnls_only_check is not None:
@@ -2521,9 +2593,32 @@ class AnalysisManager(QtCore.QObject):
             del blocker
         self._sync_fixed_h_mode_seed_requirements()
 
-        if self.scale_w_to_16bit_check is not None:
-            blocker = QtCore.QSignalBlocker(self.scale_w_to_16bit_check)
-            self.scale_w_to_16bit_check.setChecked(bool(settings.get("scale_w_to_16bit", True)))
+        if self.fast_multislice_nnmf_check is not None:
+            blocker = QtCore.QSignalBlocker(self.fast_multislice_nnmf_check)
+            self.fast_multislice_nnmf_check.setChecked(bool(settings.get("fast_multislice_nnmf", False)))
+            del blocker
+
+        scale_nnmf_result = bool(
+            settings.get(
+                "scale_results_to_16bit",
+                settings.get("scale_nnmf_result_to_max", self.mv_analyzer._scale_nnmf_result_to_max),
+            )
+        )
+        self.mv_analyzer.set_scale_nnmf_result_to_max(scale_nnmf_result)
+        if self.scale_nnmf_result_to_max_check is not None:
+            blocker = QtCore.QSignalBlocker(self.scale_nnmf_result_to_max_check)
+            self.scale_nnmf_result_to_max_check.setChecked(scale_nnmf_result)
+            del blocker
+
+        legacy_scale_w_to_16bit = settings.get("scale_w_to_16bit", None)
+        uses_legacy_scale_only = (
+            "scale_results_to_16bit" not in settings
+            and "scale_nnmf_result_to_max" not in settings
+        )
+        if uses_legacy_scale_only and legacy_scale_w_to_16bit is not None and self.scale_nnmf_result_to_max_check is not None:
+            self.mv_analyzer.set_scale_nnmf_result_to_max(bool(legacy_scale_w_to_16bit))
+            blocker = QtCore.QSignalBlocker(self.scale_nnmf_result_to_max_check)
+            self.scale_nnmf_result_to_max_check.setChecked(bool(legacy_scale_w_to_16bit))
             del blocker
 
     def _refresh_spectral_column_labels(self):

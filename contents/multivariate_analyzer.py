@@ -359,7 +359,12 @@ class MultivariateAnalyzer(object):
         logger.info('Using subtracted data for W seed estimation from H.')
         return self.resonance_data_2d, 'subtracted'
 
-    def _get_seed_basis(self, eps: float = 1e-8) -> tuple[np.ndarray, dict[int, int]]:
+    def _get_seed_basis(
+            self,
+            eps: float = 1e-8,
+            *,
+            scale_to_unity: bool = False,
+    ) -> tuple[np.ndarray, dict[int, int]]:
         if self.seed_H is None:
             return np.empty((self.raw_data_3d.shape[0], 0), dtype=np.float64), {}
 
@@ -369,7 +374,10 @@ class MultivariateAnalyzer(object):
             spectrum = self.seed_H[component_index]
             if not self._has_seed_signal(spectrum, eps=eps):
                 continue
-            prepared = self._prepare_seed_spectrum(spectrum, eps=eps)
+            if scale_to_unity:
+                prepared = self._prepare_seed_spectrum(spectrum, eps=eps)
+            else:
+                prepared = self._prepare_fixed_h_component(spectrum, eps=eps)
             if prepared is None:
                 continue
             component_to_basis[component_index] = len(basis_columns)
@@ -626,7 +634,7 @@ class MultivariateAnalyzer(object):
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
         working_data = np.maximum(working_data, 0.0)
         target_strength = np.maximum(working_data @ prepared_target, 0.0)
-        basis, component_to_basis = self._get_seed_basis(eps=eps)
+        basis, component_to_basis = self._get_seed_basis(eps=eps, scale_to_unity=True)
 
         if basis.shape[1] <= 1 or component_index not in component_to_basis:
             logger.info('Selective score map for component %s falls back to target projection (no competitors).',
@@ -648,7 +656,7 @@ class MultivariateAnalyzer(object):
             eps: float,
             source_key: str,
     ) -> np.ndarray:
-        basis, component_to_basis = self._get_seed_basis(eps=eps)
+        basis, component_to_basis = self._get_seed_basis(eps=eps, scale_to_unity=False)
         if component_index not in component_to_basis:
             logger.info('NNLS abundance map for component %s falls back to target projection (target basis missing).',
                         component_index)
@@ -794,10 +802,6 @@ class MultivariateAnalyzer(object):
         self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(self.data_2d, init='random')
         self.last_nnmf_info = dict(fit_info)
         self.last_nnmf_info["mode"] = "random_nnmf"
-        if self._scale_nnmf_result_to_max:
-            normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
-            # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
-            self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H * normalization_factor
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
         logger.info("Random NNMF outcome:")
@@ -1183,7 +1187,10 @@ class MultivariateAnalyzer(object):
             # can be used later; not used yet
             logger.debug('spectral_info is currently not used inside estimate_W_seed_with_H.')
 
-        prepared_target = self._prepare_seed_spectrum(H, eps=eps)
+        if self.w_seed_mode == 'nnls':
+            prepared_target = self._prepare_fixed_h_component(H, eps=eps)
+        else:
+            prepared_target = self._prepare_seed_spectrum(H, eps=eps)
         if prepared_target is None:
             logger.warning('Component %s has no usable H seed shape. Falling back to averaged image.', component_index)
             W_image = np.mean(self.data_2d, axis=1)
@@ -1333,10 +1340,6 @@ class MultivariateAnalyzer(object):
         )
         self.last_nnmf_info = dict(fit_info)
         self.last_nnmf_info["mode"] = "seeded_nnmf"
-        if self._scale_nnmf_result_to_max:
-            normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
-            # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
-            self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
         logger.info("Custom NNMF outcome: backend=%s, #Iter=%s", fit_info.get("backend"), fit_info.get("n_iter"))

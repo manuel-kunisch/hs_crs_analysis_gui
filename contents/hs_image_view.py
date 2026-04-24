@@ -83,6 +83,20 @@ class RamanImageView(ImageViewLineRoi):
             self.update_timeline_ticks()
             self.updateImage()
 
+    def _capture_histogram_state(self):
+        try:
+            return self.getHistogramWidget().saveState()
+        except Exception:
+            return None
+
+    def _restore_histogram_state(self, state):
+        if state is None:
+            return
+        try:
+            self.getHistogramWidget().restoreState(state)
+        except Exception:
+            logger.debug('Could not restore RamanImageView histogram state.', exc_info=True)
+
     def updateImage(self, show_frame_label=False, **kwargs):
         super().updateImage(**kwargs)
         frame = self.currentIndex
@@ -222,7 +236,9 @@ class RamanImageView(ImageViewLineRoi):
             self._playback_tick_in_progress = False
 
     def timeLineChanged(self):
+        histogram_state = self._capture_histogram_state()
         super().timeLineChanged()
+        self._restore_histogram_state(histogram_state)
         logger.debug('timeLineChanged(): Time Line call')
         self.roiChanged()
         if self.autoplay and not self._playback_tick_in_progress and not self._suppress_manual_stop:
@@ -239,9 +255,12 @@ class RamanImageView(ImageViewLineRoi):
         # keep the current frame index
         current_frame = self.currentIndex
         logger.debug('setImage method called')
+        histogram_state = self._capture_histogram_state() if keep_viewbox else None
         if keep_viewbox:
             view = self.getView()
             view_range = view.viewRange()
+            kwargs.setdefault('autoLevels', False)
+            kwargs.setdefault('autoHistogramRange', False)
         self._suppress_manual_stop = True
         try:
             super().setImage(*args, axes={'x': 2, 'y': 1, 't': 0}, **kwargs)
@@ -274,6 +293,7 @@ class RamanImageView(ImageViewLineRoi):
             self.playLoop = True
             self.play(self.fps)
         self.update_timeline_ticks()
+        self._restore_histogram_state(histogram_state)
 
     def update_timeline_ticks(self):
         if self.axis_labels is not None:

@@ -312,6 +312,7 @@ class AnalysisManager(QtCore.QObject):
             "4D only: run full NNMF on the currently selected slice and reuse the resulting H "
             "as fixed spectra for NNLS-style W reconstruction on the remaining slices."
         )
+        self.fast_multislice_nnmf_check.setChecked(False)
         method_layout.addWidget(self.fast_multislice_nnmf_check)
         method_layout.addStretch(1)
         analysis_layout.addWidget(method_panel)

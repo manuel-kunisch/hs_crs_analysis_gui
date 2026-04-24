@@ -888,19 +888,25 @@ class AnalysisManager(QtCore.QObject):
                 continue
 
             if fast_mode:
-                # hybrid NNMF/NNLS path using the NNMF result as H seed and then performing NNLS
-                seed_result = self._build_fixed_h_seed_result(
-                    H_template=reference_result["H"],
-                    H_background_template=display_seed_H_bg,
-                    fixed_seed_W={},
+                # Hybrid mode must solve one consistent fixed-H NNLS problem on
+                # the current slice. Reusing the generic seed-building path here
+                # is incorrect because that path may mix raw and processed data
+                # per component when it rebuilds W from H.
+                #
+                # The reference H comes from NNMF, and NNMF is fit on
+                # self.data_2d (raw slice data), so reuse the same raw-data
+                # convention for the fixed-H solve.
+                self.mv_analyzer.solve_fixed_H_nnls(
+                    H_matrix=reference_result["H"],
+                    use_processed_data=False,
+                    source_key=f"hybrid-fixed-h-raw-{slice_index + 1}",
                 )
-                spectra_per_slice.append(np.array(seed_result["H"][:n_components], copy=True))
-                images_per_slice.append(np.array(seed_result["W"][:n_components], copy=True))
+                spectra_per_slice.append(np.array(self.mv_analyzer.fixed_H[:n_components], copy=True))
+                images_per_slice.append(np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True))
 
+                hybrid_fit_info = None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
                 if fit_info_per_slice is not None:
-                    fit_info_per_slice.append(
-                        None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
-                    )
+                    fit_info_per_slice.append(hybrid_fit_info)
                 self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
                 continue
 

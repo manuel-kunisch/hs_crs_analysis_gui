@@ -60,6 +60,7 @@ class MultivariateAnalyzer(object):
         self._nnls_abundance_cache = {}
         self.last_nnls_info: dict | None = None
         self.last_nnmf_info: dict | None = None
+        self._scale_nnmf_result_to_max: bool = False
         self.update_image_data(data, n_components, wavenumbers)
 
     def update_spectral_info(self, spectral_info: list[dict[str, float | int]]):
@@ -185,6 +186,10 @@ class MultivariateAnalyzer(object):
         self.nnmf_max_iter = max_iter
         self.torch_nmf_max_iter = max_iter
         logger.info("NNMF max_iter updated to %s", self.nnmf_max_iter)
+
+    def set_scale_nnmf_result_to_max(self, state: bool):
+        self._scale_nnmf_result_to_max = bool(state)
+        logger.info("NNMF result scaling to dtype max set to %s", self._scale_nnmf_result_to_max)
 
     def set_nnls_max_iter(self, max_iter: int):
         max_iter = max(1, int(max_iter))
@@ -789,9 +794,10 @@ class MultivariateAnalyzer(object):
         self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(self.data_2d, init='random')
         self.last_nnmf_info = dict(fit_info)
         self.last_nnmf_info["mode"] = "random_nnmf"
-        normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
-        # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
-        self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H * normalization_factor
+        if self._scale_nnmf_result_to_max:
+            normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
+            # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
+            self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H * normalization_factor
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
         logger.info("Random NNMF outcome:")
@@ -1327,9 +1333,10 @@ class MultivariateAnalyzer(object):
         )
         self.last_nnmf_info = dict(fit_info)
         self.last_nnmf_info["mode"] = "seeded_nnmf"
-        normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
-        # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
-        self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H
+        if self._scale_nnmf_result_to_max:
+            normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
+            # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
+            self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
         logger.info("Custom NNMF outcome: backend=%s, #Iter=%s", fit_info.get("backend"), fit_info.get("n_iter"))

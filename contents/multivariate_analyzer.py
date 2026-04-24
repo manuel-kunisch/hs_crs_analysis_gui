@@ -60,7 +60,6 @@ class MultivariateAnalyzer(object):
         self._nnls_abundance_cache = {}
         self.last_nnls_info: dict | None = None
         self.last_nnmf_info: dict | None = None
-        self._scale_nnmf_result_to_max: bool = False
         self.update_image_data(data, n_components, wavenumbers)
 
     def update_spectral_info(self, spectral_info: list[dict[str, float | int]]):
@@ -186,10 +185,6 @@ class MultivariateAnalyzer(object):
         self.nnmf_max_iter = max_iter
         self.torch_nmf_max_iter = max_iter
         logger.info("NNMF max_iter updated to %s", self.nnmf_max_iter)
-
-    def set_scale_nnmf_result_to_max(self, state: bool):
-        self._scale_nnmf_result_to_max = bool(state)
-        logger.info("NNMF result scaling to dtype max set to %s", self._scale_nnmf_result_to_max)
 
     def set_nnls_max_iter(self, max_iter: int):
         max_iter = max(1, int(max_iter))
@@ -324,19 +319,6 @@ class MultivariateAnalyzer(object):
             return False
         return np.any(np.abs(arr[finite]) > eps)
 
-    @staticmethod
-    def _prepare_seed_spectrum(spectrum: np.ndarray, eps: float = 1e-8) -> np.ndarray | None:
-        arr = np.asarray(spectrum, dtype=np.float64)
-        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-        min_val = float(np.min(arr))
-        if min_val < 0:
-            arr = arr - min_val
-        arr = np.maximum(arr, 0.0)
-        norm = float(np.linalg.norm(arr))
-        if norm <= eps:
-            return None
-        return arr / norm
-
     def _component_prefers_subtracted_data(self, component_index: int, bgd: bool = False) -> bool:
         if bgd:
             return False
@@ -369,7 +351,7 @@ class MultivariateAnalyzer(object):
             spectrum = self.seed_H[component_index]
             if not self._has_seed_signal(spectrum, eps=eps):
                 continue
-            prepared = self._prepare_seed_spectrum(spectrum, eps=eps)
+            prepared = self._prepare_fixed_h_component(spectrum, eps=eps)
             if prepared is None:
                 continue
             component_to_basis[component_index] = len(basis_columns)
@@ -384,8 +366,8 @@ class MultivariateAnalyzer(object):
         """
         Prepare a fixed-H component for direct NNLS without renormalizing its scale.
 
-        Unlike `_prepare_seed_spectrum`, this keeps the magnitude of the spectrum so a
-        reference NNMF result can be reused as-is across slices while only W is updated.
+        This keeps the magnitude of the spectrum so a reference NNMF result can be
+        reused as-is across slices while only W is updated.
         """
         arr = np.asarray(spectrum, dtype=np.float64)
         arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
@@ -414,6 +396,16 @@ class MultivariateAnalyzer(object):
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
         working_data = np.maximum(working_data, 0.0)
         return np.maximum(working_data @ prepared_target, 0.0)
+
+    @staticmethod
+    def _scale_w_seed_to_unity(w_seed: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+        working_seed = np.asarray(w_seed, dtype=np.float64)
+        working_seed = np.nan_to_num(working_seed, nan=0.0, posinf=0.0, neginf=0.0)
+        working_seed = np.maximum(working_seed, eps)
+        seed_max = float(np.max(working_seed))
+        if seed_max <= eps:
+            return np.full_like(working_seed, eps, dtype=np.float64)
+        return working_seed / seed_max
 
     @staticmethod
     def _make_nnls_cache_key(
@@ -625,8 +617,8 @@ class MultivariateAnalyzer(object):
         working_data = np.asarray(image_data, dtype=np.float64)
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
         working_data = np.maximum(working_data, 0.0)
-        target_strength = np.maximum(working_data @ prepared_target, 0.0)
         basis, component_to_basis = self._get_seed_basis(eps=eps)
+        target_strength = np.maximum(working_data @ prepared_target, 0.0)
 
         if basis.shape[1] <= 1 or component_index not in component_to_basis:
             logger.info('Selective score map for component %s falls back to target projection (no competitors).',
@@ -794,10 +786,6 @@ class MultivariateAnalyzer(object):
         self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(self.data_2d, init='random')
         self.last_nnmf_info = dict(fit_info)
         self.last_nnmf_info["mode"] = "random_nnmf"
-        if self._scale_nnmf_result_to_max:
-            normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
-            # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
-            self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H * normalization_factor
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
         logger.info("Random NNMF outcome:")
@@ -1183,7 +1171,9 @@ class MultivariateAnalyzer(object):
             # can be used later; not used yet
             logger.debug('spectral_info is currently not used inside estimate_W_seed_with_H.')
 
-        prepared_target = self._prepare_seed_spectrum(H, eps=eps)
+        # Keep the original seed amplitude so NNLS and selective score start from the
+        # same physical H convention as the data-derived spectra shown to the user.
+        prepared_target = self._prepare_fixed_h_component(H, eps=eps)
         if prepared_target is None:
             logger.warning('Component %s has no usable H seed shape. Falling back to averaged image.', component_index)
             W_image = np.mean(self.data_2d, axis=1)
@@ -1200,7 +1190,8 @@ class MultivariateAnalyzer(object):
             return self._estimate_nnls_abundance_map(image_data, component_index, prepared_target, eps, source_key)
 
         if self.w_seed_mode == 'selective_score':
-            return self._estimate_selective_score_map(image_data, component_index, prepared_target, eps)
+            score_map = self._estimate_selective_score_map(image_data, component_index, prepared_target, eps)
+            return self._scale_w_seed_to_unity(score_map, eps=eps)
 
         # ------------------------------------------------------------------
         # 2) LEGACY MODES
@@ -1222,8 +1213,7 @@ class MultivariateAnalyzer(object):
         if self.avg_W_seed:
             logger.info('avg_W_seed=True: filling W with averaged image (clamped to eps).')
             W_image = np.mean(image_data, axis=1)
-            W_image = np.maximum(W_image, eps)
-            return W_image
+            return np.maximum(W_image, eps)
 
         if self.full_W_seed:
             logger.info('full_W_seed=True: using full W seed mode (constant, >= eps).')
@@ -1237,8 +1227,7 @@ class MultivariateAnalyzer(object):
         logger.warning('No W seed mode selected, using maximum-intensity slice at H peak (clamped to eps).')
         peak_idx = int(np.argmax(H))
         W_image = self.data_2d[:, peak_idx]
-        W_image = np.maximum(W_image, eps)
-        return W_image
+        return np.maximum(W_image, eps)
 
     @staticmethod
     def normalization_constant(img, dtype = '16bit') -> float:
@@ -1333,10 +1322,6 @@ class MultivariateAnalyzer(object):
         )
         self.last_nnmf_info = dict(fit_info)
         self.last_nnmf_info["mode"] = "seeded_nnmf"
-        if self._scale_nnmf_result_to_max:
-            normalization_factor = self.normalization_constant(self.fixed_W, dtype=d_type)
-            # If w is scaled by a, the matrix H is scaled by the inverse value, i.e. X = aW(1/a)H = WH
-            self.fixed_W, self.fixed_H = self.fixed_W * normalization_factor, self.fixed_H
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
         logger.info("Custom NNMF outcome: backend=%s, #Iter=%s", fit_info.get("backend"), fit_info.get("n_iter"))

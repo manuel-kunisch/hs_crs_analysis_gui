@@ -88,4 +88,3 @@ Recommended workflow:
 - Export the TIFF for visualization and sharing.
 - Export the H spectra as CSV for numerical inspection.
 - Save the preset together with the export for reproducibility.
-- If absolute `W` scaling matters for interpretation, note whether `Scale W to 16-bit` was enabled in the GUI.

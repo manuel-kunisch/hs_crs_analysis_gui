@@ -425,11 +425,11 @@ class AnalysisManager(QtCore.QObject):
         self.analyze_button.setMinimumSize(170, 52)
         self.analyze_button.clicked.connect(self.analyze_data)
 
-        self.scale_w_to_16bit_check = QtWidgets.QCheckBox("Scale W to 16-bit")
+        self.scale_w_to_16bit_check = QtWidgets.QCheckBox("Scale results to 16-bit")
         self.scale_w_to_16bit_check.setChecked(True)
         self.scale_w_to_16bit_check.setToolTip(
-            "Globally scale displayed NNMF/NNLS W maps to uint16. "
-            "Disable this to inspect raw floating-point W values."
+            "Globally scale displayed NNMF/NNLS result maps to the uint16 range. "
+            "Disable this to inspect raw floating-point result values."
         )
 
         run_button_row = QtWidgets.QHBoxLayout()
@@ -2458,7 +2458,7 @@ class AnalysisManager(QtCore.QObject):
             "fixed_h_nnls_mode": bool(self._fixed_h_mode_enabled()),
             "fixed_h_nnls_only": bool(self._use_fixed_h_nnls_only()),
             "fast_multislice_nnmf": bool(self._use_fast_multislice_nnmf()),
-            "scale_w_to_16bit": bool(self.scale_w_to_16bit_enabled()),
+            "scale_results_to_16bit": bool(self.scale_w_to_16bit_enabled()),
         }
 
     def import_seed_init_state(self, state: dict | list | tuple | None):
@@ -2523,7 +2523,13 @@ class AnalysisManager(QtCore.QObject):
 
         if self.scale_w_to_16bit_check is not None:
             blocker = QtCore.QSignalBlocker(self.scale_w_to_16bit_check)
-            self.scale_w_to_16bit_check.setChecked(bool(settings.get("scale_w_to_16bit", True)))
+            scale_results = bool(
+                settings.get(
+                    "scale_results_to_16bit",
+                    settings.get("scale_w_to_16bit", settings.get("scale_nnmf_result_to_max", True)),
+                )
+            )
+            self.scale_w_to_16bit_check.setChecked(scale_results)
             del blocker
 
     def _refresh_spectral_column_labels(self):

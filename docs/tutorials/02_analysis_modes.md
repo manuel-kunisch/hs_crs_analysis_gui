@@ -271,6 +271,10 @@ If only an H seed is available, the GUI estimates a W seed from the data and the
 - Average image: use a broad intensity-based spatial guess.
 - Homogeneous: use an almost neutral spatial guess.
 
+For these seeded modes, the component spectra in `H0` keep their physical amplitude scale. The GUI does not normalize each seed spectrum independently before constructing NNLS-based W seeds. This keeps the seeded model closer to the same `X \approx WH` convention used by NNMF and fixed-H NNLS.
+
+The **Selective score map** can produce a seed map with an arbitrary overall magnitude because it is a heuristic projection-and-competition score rather than a strict abundance solve. For that mode, the GUI rescales the resulting W seed map afterward to unit maximum. The other seed modes keep their natural numeric scale.
+
 ### NNLS abundance map as W seed
 
 The NNLS abundance map is the most constrained W-seed mode. It asks a direct question for every pixel:
@@ -290,7 +294,7 @@ $$
 where:
 
 - \(x_p\) is the measured spectrum of pixel `p`.
-- \(H_0\) is the matrix of seeded component spectra.
+- \(H_0\) is the matrix of seeded component spectra on their original cleaned amplitude scale.
 - \(w_p\) is the non-negative abundance vector for pixel `p`.
 
 The entries of \(w_p\) become one row of the W seed matrix:

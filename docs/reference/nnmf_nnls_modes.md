@@ -61,6 +61,8 @@ Sources for `H0` include ROI spectra, loaded spectra, Gaussian resonances, and i
 
 Sources for `W0` include NNLS abundance maps, selective score maps, H-weighted maps, average images, homogeneous maps, imported result maps, and fixed W/background seeds.
 
+The seeded spectra are kept on their physical amplitude scale. The GUI does not renormalize each component spectrum independently before seeded NNMF or NNLS abundance seeding. The selective-score W seed may still be rescaled afterward to unit maximum so that heuristic map remains numerically well behaved without changing `H`.
+
 ## Fixed-H NNLS
 
 Fixed-H NNLS keeps the spectra fixed and solves only the abundance maps:

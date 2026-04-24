@@ -49,7 +49,7 @@ This is especially common when:
 Next to **Analyze**, the GUI provides the checkbox:
 
 ```text
-Scale W to 16-bit
+Scale results to 16-bit
 ```
 
 If this option is enabled, NNMF/NNLS result maps are scaled for display with one global factor over the full result array:
@@ -70,15 +70,15 @@ If the option is disabled, the channel preview uses the raw floating-point `W` v
 
 ### Important scope of this scaling
 
-The `Scale W to 16-bit` option affects the displayed result maps in the result viewer. It is there to make viewing, histogram control, and export behavior more predictable.
+The `Scale results to 16-bit` option affects the displayed result maps in the result viewer. It is there to make viewing, histogram control, and export behavior more predictable.
 
-The underlying analysis is still carried out in floating point. The GUI fit summary reports the display scale factor so you can see when a displayed `W` map is not in raw units anymore.
+The underlying analysis is still carried out in floating point. The fitted spectra `H` remain unchanged, and the GUI fit summary reports the display scale factor so you can see when a displayed `W` map is not in raw units anymore.
 
 ### Histograms and display levels
 
 Histogram and LUT settings act on the data currently shown in the result viewer:
 
-- if `Scale W to 16-bit` is enabled, they act on the scaled display map,
+- if `Scale results to 16-bit` is enabled, they act on the scaled display map,
 - if it is disabled, they act on the raw floating-point map.
 
 Changing histogram levels changes only the visualization unless you explicitly export a rendered image.
@@ -156,7 +156,7 @@ For publication workflows, it is therefore useful to save:
 - the preset,
 - the exported TIFF,
 - the exported H spectra CSV,
-- and, if relevant, a short note on whether `Scale W to 16-bit` was enabled.
+- and, if relevant, a short note on whether `Scale results to 16-bit` was enabled.
 
 > GIF placeholder: exporting a composite TIFF and opening it in Fiji.
 

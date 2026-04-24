@@ -13,6 +13,8 @@ They can come from:
 - Gaussian resonance models,
 - previous NNMF results imported back into the ROI manager.
 
+For seeded NNMF and NNLS-based seed generation, these spectra are kept on their physical amplitude scale. The GUI does not normalize each seed spectrum independently before building the spectral model. This keeps the relation between `W` and `H` consistent with the underlying factorization idea \(X \approx WH\).
+
 In the ROI table, these appear as normal ROI rows or dummy ROI rows. A dummy ROI does not need to correspond to a drawn spatial region; it can carry a spectrum or a fixed W map.
 
 > GIF placeholder: drawing a ROI and seeing its spectrum appear in the ROI average plot.
@@ -28,6 +30,8 @@ The GUI can estimate W maps from H seeds using different modes:
 - H-weighted average,
 - average image fallback,
 - homogeneous empty map.
+
+The modes do not all have the same meaning. The NNLS abundance map is a direct coefficient estimate from the seeded spectra. The selective score map is a heuristic spatial guess based on spectral projection and competition. For that score-map mode, the GUI leaves `H` unchanged and rescales the resulting `W` seed map afterward to unit maximum. The other seed modes keep their natural numeric scale.
 
 Fixed W maps can also be attached to dummy ROIs. These fixed W seeds are useful for background components or for importing spatial maps from previous results.
 

@@ -94,6 +94,11 @@ class AnalysisManager(QtCore.QObject):
         self.analysis_progress_widget: QtWidgets.QWidget | None = None
         self.analysis_progress_label: QtWidgets.QLabel | None = None
         self.analysis_progress_bar: QtWidgets.QProgressBar | None = None
+        self._analysis_cancel_requested = False
+        self._analysis_was_cancelled = False
+        self._analysis_running = False
+        self._analyze_run_icon: QtGui.QIcon | None = None
+        self._analyze_stop_icon: QtGui.QIcon | None = None
         self._nnmf_option_widgets: list[QtWidgets.QWidget] = []
         self.custom_init_check: QtWidgets.QCheckBox | None = None
         self.fixed_h_nnls_only_check: QtWidgets.QCheckBox | None = None
@@ -110,12 +115,7 @@ class AnalysisManager(QtCore.QObject):
         self.worker.progress.connect(self._update_analysis_progress)
         # Connect the finished function to the worker
         self.worker.finished.connect(lambda: self.analysis_completed(self.mv_analyzer.analysis_method))
-        self.thread_analysis.finished.connect(
-            lambda: self.analyze_button.setEnabled(True)
-        )
-        self.thread_analysis.finished.connect(
-            lambda: self.analyze_button.setText('Analyze')
-        )
+        self.thread_analysis.finished.connect(self._on_analysis_thread_finished)
         self.thread_analysis.finished.connect(self._finish_analysis_progress)
 
         self._seed_pixel_mode = "Max Intensity"  # or "Score"
@@ -422,10 +422,12 @@ class AnalysisManager(QtCore.QObject):
         run_layout.setContentsMargins(12, 8, 12, 8)
         run_layout.setSpacing(6)
 
+        self._analyze_run_icon = _icon("media-playback-start", QtWidgets.QStyle.SP_MediaPlay)
+        self._analyze_stop_icon = _icon("media-playback-stop", QtWidgets.QStyle.SP_MediaStop)
         self.analyze_button = QtWidgets.QToolButton()
         self.analyze_button.setObjectName("AnalyzeTool")
         self.analyze_button.setText("Run Analysis")
-        self.analyze_button.setIcon(_icon("media-playback-start", QtWidgets.QStyle.SP_MediaPlay))
+        self.analyze_button.setIcon(self._analyze_run_icon)
         self.analyze_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
         self.analyze_button.setIconSize(QtCore.QSize(24, 24))
         self.analyze_button.setAutoRaise(False)
@@ -674,6 +676,54 @@ class AnalysisManager(QtCore.QObject):
         self.analysis_data_changed.emit(*self.get_analysis_data())
     """
 
+    def _set_analyze_button_idle_state(self):
+        if getattr(self, "analyze_button", None) is None:
+            return
+        self.analyze_button.setEnabled(True)
+        self.analyze_button.setText("Run Analysis")
+        if self._analyze_run_icon is not None:
+            self.analyze_button.setIcon(self._analyze_run_icon)
+
+    def _set_analyze_button_running_state(self):
+        if getattr(self, "analyze_button", None) is None:
+            return
+        self.analyze_button.setEnabled(True)
+        self.analyze_button.setText("Stop Analysis")
+        if self._analyze_stop_icon is not None:
+            self.analyze_button.setIcon(self._analyze_stop_icon)
+
+    def _set_analyze_button_stopping_state(self):
+        if getattr(self, "analyze_button", None) is None:
+            return
+        self.analyze_button.setEnabled(False)
+        self.analyze_button.setText("Stopping...")
+        if self._analyze_stop_icon is not None:
+            self.analyze_button.setIcon(self._analyze_stop_icon)
+
+    def _request_analysis_cancel(self):
+        if not self._analysis_running or self._analysis_cancel_requested:
+            return
+        self._analysis_cancel_requested = True
+        logger.info(
+            "Analysis stop requested by user. The current solver call will finish before stopping."
+        )
+        self._set_analyze_button_stopping_state()
+
+    def _cancel_analysis_if_requested(self, context: str) -> bool:
+        if not self._analysis_cancel_requested:
+            return False
+        self._analysis_was_cancelled = True
+        logger.info("Analysis cancelled by user during %s.", context)
+        self._analysis_result_spectra = None
+        self._analysis_result_images = None
+        self._analysis_fit_info = None
+        return True
+
+    def _on_analysis_thread_finished(self):
+        self._analysis_running = False
+        self._analysis_cancel_requested = False
+        self._set_analyze_button_idle_state()
+
     def analyze_data(self):
         """
         Function to start the correct analysis method based on the selected radio button.
@@ -682,6 +732,12 @@ class AnalysisManager(QtCore.QObject):
         Returns:
 
         """
+        if self.thread_analysis.isRunning() or self._analysis_running:
+            self._request_analysis_cancel()
+            return
+
+        self._analysis_cancel_requested = False
+        self._analysis_was_cancelled = False
         self._analysis_result_spectra = None
         self._analysis_result_images = None
         self._analysis_fit_info = None
@@ -720,8 +776,8 @@ class AnalysisManager(QtCore.QObject):
                     self.make_all_seeds_from_inputs(show_seeds=True)
                 else:
                     self.make_all_seeds_from_inputs(show_seeds=True)
-        self.analyze_button.setEnabled(False)
-        self.analyze_button.setText('Analysis in Progress')
+        self._analysis_running = True
+        self._set_analyze_button_running_state()
         self.thread_analysis.start()
         logger.info(f"{'-' * 50}")
         logger.info(f'{datetime.now()}: Analysis started')
@@ -742,6 +798,9 @@ class AnalysisManager(QtCore.QObject):
         return self._analysis_series_label
 
     def _run_analysis_job(self):
+        if self._cancel_analysis_if_requested("analysis startup"):
+            return
+
         if self._use_fixed_h_nnls_only():
             self.mv_analyzer.fixed_H = np.array(self.mv_analyzer.seed_H, copy=True)
             self.mv_analyzer.fixed_W = np.array(self.mv_analyzer.seed_W, copy=True)
@@ -759,7 +818,11 @@ class AnalysisManager(QtCore.QObject):
             self._run_multislice_analysis()
             return
 
+        if self._cancel_analysis_if_requested("single-slice analysis startup"):
+            return
         self.mv_analyzer.start_analysis()
+        if self._cancel_analysis_if_requested("single-slice analysis completion"):
+            return
         if self.mv_analyzer.analysis_method == "PCA":
             self._analysis_result_spectra = self.mv_analyzer.PCs
             self._analysis_result_images = self.mv_analyzer.pca_2DX
@@ -801,166 +864,191 @@ class AnalysisManager(QtCore.QObject):
         fit_info_per_slice: list[dict | None] | None = [] if analysis_method != "PCA" else None
         reference_fit_info = None
 
-        if fast_mode:
-            logger.info(
-                "4D hybrid NNMF/NNLS mode enabled: running full NNMF on %s %s and "
-                "reusing the resulting H for fixed-H W reconstruction on the remaining slices.",
-                self._analysis_series_label.lower(),
-                reference_slice_index + 1,
-            )
-            reference_slice = np.array(series[reference_slice_index], copy=True)
-            self.z3D_data = reference_slice
-            self.mv_analyzer.update_image_data(reference_slice, n_components, wavenumbers)
-            if spectral_info is not None:
-                self.mv_analyzer.update_spectral_info(spectral_info)
-            self.mv_analyzer.set_custom_nnmf_init(custom_init)
-            self.mv_analyzer.set_nnmf_solver(solver)
-            self.mv_analyzer.set_nnmf_backend_preference(backend_preference)
-            self.mv_analyzer.set_W_seed_mode(w_seed_mode)
-            self._update_multislice_modified_data(reference_slice)
-
-            if custom_init:
-                self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
-                self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
-                self.mv_analyzer.seed_W = None
-                self.mv_analyzer._W_prepared = False
-                self.mv_analyzer.estimate_W_seed_matrix_from_H(
-                    overwrite=True,
-                    skip_components=fixed_seed_W.keys(),
-                )
-                self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
-                if self.mv_analyzer.seed_W is None:
-                    self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
-                for comp, fixed_W in fixed_seed_W.items():
-                    if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
-                        self.mv_analyzer.seed_W[:, comp] = fixed_W
-                self.mv_analyzer._W_prepared = np.all(self.mv_analyzer.seed_W)
-                self.mv_analyzer.NNMF(skip_seed_fining=True)
-            else:
-                self.mv_analyzer.randomNNMF()
-
-            self._apply_fixed_W_overrides_to_results(fixed_seed_W)
-            reference_result = {
-                "H": np.array(self.mv_analyzer.fixed_H[:n_components], copy=True),
-                "W": np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True),
-            }
-            reference_fit_info = None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
-
-        for slice_index in range(series.shape[0]):
-            slice_data = np.array(series[slice_index], copy=True)
-            logger.info("Running %s on %s %s/%s", analysis_method, self._analysis_series_label.lower(), slice_index + 1, series.shape[0])
-
-            if fast_mode and slice_index == reference_slice_index and reference_result is not None:
-                spectra_per_slice.append(np.array(reference_result["H"], copy=True))
-                images_per_slice.append(np.array(reference_result["W"], copy=True))
-                if fit_info_per_slice is not None:
-                    fit_info_per_slice.append(None if reference_fit_info is None else dict(reference_fit_info))
-                self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
-                continue
-
-            self.z3D_data = slice_data
-            self.mv_analyzer.update_image_data(slice_data, n_components, wavenumbers)
-            if spectral_info is not None:
-                self.mv_analyzer.update_spectral_info(spectral_info)
-            self.mv_analyzer.set_custom_nnmf_init(custom_init)
-            self.mv_analyzer.set_nnmf_solver(solver)
-            self.mv_analyzer.set_nnmf_backend_preference(backend_preference)
-            self.mv_analyzer.set_W_seed_mode(w_seed_mode)
-            self._update_multislice_modified_data(slice_data)
-
-            if analysis_method == "PCA":
-                self.mv_analyzer.PCA()
-                spectra_per_slice.append(np.array(self.mv_analyzer.PCs[:n_components], copy=True))
-                images_per_slice.append(np.array(self.mv_analyzer.pca_2DX[:n_components], copy=True))
-                self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
-                continue
-
-            if fixed_h_multislice_mode:
-                # use the displayed seeds, calculate W abundance map and run NNLS
-                seed_result = self._build_fixed_h_seed_result(
-                    H_template=display_seed_H,
-                    H_background_template=display_seed_H_bg,
-                    fixed_seed_W=fixed_seed_W,
-                )
-                spectra_per_slice.append(np.array(seed_result["H"][:n_components], copy=True))
-                images_per_slice.append(np.array(seed_result["W"][:n_components], copy=True))
-                if fit_info_per_slice is not None:
-                    fit_info_per_slice.append(
-                        None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
-                )
-                self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
-                continue
-
+        try:
             if fast_mode:
-                # Hybrid mode must solve one consistent fixed-H NNLS problem on
-                # the current slice. Reusing the generic seed-building path here
-                # is incorrect because that path may mix raw and processed data
-                # per component when it rebuilds W from H.
-                #
-                # The reference H comes from NNMF, and NNMF is fit on
-                # self.data_2d (raw slice data), so reuse the same raw-data
-                # convention for the fixed-H solve.
-                self.mv_analyzer.solve_fixed_H_nnls(
-                    H_matrix=reference_result["H"],
-                    use_processed_data=False,
-                    source_key=f"hybrid-fixed-h-raw-{slice_index + 1}",
+                logger.info(
+                    "4D hybrid NNMF/NNLS mode enabled: running full NNMF on %s %s and "
+                    "reusing the resulting H for fixed-H W reconstruction on the remaining slices.",
+                    self._analysis_series_label.lower(),
+                    reference_slice_index + 1,
                 )
+                reference_slice = np.array(series[reference_slice_index], copy=True)
+                self.z3D_data = reference_slice
+                self.mv_analyzer.update_image_data(reference_slice, n_components, wavenumbers)
+                if spectral_info is not None:
+                    self.mv_analyzer.update_spectral_info(spectral_info)
+                self.mv_analyzer.set_custom_nnmf_init(custom_init)
+                self.mv_analyzer.set_nnmf_solver(solver)
+                self.mv_analyzer.set_nnmf_backend_preference(backend_preference)
+                self.mv_analyzer.set_W_seed_mode(w_seed_mode)
+                self._update_multislice_modified_data(reference_slice)
+
+                if custom_init:
+                    self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
+                    self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
+                    self.mv_analyzer.seed_W = None
+                    self.mv_analyzer._W_prepared = False
+                    self.mv_analyzer.estimate_W_seed_matrix_from_H(
+                        overwrite=True,
+                        skip_components=fixed_seed_W.keys(),
+                    )
+                    self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
+                    if self.mv_analyzer.seed_W is None:
+                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
+                    for comp, fixed_W in fixed_seed_W.items():
+                        if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
+                            self.mv_analyzer.seed_W[:, comp] = fixed_W
+                    self.mv_analyzer._W_prepared = np.all(self.mv_analyzer.seed_W)
+                    self.mv_analyzer.NNMF(skip_seed_fining=True)
+                else:
+                    self.mv_analyzer.randomNNMF()
+
+                if self._cancel_analysis_if_requested(f"reference {self._analysis_series_label.lower()}"):
+                    return
+
+                self._apply_fixed_W_overrides_to_results(fixed_seed_W)
+                reference_result = {
+                    "H": np.array(self.mv_analyzer.fixed_H[:n_components], copy=True),
+                    "W": np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True),
+                }
+                reference_fit_info = None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
+
+            for slice_index in range(series.shape[0]):
+                if self._cancel_analysis_if_requested(
+                        f"{self._analysis_series_label.lower()} {slice_index + 1}/{series.shape[0]} startup"
+                ):
+                    return
+
+                slice_data = np.array(series[slice_index], copy=True)
+                logger.info("Running %s on %s %s/%s", analysis_method, self._analysis_series_label.lower(), slice_index + 1, series.shape[0])
+
+                if fast_mode and slice_index == reference_slice_index and reference_result is not None:
+                    spectra_per_slice.append(np.array(reference_result["H"], copy=True))
+                    images_per_slice.append(np.array(reference_result["W"], copy=True))
+                    if fit_info_per_slice is not None:
+                        fit_info_per_slice.append(None if reference_fit_info is None else dict(reference_fit_info))
+                    self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
+                    continue
+
+                self.z3D_data = slice_data
+                self.mv_analyzer.update_image_data(slice_data, n_components, wavenumbers)
+                if spectral_info is not None:
+                    self.mv_analyzer.update_spectral_info(spectral_info)
+                self.mv_analyzer.set_custom_nnmf_init(custom_init)
+                self.mv_analyzer.set_nnmf_solver(solver)
+                self.mv_analyzer.set_nnmf_backend_preference(backend_preference)
+                self.mv_analyzer.set_W_seed_mode(w_seed_mode)
+                self._update_multislice_modified_data(slice_data)
+
+                if analysis_method == "PCA":
+                    self.mv_analyzer.PCA()
+                    if self._cancel_analysis_if_requested(
+                            f"{self._analysis_series_label.lower()} {slice_index + 1}/{series.shape[0]} PCA"
+                    ):
+                        return
+                    spectra_per_slice.append(np.array(self.mv_analyzer.PCs[:n_components], copy=True))
+                    images_per_slice.append(np.array(self.mv_analyzer.pca_2DX[:n_components], copy=True))
+                    self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
+                    continue
+
+                if fixed_h_multislice_mode:
+                    # use the displayed seeds, calculate W abundance map and run NNLS
+                    seed_result = self._build_fixed_h_seed_result(
+                        H_template=display_seed_H,
+                        H_background_template=display_seed_H_bg,
+                        fixed_seed_W=fixed_seed_W,
+                    )
+                    if self._cancel_analysis_if_requested(
+                            f"{self._analysis_series_label.lower()} {slice_index + 1}/{series.shape[0]} fixed-H reconstruction"
+                    ):
+                        return
+                    spectra_per_slice.append(np.array(seed_result["H"][:n_components], copy=True))
+                    images_per_slice.append(np.array(seed_result["W"][:n_components], copy=True))
+                    if fit_info_per_slice is not None:
+                        fit_info_per_slice.append(
+                            None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
+                        )
+                    self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
+                    continue
+
+                if fast_mode:
+                    # Hybrid mode must solve one consistent fixed-H NNLS problem on
+                    # the current slice. Reusing the generic seed-building path here
+                    # is incorrect because that path may mix raw and processed data
+                    # per component when it rebuilds W from H.
+                    #
+                    # The reference H comes from NNMF, and NNMF is fit on
+                    # self.data_2d (raw slice data), so reuse the same raw-data
+                    # convention for the fixed-H solve.
+                    self.mv_analyzer.solve_fixed_H_nnls(
+                        H_matrix=reference_result["H"],
+                        use_processed_data=False,
+                        source_key=f"hybrid-fixed-h-raw-{slice_index + 1}",
+                    )
+                    if self._cancel_analysis_if_requested(
+                            f"{self._analysis_series_label.lower()} {slice_index + 1}/{series.shape[0]} hybrid NNLS"
+                    ):
+                        return
+                    spectra_per_slice.append(np.array(self.mv_analyzer.fixed_H[:n_components], copy=True))
+                    images_per_slice.append(np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True))
+
+                    hybrid_fit_info = None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
+                    if fit_info_per_slice is not None:
+                        fit_info_per_slice.append(hybrid_fit_info)
+                    self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
+                    continue
+
+                if custom_init:
+                    self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
+                    self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
+                    self.mv_analyzer.seed_W = None
+                    self.mv_analyzer._W_prepared = False
+                    self.mv_analyzer.estimate_W_seed_matrix_from_H(
+                        overwrite=True,
+                        skip_components=fixed_seed_W.keys(),
+                    )
+                    self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
+                    if self.mv_analyzer.seed_W is None:
+                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
+                    for comp, fixed_W in fixed_seed_W.items():
+                        if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
+                            self.mv_analyzer.seed_W[:, comp] = fixed_W
+                    self.mv_analyzer._W_prepared = np.all(self.mv_analyzer.seed_W)
+                    self.mv_analyzer.NNMF(skip_seed_fining=True)
+                else:
+                    self.mv_analyzer.randomNNMF()
+
+                if self._cancel_analysis_if_requested(
+                        f"{self._analysis_series_label.lower()} {slice_index + 1}/{series.shape[0]} NNMF"
+                ):
+                    return
                 spectra_per_slice.append(np.array(self.mv_analyzer.fixed_H[:n_components], copy=True))
                 images_per_slice.append(np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True))
-
-                hybrid_fit_info = None if self.mv_analyzer.last_nnls_info is None else dict(self.mv_analyzer.last_nnls_info)
                 if fit_info_per_slice is not None:
-                    fit_info_per_slice.append(hybrid_fit_info)
+                    fit_info_per_slice.append(
+                        None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
+                    )
                 self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
-                continue
 
-            if custom_init:
+            self._analysis_result_spectra = np.stack(spectra_per_slice, axis=0)
+            self._analysis_result_images = np.stack(images_per_slice, axis=0)
+            self._analysis_fit_info = fit_info_per_slice
+            self.worker.progress.emit(100)
+        finally:
+            if display_data is not None:
+                self.z3D_data = display_data
+                self.mv_analyzer.update_image_data(display_data, n_components, wavenumbers)
+                if spectral_info is not None:
+                    self.mv_analyzer.update_spectral_info(spectral_info)
+                self.mv_analyzer.set_custom_nnmf_init(custom_init)
+                self.mv_analyzer.set_nnmf_solver(solver)
+                self.mv_analyzer.set_nnmf_backend_preference(backend_preference)
+                self.mv_analyzer.set_W_seed_mode(w_seed_mode)
+                self._update_multislice_modified_data(display_data)
                 self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
                 self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
-                self.mv_analyzer.seed_W = None
-                self.mv_analyzer._W_prepared = False
-                self.mv_analyzer.estimate_W_seed_matrix_from_H(
-                    overwrite=True,
-                    skip_components=fixed_seed_W.keys(),
-                )
-                self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
-                if self.mv_analyzer.seed_W is None:
-                    self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
-                for comp, fixed_W in fixed_seed_W.items():
-                    if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
-                        self.mv_analyzer.seed_W[:, comp] = fixed_W
-                self.mv_analyzer._W_prepared = np.all(self.mv_analyzer.seed_W)
-                self.mv_analyzer.NNMF(skip_seed_fining=True)
-            else:
-                self.mv_analyzer.randomNNMF()
-
-            spectra_per_slice.append(np.array(self.mv_analyzer.fixed_H[:n_components], copy=True))
-            images_per_slice.append(np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True))
-            if fit_info_per_slice is not None:
-                fit_info_per_slice.append(
-                    None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
-                )
-            self.worker.progress.emit(int(round(100.0 * (slice_index + 1) / max(1, total_slices))))
-
-        self._analysis_result_spectra = np.stack(spectra_per_slice, axis=0)
-        self._analysis_result_images = np.stack(images_per_slice, axis=0)
-        self._analysis_fit_info = fit_info_per_slice
-        self.worker.progress.emit(100)
-
-        if display_data is not None:
-            self.z3D_data = display_data
-            self.mv_analyzer.update_image_data(display_data, n_components, wavenumbers)
-            if spectral_info is not None:
-                self.mv_analyzer.update_spectral_info(spectral_info)
-            self.mv_analyzer.set_custom_nnmf_init(custom_init)
-            self.mv_analyzer.set_nnmf_solver(solver)
-            self.mv_analyzer.set_nnmf_backend_preference(backend_preference)
-            self.mv_analyzer.set_W_seed_mode(w_seed_mode)
-            self._update_multislice_modified_data(display_data)
-            self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
-            self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
-            self.mv_analyzer.seed_W = None if display_seed_W is None else np.array(display_seed_W, copy=True)
-            self.mv_analyzer._W_prepared = bool(self.mv_analyzer.seed_W is not None and np.all(self.mv_analyzer.seed_W))
+                self.mv_analyzer.seed_W = None if display_seed_W is None else np.array(display_seed_W, copy=True)
+                self.mv_analyzer._W_prepared = bool(self.mv_analyzer.seed_W is not None and np.all(self.mv_analyzer.seed_W))
 
     def _prepare_fixed_h_seed_template(self, show_seeds: bool = True, fill_missing_h: bool = True):
         """
@@ -1381,10 +1469,19 @@ class AnalysisManager(QtCore.QObject):
 
 
     def analysis_completed(self, analysis_method):
+        if self._analysis_was_cancelled:
+            logger.info(f"{datetime.now()}: {analysis_method} cancelled by user")
+            return
+        if self._analysis_result_spectra is None or self._analysis_result_images is None:
+            logger.warning(f"{datetime.now()}: {analysis_method} finished without publishable results")
+            return
         logger.info(f"{datetime.now()}: {analysis_method} finished ")
         # Emit signal to the application
         # TODO: run in new thread, plotting takes time!
         self.analysis_data_changed.emit(*self.get_analysis_data())
+
+    def last_analysis_was_cancelled(self) -> bool:
+        return bool(self._analysis_was_cancelled)
 
     def update_analysis_method(self, method):
         self.mv_analyzer.analysis_method = method

@@ -1987,8 +1987,17 @@ class ROIManager(QtCore.QObject):
 
         # Initialize loader and load all spectra
         spec_loader = SpectrumLoader(target_wavenumbers=self.wavenumbers)
-        spec_loader.load_spectrum(file_name)
-        spec_loader.prepare_spectrum()
+        try:
+            spec_loader.load_spectrum(file_name)
+            spec_loader.prepare_spectrum()
+        except Exception as exc:
+            logger.exception("Failed to load spectrum file %s", file_name)
+            QtWidgets.QMessageBox.warning(
+                None,
+                "Spectrum Load Failed",
+                f"Could not load spectrum file:\n{file_name}\n\n{exc}",
+            )
+            return
 
         # check if more than one spectrum is loaded
         if len(spec_loader.target_spectra) == 0:

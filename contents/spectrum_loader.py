@@ -1,4 +1,5 @@
 import logging
+import os
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -36,33 +37,46 @@ class SpectrumLoader:
         self.target_spectra = self.prepare_spectrum()
         return self.target_spectra
 
-    def _load_txt_spectrum(self, path):
-        with open(path, 'r') as f:
-            lines = f.readlines()
-            wavenumbers = []
-            intensities = []
-            for line in lines:
-                parts = line.split()
-                wavenumbers.append(float(parts[0]))
-                intensities.append(float(parts[1]))
+    def _load_two_column_text_spectrum(self, path):
+        wavenumbers = []
+        intensities = []
+        skipped_lines = 0
 
-            name = path.split('/')[-1].split('.')[0]
-            # Return as lists to maintain consistency with multi-column CSV
-            return np.array(wavenumbers), [np.array(intensities)], [name]
+        with open(path, 'r', encoding='utf-8-sig') as f:
+            for line_number, raw_line in enumerate(f, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                parts = line.split()
+                if len(parts) < 2:
+                    skipped_lines += 1
+                    logger.debug("Skipping short spectrum line %s in %s: %r", line_number, path, raw_line.rstrip())
+                    continue
+
+                try:
+                    wavenumbers.append(float(parts[0]))
+                    intensities.append(float(parts[1]))
+                except ValueError:
+                    skipped_lines += 1
+                    logger.debug("Skipping non-numeric spectrum line %s in %s: %r", line_number, path, raw_line.rstrip())
+                    continue
+
+        if not wavenumbers:
+            raise ValueError(f"No numeric two-column spectrum data found in {path}.")
+
+        if skipped_lines:
+            logger.info("Ignored %s non-numeric/header line(s) while loading %s.", skipped_lines, path)
+
+        name = os.path.splitext(os.path.basename(path))[0]
+        # Return as lists to maintain consistency with multi-column CSV
+        return np.array(wavenumbers), [np.array(intensities)], [name]
+
+    def _load_txt_spectrum(self, path):
+        return self._load_two_column_text_spectrum(path)
 
     def _load_asc_spectrum(self, path):
-        # Similar logic to txt, wrapping result in list
-        with open(path, 'r') as f:
-            lines = f.readlines()
-            wavenumbers = []
-            intensities = []
-            for line in lines:
-                parts = line.split()
-                wavenumbers.append(float(parts[0]))
-                intensities.append(float(parts[1]))
-
-            name = path.split('/')[-1].split('.')[0]
-            return np.array(wavenumbers), [np.array(intensities)], [name]
+        return self._load_two_column_text_spectrum(path)
 
     def _load_csv_spectrum(self, path):
         # 1. Read header to get names

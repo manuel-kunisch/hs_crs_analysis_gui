@@ -168,6 +168,9 @@ class MainApplication(QtWidgets.QMainWindow):
 
 
     def _show_results_after_analysis(self):
+        if self.analysis_manager.last_analysis_was_cancelled():
+            logger.info("Analysis was cancelled; keeping the current tab and previous results.")
+            return
         result_dock = getattr(self, "result_dock", None)
         if result_dock is not None:
             dock_area = getattr(result_dock, "area", None)

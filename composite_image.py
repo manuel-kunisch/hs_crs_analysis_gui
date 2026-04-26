@@ -189,6 +189,14 @@ class CompositeImageViewWidget(QMainWindow):
         reset_levels_button = QPushButton("Reset Black Levels")
         reset_levels_button.clicked.connect(self.reset_levels)
 
+        reset_lut_button = QPushButton("Reset LUT γ Curve")
+        reset_lut_button.setToolTip("Reset the current channel LUT to a linear black-to-color ramp.")
+        reset_lut_button.clicked.connect(self.reset_current_channel_gamma_curve)
+
+        invert_lut_button = QPushButton("Invert LUT")
+        invert_lut_button.setToolTip("Invert the current channel LUT without changing its saved channel color.")
+        invert_lut_button.clicked.connect(self.invert_current_channel_lut)
+
         # %% Buttons to modfiy the false color images
         image_channels = int(self.img.shape[-1]) if self.img is not None and self.img.ndim >= 3 else 1
 
@@ -234,8 +242,9 @@ class CompositeImageViewWidget(QMainWindow):
         self.show_seeds_check.clicked.connect(lambda state: self.plot_seeds(self.spectral_cmps_seed) if state else self.plot_seeds(np.array([])))
         self.show_seeds_check.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        for widget in [export_composite_button, save_seeds_button, save_H_as_csv_button, export_spectra_button, reset_levels_button,
-                       save_seed_mode_combobox, promote_seed_button, promote_seed_target_combobox, promote_seed_component_spinbox,
+        for widget in [export_composite_button, save_seeds_button, save_H_as_csv_button, export_spectra_button,
+                       reset_levels_button, reset_lut_button, invert_lut_button, save_seed_mode_combobox,
+                       promote_seed_button, promote_seed_target_combobox, promote_seed_component_spinbox,
                        self.channel_spinbox, self.color_button, autoscale_button]:
             widget.setMinimumHeight(28)
 
@@ -367,8 +376,10 @@ class CompositeImageViewWidget(QMainWindow):
         channel_controls_layout.addWidget(self.color_button, 0, 2)
         channel_controls_layout.addWidget(self.color_widget, 0, 3)
         channel_controls_layout.addWidget(autoscale_button, 0, 4)
-        channel_controls_layout.addWidget(self.channel_slider, 1, 0, 1, 5)
-        channel_controls_layout.addWidget(self.result_slice_widget, 2, 0, 1, 5)
+        channel_controls_layout.addWidget(reset_lut_button, 1, 2)
+        channel_controls_layout.addWidget(invert_lut_button, 1, 3)
+        channel_controls_layout.addWidget(self.channel_slider, 2, 0, 1, 5)
+        channel_controls_layout.addWidget(self.result_slice_widget, 3, 0, 1, 5)
         channel_controls_layout.setColumnStretch(4, 1)
 
         channel_header = QWidget()
@@ -926,10 +937,145 @@ class CompositeImageViewWidget(QMainWindow):
             return self.color_manager.get_color_rgb(channel)
         if channel in self.histogram_states:
             histogram_state = self.histogram_states[channel]
-            colormap_color = histogram_state['gradient']['ticks'][1][1][:3]
+            colormap_color = self._extract_channel_color_from_ticks(self._sorted_gradient_ticks(histogram_state))
         else:
             colormap_color = self.colormap_colors[channel % len(self.colormap_colors)]
         return colormap_color
+
+    @staticmethod
+    def _normalize_rgba(color, default=(0, 0, 0, 255)) -> tuple[int, int, int, int]:
+        try:
+            values = tuple(int(v) for v in color)
+        except Exception:
+            return default
+        if len(values) >= 4:
+            return values[:4]
+        if len(values) == 3:
+            return values + (255,)
+        return default
+
+    @staticmethod
+    def _is_black_rgb(color) -> bool:
+        return tuple(color[:3]) == (0, 0, 0)
+
+    @classmethod
+    def _sorted_gradient_ticks(cls, histogram_state: dict) -> list[tuple[float, tuple[int, int, int, int]]]:
+        gradient = histogram_state.get('gradient', {}) if isinstance(histogram_state, dict) else {}
+        raw_ticks = list(gradient.get('ticks', [])) if isinstance(gradient, dict) else []
+        normalized_ticks = []
+        for raw_tick in sorted(raw_ticks, key=lambda tick: float(tick[0])):
+            try:
+                pos = float(raw_tick[0])
+            except Exception:
+                continue
+            pos = float(np.clip(pos, 0.0, 1.0))
+            rgba = cls._normalize_rgba(raw_tick[1])
+            if normalized_ticks and np.isclose(pos, normalized_ticks[-1][0]):
+                normalized_ticks[-1] = (pos, rgba)
+            else:
+                normalized_ticks.append((pos, rgba))
+        if not normalized_ticks:
+            return [(0.0, (0, 0, 0, 255)), (1.0, (255, 255, 255, 255))]
+        if len(normalized_ticks) == 1:
+            single_color = normalized_ticks[0][1]
+            return [(0.0, single_color), (1.0, single_color)]
+        return normalized_ticks
+
+    @classmethod
+    def _channel_color_tick_index(cls, ticks: list[tuple[float, tuple[int, int, int, int]]]) -> int:
+        if not ticks:
+            return 0
+        if len(ticks) == 1:
+            return 0
+        bottom_is_black = cls._is_black_rgb(ticks[0][1])
+        top_is_black = cls._is_black_rgb(ticks[-1][1])
+        if bottom_is_black != top_is_black:
+            return 0 if not bottom_is_black else len(ticks) - 1
+        return len(ticks) - 1
+
+    @classmethod
+    def _extract_channel_color_from_ticks(
+            cls,
+            ticks: list[tuple[float, tuple[int, int, int, int]]],
+            fallback: tuple[int, int, int] = (255, 255, 255),
+    ) -> tuple[int, int, int]:
+        if not ticks:
+            return fallback
+        color_tick = ticks[cls._channel_color_tick_index(ticks)][1]
+        return tuple(color_tick[:3])
+
+    def _ensure_channel_histogram_state(self, channel_index: int) -> dict | None:
+        histogram_state = self.histogram_states.get(channel_index)
+        if histogram_state is not None:
+            return histogram_state
+        if self.img is None:
+            return None
+        try:
+            levels = self.channel_view.getHistogramWidget().item.getLevels()
+        except Exception:
+            levels = None
+        if levels is None:
+            levels = (0.0, self._channel_histogram_upper_bound())
+        self.make_color_state(
+            channel_index,
+            (float(levels[0]), float(levels[1])),
+            self.colormap_colors[channel_index % len(self.colormap_colors)],
+            colorpos='default',
+        )
+        return self.histogram_states.get(channel_index)
+
+    def _apply_histogram_ticks_to_channel(
+            self,
+            channel_index: int,
+            ticks: list[tuple[float, tuple[int, int, int, int]]],
+    ):
+        histogram_state = self._ensure_channel_histogram_state(channel_index)
+        if histogram_state is None:
+            return
+        histogram_state['gradient'] = {
+            'mode': 'rgb',
+            'ticks': [(float(pos), self._normalize_rgba(color)) for pos, color in ticks],
+            'ticksVisible': True,
+        }
+        if channel_index == self.channel_slider.value():
+            self._restore_channel_histogram_widget_state(histogram_state)
+        self._refresh_composite_from_histogram_states()
+        self._sync_color_button_to_gradient()
+
+    def reset_current_channel_gamma_curve(self):
+        if self.img is None:
+            return
+        channel_index = self.channel_slider.value()
+        histogram_state = self._ensure_channel_histogram_state(channel_index)
+        if histogram_state is None:
+            return
+        ticks = self._sorted_gradient_ticks(histogram_state)
+        bottom_alpha = ticks[0][1][3]
+        top_alpha = ticks[-1][1][3]
+        channel_color = tuple(self.colormap_colors[channel_index % len(self.colormap_colors)])
+        self._apply_histogram_ticks_to_channel(
+            channel_index,
+            [
+                (0.0, (0, 0, 0, bottom_alpha)),
+                (1.0, channel_color + (top_alpha,)),
+            ],
+        )
+        logger.info('Reset LUT curve for channel %s.', channel_index)
+
+    def invert_current_channel_lut(self):
+        if self.img is None:
+            return
+        channel_index = self.channel_slider.value()
+        histogram_state = self._ensure_channel_histogram_state(channel_index)
+        if histogram_state is None:
+            return
+        ticks = self._sorted_gradient_ticks(histogram_state)
+        inverted_ticks = sorted(
+            [(float(np.clip(1.0 - pos, 0.0, 1.0)), color) for pos, color in ticks],
+            key=lambda tick: tick[0],
+        )
+        self._apply_histogram_ticks_to_channel(channel_index, inverted_ticks)
+        logger.info('Inverted LUT for channel %s.', channel_index)
 
     def _restore_channel_histogram_widget_state(self, histogram_state: dict):
         histogram_widget = self.channel_view.getHistogramWidget()
@@ -978,9 +1124,10 @@ class CompositeImageViewWidget(QMainWindow):
         if channel_index in self.histogram_states:
             histogram_state = self.histogram_states[channel_index]
             self._restore_channel_histogram_widget_state(histogram_state)
-            # self.channel_view.ui.histogram.setHistogramRange(np.amin(selected_im), np.amax(selected_im))
-            # 4th value of the histogram_state['gradient']['ticks'][1][1] is opacity of the top color and should be omitted
-            colormap_color = histogram_state['gradient']['ticks'][1][1][:3]
+            colormap_color = self._extract_channel_color_from_ticks(
+                self._sorted_gradient_ticks(histogram_state),
+                fallback=self.colormap_colors[channel_index % len(self.colormap_colors)],
+            )
             logger.debug("Channel known")
         else:
             # If levels or histogram state is not available,
@@ -1037,15 +1184,15 @@ class CompositeImageViewWidget(QMainWindow):
         if histogram_state is None:
             return
 
-        ticks = sorted(histogram_state['gradient']['ticks'], key=lambda tick: tick[0])
-        bottom_tick = ticks[0]
-        top_tick = ticks[-1]
-        bottom_rgba = tuple(bottom_tick[1]) if len(bottom_tick[1]) == 4 else tuple(bottom_tick[1]) + (255,)
-        top_opacity = top_tick[1][3] if len(top_tick[1]) == 4 else 255
-        histogram_state['gradient']['ticks'] = [
-            (bottom_tick[0], bottom_rgba),
-            (top_tick[0], colormap_color + (top_opacity,))
-        ]
+        ticks = self._sorted_gradient_ticks(histogram_state)
+        color_tick_index = self._channel_color_tick_index(ticks)
+        updated_ticks = []
+        for idx, (pos, rgba) in enumerate(ticks):
+            if idx == color_tick_index:
+                updated_ticks.append((pos, colormap_color + (rgba[3],)))
+            else:
+                updated_ticks.append((pos, rgba))
+        histogram_state['gradient']['ticks'] = updated_ticks
 
         # update the colormap color for the current channel in the class variable
         self.colormap_colors[channel_index % len(self.colormap_colors)] = colormap_color
@@ -1098,14 +1245,15 @@ class CompositeImageViewWidget(QMainWindow):
         if index in self.histogram_states:
             # Update the histogram state with the new colormap color
             histogram_state = self.histogram_states[index]
-            ticks = sorted(histogram_state['gradient']['ticks'], key=lambda tick: tick[0])
-            bottom_tick = ticks[0]
-            top_tick = ticks[-1]
-            top_opacity = top_tick[1][3] if len(top_tick[1]) == 4 else 255
-            histogram_state['gradient']['ticks'] = [
-                bottom_tick,
-                (top_tick[0], color + (top_opacity,))
-            ]
+            ticks = self._sorted_gradient_ticks(histogram_state)
+            color_tick_index = self._channel_color_tick_index(ticks)
+            updated_ticks = []
+            for idx, (pos, rgba) in enumerate(ticks):
+                if idx == color_tick_index:
+                    updated_ticks.append((pos, color + (rgba[3],)))
+                else:
+                    updated_ticks.append((pos, rgba))
+            histogram_state['gradient']['ticks'] = updated_ticks
             logger.info(f'Updated colormap color for channel {index}')
 
         # update the composite image with the new colormap color
@@ -1862,27 +2010,24 @@ class CompositeImageViewWidget(QMainWindow):
             histogram_state = self.histogram_states[i]
 
             vmin, vmax = histogram_state['levels']
-            ticks = histogram_state['gradient']['ticks']
-
-            # Sort ticks to be sure
-            ticks = sorted(ticks, key=lambda t: t[0])  # t[0] = position in [0, 1]
-
-            # Assume two ticks only: (pos0, color0), (pos1, color1)
-            pos0, color0 = ticks[0]
-            pos1, color1 = ticks[1]
-
-            # Normalize image data
             channel_data = self.img[..., i].astype(np.float32)
+            if vmax <= vmin:
+                continue
             norm = np.clip((channel_data - vmin) / (vmax - vmin), 0, 1)
-
-            # Interpolate mask in gradient range
-            grad_range = np.clip((norm - pos0) / (pos1 - pos0), 0, 1)
-
-            # LUT color (only top color is applied)
-            lut_color = np.array(color1[:3], dtype=np.float32) / 255.0
-
+            ticks = self._sorted_gradient_ticks(histogram_state)
+            positions = np.array([tick[0] for tick in ticks], dtype=np.float32)
+            colors = np.array([tick[1][:3] for tick in ticks], dtype=np.float32) / 255.0
+            flat_norm = norm.reshape(-1)
+            mapped_rgb = np.empty((flat_norm.size, 3), dtype=np.float32)
             for c in range(3):
-                rgb_image[..., c] += grad_range * lut_color[c]
+                mapped_rgb[:, c] = np.interp(
+                    flat_norm,
+                    positions,
+                    colors[:, c],
+                    left=colors[0, c],
+                    right=colors[-1, c],
+                )
+            rgb_image += mapped_rgb.reshape((*norm.shape, 3))
 
         # Clip the final RGB image to [0, 1] and scale to 16-bit
         rgb_image = np.clip(rgb_image, 0, 1)
@@ -1964,20 +2109,16 @@ class CompositeImageViewWidget(QMainWindow):
         """Sync the ColorButton with the top color in the histogram gradient."""
         if self.timeout_callbacks:
             return
-        gradient = self.channel_view.getHistogramWidget().gradient
-
-        # Safely extract the tick colors
-        top_color = None
-        top_pos = -1
-
-        for tick_obj, pos in gradient.listTicks():
-            if pos > top_pos:
-                top_pos = pos
-                top_color = tick_obj.color.getRgb()[:3]  # (r, g, b)
-        if top_color is None:
+        try:
+            histogram_state = self.channel_view.getHistogramWidget().saveState()
+        except Exception:
             return
+        channel_index = self.channel_slider.value()
+        top_color = self._extract_channel_color_from_ticks(
+            self._sorted_gradient_ticks(histogram_state),
+            fallback=self.colormap_colors[channel_index % len(self.colormap_colors)],
+        )
 
-            # Compare with current color in color_button
         current_color = self.color_widget.color().getRgb()[:3]
 
         if current_color == top_color:
@@ -1989,7 +2130,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.color_widget.blockSignals(False)
 
         # update plot
-        self.update_plot_line_color(self.channel_slider.value(), pg.mkColor(top_color))
+        self.update_plot_line_color(channel_index, pg.mkColor(top_color))
 
     def lock_bottom_tick(self):
         gradient = self.channel_view.getHistogramWidget().gradient

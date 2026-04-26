@@ -838,7 +838,9 @@ class CompositeImageViewWidget(QMainWindow):
         self.channel_spinbox.setMaximum(channels)
 
         if update_gamma_curve:
-            self.update_color_positions()
+            logger.warning(
+                "Ignoring legacy update_gamma_curve request to preserve manually stored gradient positions."
+            )
         if channels:
             # Initialize the channel view with all channels and switch to selected afterwards
             for i in range(1, self.img.shape[-1]):
@@ -929,6 +931,15 @@ class CompositeImageViewWidget(QMainWindow):
             colormap_color = self.colormap_colors[channel % len(self.colormap_colors)]
         return colormap_color
 
+    def _restore_channel_histogram_widget_state(self, histogram_state: dict):
+        histogram_widget = self.channel_view.getHistogramWidget()
+        histogram_widget.restoreState(histogram_state)
+        # Tick visibility is stored inside the pyqtgraph gradient state.
+        # Force it back on after every restore so the handles remain visible
+        # and draggable even if an older hidden state was saved.
+        histogram_widget.gradient.showTicks(True)
+        self.channel_view.ui.histogram.setHistogramRange(0, self._channel_histogram_upper_bound())
+
     @staticmethod
     def _capture_viewbox_range(image_view) -> tuple[list[float], list[float]] | None:
         try:
@@ -966,8 +977,7 @@ class CompositeImageViewWidget(QMainWindow):
         # Apply saved levels and histogram state if available
         if channel_index in self.histogram_states:
             histogram_state = self.histogram_states[channel_index]
-            self.channel_view.getHistogramWidget().restoreState(histogram_state)
-            self.channel_view.ui.histogram.setHistogramRange(0, self._channel_histogram_upper_bound())
+            self._restore_channel_histogram_widget_state(histogram_state)
             # self.channel_view.ui.histogram.setHistogramRange(np.amin(selected_im), np.amax(selected_im))
             # 4th value of the histogram_state['gradient']['ticks'][1][1] is opacity of the top color and should be omitted
             colormap_color = histogram_state['gradient']['ticks'][1][1][:3]
@@ -1022,21 +1032,25 @@ class CompositeImageViewWidget(QMainWindow):
 
         # Convert QColor to pg.Color and set it as colormap color
         colormap_color = (selected_color.red(), selected_color.green(), selected_color.blue())
-        # check if the colormap already exists in the histogram states and extract colormin and colormax positions
-        pos_min, pos_max = 0, 1
-        opacity_min, opacity_max = 255, 255
-        if self.channel_slider.value() in self.histogram_states:
-            pos_min = self.histogram_states[self.channel_slider.value()]['gradient']['ticks'][0][0]
-            pos_max = self.histogram_states[self.channel_slider.value()]['gradient']['ticks'][1][0]
-            opacity_min = self.histogram_states[self.channel_slider.value()]['gradient']['ticks'][0][1][3]
-            opacity_max = self.histogram_states[self.channel_slider.value()]['gradient']['ticks'][1][1][3]
+        channel_index = self.channel_slider.value()
+        histogram_state = self.histogram_states.get(channel_index)
+        if histogram_state is None:
+            return
 
-        colormap = pg.ColorMap(pos=[pos_min, pos_max], color=[(0, 0, 0) + (opacity_min,), colormap_color + (opacity_max,)])
+        ticks = sorted(histogram_state['gradient']['ticks'], key=lambda tick: tick[0])
+        bottom_tick = ticks[0]
+        top_tick = ticks[-1]
+        bottom_rgba = tuple(bottom_tick[1]) if len(bottom_tick[1]) == 4 else tuple(bottom_tick[1]) + (255,)
+        top_opacity = top_tick[1][3] if len(top_tick[1]) == 4 else 255
+        histogram_state['gradient']['ticks'] = [
+            (bottom_tick[0], bottom_rgba),
+            (top_tick[0], colormap_color + (top_opacity,))
+        ]
 
         # update the colormap color for the current channel in the class variable
-        self.colormap_colors[self.channel_slider.value()] = colormap_color
-        # Update the colormap in the PlotWidget
-        self.channel_view.setColorMap(colormap)
+        self.colormap_colors[channel_index % len(self.colormap_colors)] = colormap_color
+
+        self._restore_channel_histogram_widget_state(histogram_state)
 
     def update_color_positions(self):
         # get the min and max values for all channels
@@ -1077,17 +1091,29 @@ class CompositeImageViewWidget(QMainWindow):
                 self.color_manager.set_color_rgb(index, color)
 
         if index == self.channel_slider.value():
+            self.color_widget.blockSignals(True)
             self.color_widget.setColor(pg.mkColor(color))
+            self.color_widget.blockSignals(False)
 
         if index in self.histogram_states:
             # Update the histogram state with the new colormap color
             histogram_state = self.histogram_states[index]
-            histogram_state['gradient']['ticks'][1] = (histogram_state['gradient']['ticks'][1][0], (color + (255,)))
+            ticks = sorted(histogram_state['gradient']['ticks'], key=lambda tick: tick[0])
+            bottom_tick = ticks[0]
+            top_tick = ticks[-1]
+            top_opacity = top_tick[1][3] if len(top_tick[1]) == 4 else 255
+            histogram_state['gradient']['ticks'] = [
+                bottom_tick,
+                (top_tick[0], color + (top_opacity,))
+            ]
             logger.info(f'Updated colormap color for channel {index}')
 
         # update the composite image with the new colormap color
         self.update_plot_line_color(index, QColor(*color))
-        self.sync_colormap_current_channel_to_widget()
+        if index == self.channel_slider.value():
+            self.sync_colormap_current_channel_to_widget()
+        else:
+            self._refresh_composite_from_histogram_states()
 
         # self.update_channel_and_composite_levels()
         # update is automatically triggered by gradient change
@@ -1684,7 +1710,10 @@ class CompositeImageViewWidget(QMainWindow):
         self.set_colormap(cur_channel, self.get_color(cur_channel), change_color_manager=False)
 
     def reload_color(self, channel_index: int):
-        self.set_colormap(channel_index, self.get_color(channel_index), change_color_manager=False)
+        color = self.get_color(channel_index)
+        if self.colormap_colors[channel_index % len(self.colormap_colors)] == color:
+            return
+        self.set_colormap(channel_index, color, change_color_manager=False)
 
 
     def make_color_state(self, index: int, vmin_max: tuple, color: tuple[int, int, int], colorpos='default'):
@@ -1720,7 +1749,7 @@ class CompositeImageViewWidget(QMainWindow):
 
         # set the current histogram state in the channel view
         if index == self.channel_slider.value():
-            self.channel_view.getHistogramWidget().restoreState(self.histogram_states[index])
+            self._restore_channel_histogram_widget_state(self.histogram_states[index])
 
     def restore_histogram_state_from_preset(self, index: int, preset_state: dict):
         """
@@ -1784,7 +1813,7 @@ class CompositeImageViewWidget(QMainWindow):
         logger.info('Restored histogram state for channel %s from preset: %s', index, self.histogram_states[index])
 
         if index == self.channel_slider.value():
-            self.channel_view.getHistogramWidget().restoreState(self.histogram_states[index])
+            self._restore_channel_histogram_widget_state(self.histogram_states[index])
 
     def set_spectral_units(self, units: str):
         if self.axis_labels is not None:
@@ -1803,8 +1832,6 @@ class CompositeImageViewWidget(QMainWindow):
             # Convert QColor to QColor object and
             qcolor = pg.mkColor(color.name())
             self.set_colormap(self.channel_slider.value(), (qcolor.red(), qcolor.green(), qcolor.blue()))
-
-        self.sync_colormap_current_channel_to_widget()
 
     # new implementation of the get_rgba method where the colormap is applied to the image similar to FIJI
     # with 8 bit colormaps
@@ -1875,12 +1902,20 @@ class CompositeImageViewWidget(QMainWindow):
         # Save the histogram state
         histogram_state = self.channel_view.getHistogramWidget().saveState()
         self.histogram_states[channel_index] = histogram_state
+        self._refresh_composite_from_histogram_states(composite_levels=composite_levels)
+        self._sync_color_button_to_gradient()
+        # self.composite_view.autoLevels()
+
+    def _refresh_composite_from_histogram_states(self, composite_levels=None):
+        if self.img is None:
+            return
         false_color_im = self.get_rgba()
+        if false_color_im is None:
+            return
+
         composite_view_range = self._capture_viewbox_range(self.composite_view)
         self.composite_view.setImage(false_color_im, autoLevels=False)
         self._restore_viewbox_range(self.composite_view, composite_view_range)
-        self._sync_color_button_to_gradient()
-
         self.composite_view.ui.histogram.setHistogramRange(0, max_dtype_val)
         if auto_min_max:
             min_, max_ = self.min_max_levels()
@@ -1888,7 +1923,6 @@ class CompositeImageViewWidget(QMainWindow):
         else:
             min_, max_ = composite_levels if composite_levels is not None else self._current_composite_levels()
             self.composite_view.ui.histogram.setLevels(min_, max_)
-        # self.composite_view.autoLevels()
 
     def min_max_levels(self):
         # Initialize variables for min_levels and max_levels
@@ -1977,7 +2011,7 @@ class CompositeImageViewWidget(QMainWindow):
                 gradient.blockSignals(True)
                 tick.setPos(QPointF(locked_pos, 0))  # y=0 is ignored
                 current_ticks = gradient.listTicks()
-                self.channel_view.getHistogramWidget().restoreState(self.histogram_states[chan])
+                self._restore_channel_histogram_widget_state(self.histogram_states[chan])
                 # remove all ticks that are not in the current ticks
                 for tick, pos in gradient.listTicks():
                     if tick not in current_ticks:

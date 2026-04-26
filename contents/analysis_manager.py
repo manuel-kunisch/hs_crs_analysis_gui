@@ -714,7 +714,10 @@ class AnalysisManager(QtCore.QObject):
                 if self._use_fast_multislice_nnmf():
                     self.make_all_seeds_from_inputs(show_seeds=True)
                 elif self._analysis_series_4d is not None:
-                    self._prepare_fixed_h_seed_template(show_seeds=True, fill_missing_h=True)
+                    # Regular 4D seeded NNMF should honor the user-selected W seed
+                    # mode. The fixed-H helper forces NNLS abundance maps, which is
+                    # only correct for fixed-H analysis modes.
+                    self.make_all_seeds_from_inputs(show_seeds=True)
                 else:
                     self.make_all_seeds_from_inputs(show_seeds=True)
         self.analyze_button.setEnabled(False)

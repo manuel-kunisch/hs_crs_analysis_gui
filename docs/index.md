@@ -18,37 +18,6 @@ TODO:
 - [Troubleshooting](troubleshooting.md)
 - [Citation](citation.md)
 
-## Docs Assets
-
-Recommended asset layout:
-
-```text
-docs/
-  assets/
-    images/
-      quickstart/
-      roi_manager/
-      results/
-    gifs/
-      quickstart/
-      roi_manager/
-      results/
-```
-
-Recommended naming:
-
-- screenshots: `step_01_load_data.png`
-- animations: `step_02_draw_roi.gif`
-
-Markdown examples:
-
-```md
-![Load dialog](assets/images/quickstart/step_01_load_data.png)
-
-![Drawing a ROI](assets/gifs/roi_manager/step_02_draw_roi.gif)
-```
-
-For large animations, prefer a short GIF only for the key interaction and use PNG screenshots for the rest. Keep image and GIF paths relative to the current markdown file.
 
 ## Tutorials
 

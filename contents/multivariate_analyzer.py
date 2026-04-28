@@ -914,10 +914,112 @@ class MultivariateAnalyzer(object):
 
         return W_bg, H_bg
 
+    def _estimate_residual_H_seed(self, component_index: int, bgd: bool = False) -> np.ndarray | None:
+        eps = getattr(self, "nnmf_epsilon", 1e-8)
+        image_data = self._get_image_data_for_component(component_index, bgd=bgd)
+        if image_data is None or image_data.size == 0:
+            return None
+
+        working_data = np.asarray(image_data, dtype=np.float64)
+        working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
+        working_data = np.maximum(working_data, 0.0)
+
+        basis_columns = []
+        if self.seed_H is not None:
+            for seed_index in range(min(self.seed_H.shape[0], self._n_components)):
+                if seed_index == component_index:
+                    continue
+                prepared = self._prepare_fixed_h_component(self.seed_H[seed_index], eps=eps)
+                if prepared is not None:
+                    basis_columns.append(prepared)
+
+        residual = working_data
+        if basis_columns:
+            basis = np.column_stack(basis_columns).astype(np.float64, copy=False)
+            abundance, _ = self._build_nnls_abundance_matrix(
+                working_data,
+                basis,
+                eps,
+                f'missing-h-{component_index}',
+            )
+            residual = np.maximum(
+                working_data - np.asarray(abundance, dtype=np.float64) @ basis.T,
+                0.0,
+            )
+
+        residual_strength = np.linalg.norm(residual, axis=1)
+        active_pixels = np.flatnonzero(residual_strength > eps)
+        if active_pixels.size == 0:
+            return None
+
+        top_k = min(16, active_pixels.size)
+        if active_pixels.size > top_k:
+            top_indices = active_pixels[np.argpartition(residual_strength[active_pixels], -top_k)[-top_k:]]
+        else:
+            top_indices = active_pixels
+
+        candidate_spectra = residual[top_indices]
+        row_scale = np.max(candidate_spectra, axis=1)
+        valid_rows = row_scale > eps
+        if not np.any(valid_rows):
+            return None
+
+        candidate_spectra = candidate_spectra[valid_rows] / row_scale[valid_rows, None]
+        candidate = np.mean(candidate_spectra, axis=0)
+        candidate = gaussian_filter1d(candidate, 5)
+        candidate = np.maximum(candidate, eps)
+        reference_scale = self._get_reference_H_seed_scale(
+            exclude_component=component_index,
+            fallback_pixels=top_indices,
+            eps=eps,
+        )
+        candidate = candidate * reference_scale / max(float(np.mean(candidate, axis=None)), eps)
+        return np.asarray(candidate, dtype=np.float64)
+
+    def _get_reference_H_seed_scale(
+            self,
+            exclude_component: int | None = None,
+            fallback_pixels: np.ndarray | None = None,
+            eps: float = 1e-8,
+    ) -> float:
+        seed_means = []
+        if self.seed_H is not None:
+            for seed_index in range(min(self.seed_H.shape[0], self._n_components)):
+                if exclude_component is not None and seed_index == exclude_component:
+                    continue
+                prepared = self._prepare_fixed_h_component(self.seed_H[seed_index], eps=eps)
+                if prepared is not None:
+                    seed_means.append(float(np.mean(prepared, axis=None)))
+
+        if seed_means:
+            return max(float(np.median(seed_means)), eps)
+
+        if fallback_pixels is not None and fallback_pixels.size > 0:
+            raw_reference = np.asarray(self.data_2d[fallback_pixels], dtype=np.float64)
+            raw_reference = np.nan_to_num(raw_reference, nan=0.0, posinf=0.0, neginf=0.0)
+            raw_reference = np.maximum(raw_reference, 0.0)
+            if raw_reference.size > 0:
+                return max(float(np.mean(raw_reference, axis=None)), eps)
+
+        return max(float(np.mean(self.data_2d, axis=None)), eps)
+
     def set_up_random_H_seed(self, i):
-        # TODO: check how to set up the best random seed for the H matrix
+        # Prefer a data-driven residual spectrum and keep the legacy random fallback.
         if self.seed_H is None:
             self.seed_H = np.zeros((self._n_components, self.raw_data_3d.shape[0]))
+
+        is_background = bool(
+            self.seed_H_background_flag is not None
+            and i < len(self.seed_H_background_flag)
+            and self.seed_H_background_flag[i]
+        )
+        residual_seed = self._estimate_residual_H_seed(i, bgd=is_background)
+        if residual_seed is not None and residual_seed.shape == self.seed_H[i].shape:
+            self.seed_H[i] = residual_seed
+            logger.info('Created residual-based H seed for component %s', i)
+            self._clear_nnls_abundance_cache()
+            return
+
         avg_intensity = np.mean(self.data_2d, axis=None)
         self.seed_H[i] = np.full_like(self.seed_H[i], avg_intensity)
         self.seed_H[i] += np.abs(np.random.normal(0, 0.5 * np.amax(self.data_2d), self.seed_H[i].shape))
@@ -936,6 +1038,10 @@ class MultivariateAnalyzer(object):
         if not self._W_prepared:
             logger.warning('W seeds not prepared. Trying to set up from H')
             self.estimate_W_seed_matrix_from_H(overwrite=False)
+        if fill_H_seed and not self._W_prepared:
+            logger.warning('W seeds still not prepared. Creating missing H seeds before W fallback.')
+            self.set_up_missing_H_seeds()
+            self.estimate_W_seed_matrix_from_H(overwrite=False)
         if not self._W_prepared:
             logger.warning('W seeds still not prepared, using average intensity for remaining components')
             self.set_up_random_W_seed(overwrite=False)
@@ -952,6 +1058,8 @@ class MultivariateAnalyzer(object):
         # check if H already exists and which components still must be filled
         if self.seed_H is None:
             self.seed_H = np.zeros((self._n_components, self.data_2d.shape[1]))
+        if self.seed_H_background_flag is None or len(self.seed_H_background_flag) < self._n_components:
+            self.seed_H_background_flag = np.zeros(self._n_components, dtype=bool)
 
         remaining_components = np.array(
             [idx for idx in range(self.seed_H.shape[0]) if not self._has_seed_signal(self.seed_H[idx])]
@@ -963,9 +1071,9 @@ class MultivariateAnalyzer(object):
             logger.info(f'Creating H seed for component {cmp}')
             if self.seed_H_background_flag[cmp]:
                 logger.info(f'Component {cmp} is marked as background, using raw data for H seed estimation')
-                self.seed_H[cmp] = np.mean(self.data_2d, axis=1)
+                self.seed_H[cmp] = np.mean(self.data_2d, axis=0)
                 self._clear_nnls_abundance_cache()
-                return True
+                continue
             self.set_up_random_H_seed(cmp)
         return True
 

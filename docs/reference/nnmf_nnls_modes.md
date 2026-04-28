@@ -63,6 +63,8 @@ Sources for `W0` include NNLS abundance maps, selective score maps, H-weighted m
 
 The seeded spectra are kept on their physical amplitude scale. The GUI does not renormalize each component spectrum independently before seeded NNMF or NNLS abundance seeding. The selective-score W seed may still be rescaled afterward to unit maximum so that heuristic map remains numerically well behaved without changing `H`.
 
+If one component has no usable `H0` at all, seeded initialization uses a special fallback. The already-seeded components are first fitted to the data with the fixed-H NNLS subproblem, a positive residual is computed, and a residual-derived spectrum is averaged from strong residual pixels. That spectrum is then rescaled toward the existing seed basis so its mean amplitude stays comparable to the supplied `H` seeds rather than to the typically smaller residual data. If this residual-based construction fails, the GUI falls back to the legacy smooth random spectrum.
+
 ## Fixed-H NNLS
 
 Fixed-H NNLS keeps the spectra fixed and solves only the abundance maps:

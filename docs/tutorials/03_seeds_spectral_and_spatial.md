@@ -17,6 +17,8 @@ For spectra loaded from files, the imported spectrum is re-sampled to the curren
 
 For seeded NNMF and NNLS-based seed generation, these spectra are kept on their physical amplitude scale. The GUI does not normalize each seed spectrum independently before building the spectral model. This keeps the relation between `W` and `H` consistent with the underlying factorization idea \(X \approx WH\).
 
+If a component is missing an `H` seed entirely, the GUI now tries a special fallback before using the older random smooth spectrum. It first fits the already-seeded components to the data, forms a positive residual, averages a small set of strong residual spectra, and uses that residual-derived shape as the missing `H` seed. That fallback spectrum is then rescaled to match the existing `H` seed basis as closely as possible, so it starts on a comparable amplitude scale instead of on the smaller residual-data scale. If no stable residual candidate can be built, the legacy random smooth fallback is still used.
+
 In the ROI table, these appear as normal ROI rows or dummy ROI rows. A dummy ROI does not need to correspond to a drawn spatial region; it can carry a spectrum or a fixed W map.
 
 > GIF placeholder: drawing a ROI and seeing its spectrum appear in the ROI average plot.
@@ -34,6 +36,8 @@ The GUI can estimate W maps from H seeds using different modes:
 - homogeneous empty map.
 
 The modes do not all have the same meaning. The NNLS abundance map is a direct coefficient estimate from the seeded spectra. The selective score map is a heuristic spatial guess based on spectral projection and competition. For that score-map mode, the GUI leaves `H` unchanged and rescales the resulting `W` seed map afterward to unit maximum. The other seed modes keep their natural numeric scale.
+
+For the special case above where an `H` seed is missing, the residual spectrum is currently found from an NNLS fit against the already available `H` seeds before the normal `W`-seed mode is applied to the new component. This means the shape-discovery step is NNLS-based even if the final `W` initialization mode is `selective_score` or another heuristic mode.
 
 Fixed W maps can also be attached to dummy ROIs. These fixed W seeds are useful for background components or for importing spatial maps from previous results.
 

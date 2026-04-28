@@ -892,7 +892,7 @@ class AnalysisManager(QtCore.QObject):
                         overwrite=True,
                         skip_components=fixed_seed_W.keys(),
                     )
-                    self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
+                    self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
                     if self.mv_analyzer.seed_W is None:
                         self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
                     for comp, fixed_W in fixed_seed_W.items():
@@ -1007,7 +1007,7 @@ class AnalysisManager(QtCore.QObject):
                         overwrite=True,
                         skip_components=fixed_seed_W.keys(),
                     )
-                    self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
+                    self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
                     if self.mv_analyzer.seed_W is None:
                         self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
                     for comp, fixed_W in fixed_seed_W.items():
@@ -1134,7 +1134,7 @@ class AnalysisManager(QtCore.QObject):
         self.mv_analyzer._W_prepared = False
         # calculate the abundance maps
         self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
-        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
+        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
         if self.mv_analyzer.seed_W is None:
             self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()), dtype=np.float64)
         for comp, fixed_W in fixed_seed_W.items():
@@ -1353,7 +1353,7 @@ class AnalysisManager(QtCore.QObject):
         logger.info('Filling remaining W seeds after H-based initialization.')
         # fill remaining W seeds
         # tries to either fill from given H seeds or from average image data (fallback)
-        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)  # fill the W seed matrix
+        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)  # fill the W seed matrix
 
         logger.info(f'{"-"*10}')
         logger.info("Set up remaining H seeds:")
@@ -1772,7 +1772,7 @@ class AnalysisManager(QtCore.QObject):
         self.reload_H_seeds_from_rois()
         _, _, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True, debug_mode=False)
         self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
-        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=False)
+        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
         # open a new floating composite_image with the W seeds in a pyqtgraph image view
         W_seed_3d = self.mv_analyzer.seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
                                                     self.mv_analyzer.raw_data_3d.shape[2], -1)

@@ -3,7 +3,7 @@
 The GUI uses pyqtgraph for image views, histograms, line plots, ROI overlays, and result plots. This page summarizes the interactions that are used repeatedly throughout the app.
 
 
-![Recentering the view](assets/gifs/00_recentering_view.gif)
+![Recentering the view](../assets/gifs/00_recentering_view.gif)
 
 > GIF placeholder: right-clicking a pyqtgraph plot, setting exact axis ranges, adjusting a histogram, and exporting a plot.
 

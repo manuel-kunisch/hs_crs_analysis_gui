@@ -44,7 +44,14 @@ Recommended starting points:
 - [`Examples`](docs/examples/reproduce_figure_1.md): figure-linked and modality-specific workflows
 - [`Reference`](docs/reference/nnmf_nnls_modes.md): feature-specific notes
 
-**[TODO: publish these docs with GitHub Pages / MkDocs once the tutorials contain screenshots, GIFs, and example data links.]**
+Local docs build:
+
+```powershell
+py -3 -m pip install -r docs-requirements.txt
+py -3 -m mkdocs serve
+```
+
+The repository also contains a GitHub Pages workflow at `.github/workflows/docs.yml` that builds the MkDocs site from `main`.
 
 ## Repository Status
 

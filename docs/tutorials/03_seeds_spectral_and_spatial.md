@@ -37,7 +37,7 @@ The GUI can estimate W maps from H seeds using different modes:
 
 The modes do not all have the same meaning. The NNLS abundance map is a direct coefficient estimate from the seeded spectra. The selective score map is a heuristic spatial guess based on spectral projection and competition. For that score-map mode, the GUI leaves `H` unchanged and rescales the resulting `W` seed map afterward to unit maximum. The other seed modes keep their natural numeric scale.
 
-For the special case above where an `H` seed is missing, the residual spectrum is currently found from an NNLS fit against the already available `H` seeds before the normal `W`-seed mode is applied to the new component. This means the shape-discovery step is NNLS-based even if the final `W` initialization mode is `selective_score` or another heuristic mode.
+For the special case above where an `H` seed is missing, the residual spectrum is first derived from a fit against the already available `H` seeds. In the default case, strong residual pixels are ranked by residual strength. If the active `W`-seed mode is `selective_score`, those residual pixels are instead ranked by a novelty-weighted score that prefers strong unexplained signal over signal already well described by the existing seed basis.
 
 Fixed W maps can also be attached to dummy ROIs. These fixed W seeds are useful for background components or for importing spatial maps from previous results.
 

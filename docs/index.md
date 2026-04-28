@@ -1,6 +1,7 @@
 # HS MV Analysis Documentation
 
-This documentation contains the basic GUI tutorials, example workflows, and feature reference for HS MV Analysis.
+Welcome to the documentation for HS MV Analysis, a software tool for analyzing hyperspectral microscopy data using multivariate analysis techniques.
+ This documentation is designed to guide users through the installation, usage, and troubleshooting of the software, as well as provide detailed tutorials and reference materials.
 
 TODO:
 - [] add screenshots and short GIFs for each major workflow.
@@ -17,15 +18,52 @@ TODO:
 - [Troubleshooting](troubleshooting.md)
 - [Citation](citation.md)
 
+## Docs Assets
+
+Recommended asset layout:
+
+```text
+docs/
+  assets/
+    images/
+      quickstart/
+      roi_manager/
+      results/
+    gifs/
+      quickstart/
+      roi_manager/
+      results/
+```
+
+Recommended naming:
+
+- screenshots: `step_01_load_data.png`
+- animations: `step_02_draw_roi.gif`
+
+Markdown examples:
+
+```md
+![Load dialog](assets/images/quickstart/step_01_load_data.png)
+
+![Drawing a ROI](assets/gifs/roi_manager/step_02_draw_roi.gif)
+```
+
+For large animations, prefer a short GIF only for the key interaction and use PNG screenshots for the rest. Keep image and GIF paths relative to the current markdown file.
+
 ## Tutorials
 
 The tutorials explain the app from the basic workflow upward. They are intentionally modality-independent first; dataset-specific examples are listed separately below.
 
-### 00 GUI basics
+### GUI basics
+
+Here you learn everything about the GUI and particularly the pyqtgraph plotting library, which is used for all interactive plots in the app. This is important to understand how to interact with the plots and how to interpret the visualizations.
 
 - [GUI and pyqtgraph basics](tutorials/00_gui_and_pyqtgraph_basics.md)
 
 ### 01 Data loading
+
+Here you learn how to load different data formats to the GUI. An important prerequisite is the tiff file format.
+The app can load both 3D TIFFs (x/y/spectral) and 4D TIFFs (x/y/z/spectral or x/y/time/spectral). The app also supports loading tile folders containing multiple TIFFs that together form a larger image.
 
 - [Loading 3D TIFF and 4D data](tutorials/01_loading_data.md)
 - [Spectral axis and channel labels](tutorials/01a_spectral_axis_and_channel_labels.md)
@@ -33,7 +71,14 @@ The tutorials explain the app from the basic workflow upward. They are intention
 
 ### 02 Analysis
 
+To understand the concepts of the multivariate anaylsis, it is essential to understand the different analysis modes and how they work. This section explains the different modes and how to use them.
+TThe overview can help in particular to find better seed spectra for the NNMF and NNLS modes (see [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)), which can be crucial for getting good results.
+
 - [Analysis modes](tutorials/02_analysis_modes.md)
+
+The GPU acceleration just outlines for advanced users how the GPU accelerations was set up.
+It is not essential to understand this for using the app, but it can be helpful for troubleshooting and for understanding the performance of the app.
+
 - [GPU acceleration](tutorials/02a_gpu_acceleration.md)
 
 ### 03 Seeds
@@ -44,10 +89,12 @@ The tutorials explain the app from the basic workflow upward. They are intention
 
 ### Remaining workflow
 
-- [04 Physical units and rolling-ball correction](tutorials/04_physical_units_and_rolling_ball.md)
-- [05 Results and export](tutorials/05_results_and_export.md)
-- [06 Presets and reproducibility](tutorials/06_presets_and_reproducibility.md)
-- [07 Workflow checklist](tutorials/07_workflow_checklist.md)
+The rest of the tutorial is dedicated to handling results, exporting data, and ensuring reproducibility. This is important for getting the most out of the app and for sharing results with others.
+
+- [Results and export](tutorials/05_results_and_export.md)
+- [Presets and reproducibility](tutorials/06_presets_and_reproducibility.md)
+- [Physical units and rolling-ball correction](tutorials/04_physical_units_and_rolling_ball.md)
+- [Workflow checklist](tutorials/07_workflow_checklist.md)
 
 ## Examples
 

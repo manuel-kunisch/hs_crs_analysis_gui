@@ -463,6 +463,9 @@ class StitchManager(QtCore.QObject):
             "ignorecase": bool(self.ignorecase_check.isChecked()),
         }
 
+    def export_state(self) -> dict:
+        return self._collect_settings()
+
     def _apply_settings(self, d: dict):
         self.pattern_edit.setText(d.get("pattern", "*.tif"))
         self.binning_spin.setValue(int(d.get("binning", 1)))
@@ -482,6 +485,15 @@ class StitchManager(QtCore.QObject):
         self._apply_regex_from_ui()
         self._update_overlap_labels()
 
+    def import_state(self, state: dict) -> None:
+        if not isinstance(state, dict):
+            raise TypeError("StitchManager state must be a dict.")
+        self._apply_settings(state)
+        try:
+            self._refresh_table()
+        except Exception:
+            pass
+
     def _save_preset(self):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             None, "Save stitch preset", "", "JSON (*.json)"
@@ -490,7 +502,7 @@ class StitchManager(QtCore.QObject):
             return
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(self._collect_settings(), f, indent=2)
+                json.dump(self.export_state(), f, indent=2)
             self.status_lbl.setText(f"Saved preset: {Path(path).name}")
         except Exception as e:
             self.status_lbl.setText(f"Save preset failed: {e}")
@@ -504,9 +516,8 @@ class StitchManager(QtCore.QObject):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 d = json.load(f)
-            self._apply_settings(d)
+            self.import_state(d)
             self.status_lbl.setText(f"Loaded preset: {Path(path).name}")
-            self._refresh_table()
         except Exception as e:
             self.status_lbl.setText(f"Load preset failed: {e}")
 

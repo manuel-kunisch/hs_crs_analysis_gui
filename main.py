@@ -420,6 +420,7 @@ class MainApplication(QtWidgets.QMainWindow):
 
             # export roi manager state
             "roi_manager": self.data_widget.roi_manager.export_state(),
+            "stitch_manager": self.data_handler.loader_widget.stitch_manager.export_state(),
             
             "histogram_states": self.result_viewer_widget.export_histogram_states_for_preset(
                 self.result_viewer_widget.histogram_states
@@ -532,6 +533,13 @@ class MainApplication(QtWidgets.QMainWindow):
                     logger.warning("Failed to import ROI state from preset: %s", exc)
                 else:
                     logger.warning("Preset image is missing; ROI import could not be restored: %s", exc)
+
+        stitch_state = preset.get("stitch_manager", None)
+        if stitch_state and hasattr(self.data_handler.loader_widget.stitch_manager, "import_state"):
+            try:
+                self.data_handler.loader_widget.stitch_manager.import_state(stitch_state)
+            except Exception as exc:
+                logger.warning("Failed to import stitching state from preset: %s", exc)
 
         # 7) analysis settings + resonance table
         self.analysis_manager.num_components_spinbox.setValue(int(preset.get("num_components", 3)))

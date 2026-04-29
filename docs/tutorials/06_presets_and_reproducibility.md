@@ -21,6 +21,7 @@ It includes:
 - NNMF and NNLS iteration limits,
 - seed initialization settings,
 - resonance/spectral settings,
+- stitching settings,
 - ROI manager state,
 - histogram and LUT state,
 - component labels.
@@ -53,6 +54,12 @@ A shortened preset looks like this:
   "analysis_method": "Fixed-H NNLS",
   "nnmf_solver": "mu",
   "nnmf_backend": "Automatic",
+  "stitch_manager": {
+    "pattern": "*.tif",
+    "binning": 1,
+    "overlap_row_raw": 180,
+    "overlap_col_raw": 180
+  },
   "roi_manager": {
     "rois": []
   },

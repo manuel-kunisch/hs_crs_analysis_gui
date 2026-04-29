@@ -31,6 +31,17 @@ For hyperspectral or multispectral tiles, choose the correct **Input image order
 
 The table preview is the most important diagnostic. If the grid looks wrong before stitching, the stitched image will usually also be wrong.
 
+## When to use stitching
+
+Use the stitching workflow when:
+
+- one field of view was acquired as many partially overlapping tiles,
+- the filenames contain stable tile indices,
+- the overlap is known approximately from the microscope setup,
+- and you want one larger spectral stack before ROI placement or multivariate analysis.
+
+Do not use stitching when the dataset is already one complete TIFF stack, or when the tiles are independent fields of view that should stay separate.
+
 ## Pattern vs regex
 
 The **Pattern** filters which files are considered:
@@ -119,6 +130,20 @@ Use **IGNORECASE** when filename capitalization is inconsistent.
 
 > GIF placeholder: use the regex helper and show the preview table updating.
 
+## What the main settings mean
+
+### Pattern
+
+`Pattern` is only a file filter. It decides which files in the folder are considered for parsing and stitching.
+
+Use it when:
+
+- one folder contains several modalities or repeated exports,
+- only one subset should be stitched,
+- or the folder also contains overview images, thumbnails, or metadata files.
+
+If the preview table is empty, check `Pattern` before debugging the regex.
+
 ## Binning and overlap
 
 The overlap fields are entered in raw pixels:
@@ -145,6 +170,24 @@ effective stitched overlap = 90 px
 
 Use the raw microscope overlap as input. Do not manually divide it before entering it into the GUI.
 
+What these settings control:
+
+- `Binning`: reduces the spatial sampling before stitching. This is mainly a speed and memory setting.
+- `Overlap row (raw px)`: expected vertical overlap between neighboring tiles.
+- `Overlap col (raw px)`: expected horizontal overlap between neighboring tiles.
+
+When to use them:
+
+- Use `Binning = 1` when precise alignment matters and the dataset is still manageable.
+- Increase binning when tiles are very large and the first goal is a quick preview or parameter search.
+- Use the microscope’s nominal overlap as a starting point, then adjust if seams or duplicated structures remain visible.
+
+What happens if they are wrong:
+
+- too small overlap: duplicated structures or misregistered seams,
+- too large overlap: excessive blending and spatial compression,
+- too much binning: faster stitching but weaker correlation precision and less sharp seams.
+
 ## Scan direction
 
 Scan direction controls how the parsed x/y indices are mapped into the displayed mosaic.
@@ -161,6 +204,8 @@ Scan direction controls how the parsed x/y indices are mapped into the displayed
 
 If the preview table or stitched result is mirrored, change the scan direction rather than changing the regex.
 
+Use scan direction to correct orientation, not tile identification. The regex should answer "which tile is this?", while scan direction should answer "where do higher x and y indices appear in the displayed mosaic?".
+
 ## Input image order
 
 Choose the array order used inside each tile:
@@ -172,6 +217,32 @@ Choose the array order used inside each tile:
 For normal hyperspectral TIFF stacks, `zyx` or `cyx` is usually correct. For camera-style multi-channel images, `yxc` may be correct.
 
 If the stitched result has swapped spatial and spectral axes, this setting is the first thing to check.
+
+Practical rule:
+
+- `zyx` / `cyx`: choose this for spectral stacks saved frame-first.
+- `yxc`: choose this for conventional image formats where channels are stored last.
+
+If one stitched tile looks visually correct but the channel slider behaves strangely afterwards, the issue is often here.
+
+## Choosing grid placement vs correlation
+
+There are two broad strategies:
+
+- grid placement only: place tiles using the parsed x/y grid and the entered overlaps,
+- correlation-assisted stitching: estimate small relative shifts from the image content.
+
+Use grid placement only when:
+
+- stage motion is reliable,
+- overlap is known well,
+- or the tiles have weak internal structure and correlation becomes unstable.
+
+Use correlation when:
+
+- the stage has small positioning errors,
+- there is enough texture or contrast in the overlap region,
+- and a purely geometric stitch still leaves visible seams or small jumps.
 
 ## Correlation settings
 
@@ -187,6 +258,25 @@ Important settings:
 - **Sigma interval**: controls how aggressively outlier offsets are rejected.
 
 Use a small channel list when only some channels contain reliable structure. Use all channels when the signal is broadly present and stable.
+
+Recommended interpretation:
+
+- `normal`: most direct, least smoothed. Good when the correlation is already stable.
+- `mean`: conservative. Good when all overlaps show about the same shift and you want one consistent correction.
+- `sigma`: robust against a few bad overlaps, but still keeps local variation.
+- `sigma mean`: strongest stabilization. Good default when some overlap regions are noisy or nearly empty.
+
+How to choose `Channels to correlate`:
+
+- leave it empty when most channels show similar morphology,
+- restrict it when only part of the spectrum contains clear structure,
+- avoid channels dominated by noise, saturation, or flat background.
+
+How to choose `Sigma interval`:
+
+- smaller values reject more offsets as outliers,
+- larger values trust more measured offsets,
+- if correlation seems unstable, try `sigma mean` first before changing the overlap values.
 
 If correlation makes the mosaic worse, disable it and use grid placement with linear blending.
 
@@ -205,6 +295,12 @@ The stitching tab has its own JSON preset. This stores:
 - IGNORECASE setting.
 
 Use stitching presets when the microscope filename pattern and tile geometry are stable across datasets.
+
+This is especially useful when:
+
+- the same microscope saves the same filename scheme every day,
+- overlap and scan direction are fixed for one modality,
+- or different users should apply the same parsing rules consistently.
 
 ## Common problems
 

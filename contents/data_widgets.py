@@ -24,6 +24,7 @@ class DataWidget(QtWidgets.QWidget):
         super().__init__()
         # widgets initialized in other methods 
         self.show_processed_image_check = None
+        self.projection_mode_combo = None
         self.auto_play_button = None
         self.auto_play_speed_spinbox = None
         self.image_selection_slider = None
@@ -212,9 +213,12 @@ class DataWidget(QtWidgets.QWidget):
         self.show_processed_image_check.clicked.connect(self.callback_processed_img)
         # toolbar.addWidget(self.show_processed_image_check)
 
-        self.show_average_image_check = QtWidgets.QCheckBox("Display Average Image")
-        self.show_average_image_check.clicked.connect(lambda state: self.show_average_image(state))
-        # toolbar.addWidget(self.show_average_image_check)
+        self.projection_mode_combo = QtWidgets.QComboBox(self)
+        self.projection_mode_combo.addItem("None", "none")
+        self.projection_mode_combo.addItem("Average", "average")
+        self.projection_mode_combo.addItem("Max", "max")
+        self.projection_mode_combo.addItem("Min", "min")
+        self.projection_mode_combo.currentIndexChanged.connect(self.on_projection_mode_changed)
 
         self.binning_combo_box = QtWidgets.QComboBox(self)
         self.binning_combo_box.addItems(['1', '2', '4', '8', '16'])
@@ -222,8 +226,9 @@ class DataWidget(QtWidgets.QWidget):
         self.binning_combo_box.currentTextChanged.connect(lambda bin_str: self.request_binning(int(bin_str)))
         # toolbar.addWidget(self.binning_combo_box)
 
-        self.show_average_image_check.clicked.connect(lambda state: self.show_processed_image_check.setChecked(False) if state else None)
-        self.show_processed_image_check.clicked.connect(lambda state:self.show_average_image_check.setChecked(False) if state else None)
+        self.show_processed_image_check.clicked.connect(
+            lambda state: self._set_projection_mode("none") if state else None
+        )
 
         # toolbar.addWidget(self.auto_play_button)
 
@@ -252,7 +257,14 @@ class DataWidget(QtWidgets.QWidget):
         second_row_widget.setMaximumHeight(50)
         second_row_widget.setLayout(second_row_layout)
         second_row_layout.addWidget(self.show_processed_image_check)
-        second_row_layout.addWidget(self.show_average_image_check)
+        projection_widget = QtWidgets.QWidget()
+        projection_layout = QtWidgets.QHBoxLayout()
+        projection_layout.setContentsMargins(0, 0, 0, 0)
+        projection_widget.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        projection_widget.setLayout(projection_layout)
+        projection_layout.addWidget(QtWidgets.QLabel("Projection"))
+        projection_layout.addWidget(self.projection_mode_combo)
+        second_row_layout.addWidget(projection_widget)
         binning_widget = QtWidgets.QWidget()
         binning_layout = QtWidgets.QHBoxLayout()
         binning_layout.setContentsMargins(0, 0, 0, 0)
@@ -278,20 +290,61 @@ class DataWidget(QtWidgets.QWidget):
         self.auto_play_button.setToolTip("Pause autoplay" if is_playing else "Start autoplay")
         self.auto_play_button.blockSignals(False)
 
+    def _current_projection_mode(self) -> str:
+        if self.projection_mode_combo is None:
+            return "none"
+        return str(self.projection_mode_combo.currentData())
 
-    def show_average_image(self, state=True):
-        if state:
-            self.raman_raw_image_view.stopAutoPlay()
-            avg = np.expand_dims(np.mean(self.image, axis=0), axis=0)
-            # fill the axis 0 with the average image with the same shape as the original image so we can quickly
-            # switch between the average and the original image and keep the current frame index
-            avg = np.repeat(avg, self.image.shape[0], axis=0)
-            self.raman_raw_image_view.setImage(avg, keep_viewbox=True)
-            self.raman_raw_image_view.getView().setTitle('Average Image')
-            # TODO: block the user to move the timeline in the imageview
-            # self.raman_raw_image_view.hideTimeLine()
+    def _set_projection_mode(self, mode: str):
+        if self.projection_mode_combo is None:
+            return
+        idx = self.projection_mode_combo.findData(mode)
+        if idx < 0:
+            return
+        with QtCore.QSignalBlocker(self.projection_mode_combo):
+            self.projection_mode_combo.setCurrentIndex(idx)
+
+    def _projection_title(self, mode: str) -> str:
+        return {
+            "average": "Average Image",
+            "max": "Max Intensity Projection",
+            "min": "Min Intensity Projection",
+        }.get(mode, "Image")
+
+    def _compute_projection_stack(self, mode: str) -> np.ndarray | None:
+        if self.image is None:
+            return None
+        if mode == "average":
+            projection = np.mean(self.image, axis=0, dtype=np.float32)
+        elif mode == "max":
+            projection = np.max(self.image, axis=0)
+        elif mode == "min":
+            projection = np.min(self.image, axis=0)
         else:
-            self.display_raw_image()
+            return self.image
+        projection = np.expand_dims(projection, axis=0)
+        return np.repeat(projection, self.image.shape[0], axis=0)
+
+    def display_projection_image(self, mode: str | None = None, keep_view: bool = True):
+        mode = self._current_projection_mode() if mode is None else mode
+        if mode == "none":
+            self.display_raw_image(keep_view=keep_view)
+            return
+        projection_stack = self._compute_projection_stack(mode)
+        if projection_stack is None:
+            return
+        self.raman_raw_image_view.stopAutoPlay()
+        self.raman_raw_image_view.setImage(projection_stack, keep_viewbox=keep_view)
+        self.raman_raw_image_view.getView().setTitle(self._projection_title(mode))
+
+    def on_projection_mode_changed(self, *_args):
+        mode = self._current_projection_mode()
+        if mode != "none" and self.show_processed_image_check is not None and self.show_processed_image_check.isChecked():
+            with QtCore.QSignalBlocker(self.show_processed_image_check):
+                self.show_processed_image_check.setChecked(False)
+        if self.image is None:
+            return
+        self.display_projection_image(mode, keep_view=True)
 
     # create new subtracted data
     def callback_processed_img(self, state: bool, data: np.ndarray=None, label_text: str = None):
@@ -307,8 +360,8 @@ class DataWidget(QtWidgets.QWidget):
                 return
             self.display_modified_image(keep_view=True)
         else:
-            if self.show_average_image_check.isChecked():
-                self.show_average_image(True)
+            if self._current_projection_mode() != "none":
+                self.display_projection_image(keep_view=True)
                 return
             self.display_raw_image(keep_view=True)
 
@@ -407,8 +460,8 @@ class DataWidget(QtWidgets.QWidget):
         if self.show_processed_image_check.isChecked():
             self.callback_processed_img(True)
             return
-        if self.show_average_image_check.isChecked():
-            self.show_average_image(True)
+        if self._current_projection_mode() != "none":
+            self.display_projection_image(keep_view=preserve_channel)
             return
         self.display_raw_image(keep_view=preserve_channel)
 

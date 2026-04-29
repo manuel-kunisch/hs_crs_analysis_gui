@@ -163,6 +163,8 @@ This turns the problem into:
 
 If the fixed spectra are wrong or incomplete, the spatial maps can still be mathematically consistent but scientifically misleading. This mode is only as good as the supplied spectra.
 
+There is also a display-side tradeoff: fixed-H NNLS can be numerically more faithful once the spectra are trusted, but the resulting abundance maps and false-color composites may look grainier or more pixelated than NNMF results. This is not automatically a worse fit. It often reflects the fact that NNLS solves pixelwise coefficients very strictly and does not enforce the same visually smooth component adaptation that NNMF can produce.
+
 ## Recommended workflow
 
 For many real datasets, the most practical sequence is:

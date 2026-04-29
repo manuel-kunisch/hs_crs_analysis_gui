@@ -40,7 +40,7 @@ class CrossCorrelationStitcher:
     # --- stitching parameters (bind directly to widgets) ---
     overlap_row: int = 90
     overlap_col: int = 90
-    sigma_interval: float = 2.0
+    sigma_interval: float = 1.0
     input_channel_order = "zyx"
     output_channel_order = "zyx"
     return_as_int: bool = True

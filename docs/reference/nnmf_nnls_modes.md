@@ -266,6 +266,8 @@ This mode is ideal when:
 
 In 4D workflows this is often the cleanest way to reuse one spectral basis and solve only for the changing spatial maps.
 
+One practical consequence is important for image interpretation: fixed-H NNLS can be more accurate in the sense that each pixel is fitted very strictly against the trusted basis, but the displayed maps can look grainier or more speckled than NNMF maps. The false-color composite may therefore look less smooth even when the coefficient estimates are scientifically the more defensible result. In this project, visual smoothness and numerical faithfulness should not be confused automatically.
+
 ## Practical choice
 
 The modes are best viewed as a progression of prior knowledge:

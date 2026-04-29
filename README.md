@@ -38,14 +38,6 @@ Live documentation site:
 
 - [GitHub Pages docs](https://manuel-kunisch.github.io/hs_crs_analysis_gui/)
 
-Main entry points on the live site:
-
-- [Quickstart](https://manuel-kunisch.github.io/hs_crs_analysis_gui/quickstart/): minimal end-to-end GUI workflow
-- [Concepts](https://manuel-kunisch.github.io/hs_crs_analysis_gui/concepts/): unmixing model, seeds, NNMF, and fixed-H NNLS
-- [Tutorials](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/01_loading_data/): step-by-step GUI usage
-- [Examples](https://manuel-kunisch.github.io/hs_crs_analysis_gui/examples/reproduce_figure_1/): figure-linked and modality-specific workflows
-- [Reference](https://manuel-kunisch.github.io/hs_crs_analysis_gui/reference/nnmf_nnls_modes/): feature-specific notes
-
 > [!IMPORTANT]
 > Two markdown pages explain the analysis modes, but they serve different purposes:
 > - [`docs/tutorials/02_analysis_modes.md`](docs/tutorials/02_analysis_modes.md)

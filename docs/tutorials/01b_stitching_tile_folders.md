@@ -132,6 +132,14 @@ Use **IGNORECASE** when filename capitalization is inconsistent.
 
 ## What the main settings mean
 
+![Stitch manager overview](../assets/images/stitch_manager.png)
+
+The screenshot below shows the main regions that matter for parameter choice:
+
+- left: stitch geometry and correlation settings,
+- right: filename parsing and the preview table,
+- bottom: run/export actions and stitched-result status.
+
 ### Pattern
 
 `Pattern` is only a file filter. It decides which files in the folder are considered for parsing and stitching.

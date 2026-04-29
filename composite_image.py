@@ -133,8 +133,10 @@ class CompositeImageViewWidget(QMainWindow):
         self.channel_view.view.setDefaultPadding(0)
         self.channel_view.ui.histogram.show()
         self.channel_view.ui.histogram.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.channel_view.ui.histogram.setMinimumWidth(92)
-        self.channel_view.ui.histogram.setMaximumWidth(96)
+        self.channel_view.ui.histogram.setMinimumWidth(132)
+        self.channel_view.ui.histogram.setMaximumWidth(140)
+        self.channel_view.ui.histogram.gradient.show()
+        self.channel_view.ui.histogram.gradient.setMinimumWidth(16)
         self.channel_view.view.setTitle("Channel Preview")
         self.spectrum_view = pg.PlotWidget(title="Component Spectra", size=(100,300))
         self.spectrum_view.setLabel('left', 'Intensity counts')
@@ -1088,6 +1090,9 @@ class CompositeImageViewWidget(QMainWindow):
         # Tick visibility is stored inside the pyqtgraph gradient state.
         # Force it back on after every restore so the handles remain visible
         # and draggable even if an older hidden state was saved.
+        histogram_widget.show()
+        histogram_widget.gradient.show()
+        histogram_widget.gradient.setMinimumWidth(16)
         histogram_widget.gradient.showTicks(True)
         self.channel_view.ui.histogram.setHistogramRange(0, self._channel_histogram_upper_bound())
 

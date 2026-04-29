@@ -131,6 +131,9 @@ class CompositeImageViewWidget(QMainWindow):
         # Create a PyqtGraph ImageView widget for individual channels
         self.channel_view = ImageViewLineRoiYXZ(view=PlotItem())
         self.channel_view.view.setDefaultPadding(0)
+        self.channel_view.ui.histogram.show()
+        self.channel_view.ui.histogram.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.channel_view.ui.histogram.setMinimumWidth(92)
         self.channel_view.ui.histogram.setMaximumWidth(96)
         self.channel_view.view.setTitle("Channel Preview")
         self.spectrum_view = pg.PlotWidget(title="Component Spectra", size=(100,300))
@@ -427,19 +430,21 @@ class CompositeImageViewWidget(QMainWindow):
         self.components_h_splitter = QSplitter(Qt.Horizontal)
         self.components_h_splitter.setChildrenCollapsible(False)
         self.components_h_splitter.setHandleWidth(8)
+        self.components_h_splitter.addWidget(composite_panel)
         self.components_h_splitter.addWidget(channel_panel)
-        self.components_h_splitter.addWidget(spectrum_panel)
+        self.components_h_splitter.setStretchFactor(0, 1)
+        self.components_h_splitter.setStretchFactor(1, 1)
 
         self.main_plot_v_splitter = QSplitter(Qt.Vertical)
         self.main_plot_v_splitter.setChildrenCollapsible(False)
         self.main_plot_v_splitter.setHandleWidth(8)
-        self.main_plot_v_splitter.addWidget(composite_panel)
         self.main_plot_v_splitter.addWidget(self.components_h_splitter)
+        self.main_plot_v_splitter.addWidget(spectrum_panel)
         self.main_plot_v_splitter.setStretchFactor(0, 3)
         self.main_plot_v_splitter.setStretchFactor(1, 2)
         self.master_v_layout.addWidget(self.main_plot_v_splitter)
         self.main_plot_v_splitter.setSizes([520, 320])
-        self.components_h_splitter.setSizes([420, 620])
+        self.components_h_splitter.setSizes([520, 520])
 
         # Initialize colormap, levels, and max value state dictionaries
         self.histogram_states = {}

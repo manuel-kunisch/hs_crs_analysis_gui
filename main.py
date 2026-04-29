@@ -118,8 +118,8 @@ class MainApplication(QtWidgets.QMainWindow):
         loader_dock = self.data_handler.get_dock_widget()
         main_dock_area.addDock(loader_dock, 'right',
                                self.data_widget.image_view_dock)
-        self.data_widget.image_view_dock.setStretch(100)
-        loader_dock.setStretch(1)
+        self.data_widget.image_view_dock.setStretch(1400, 720)
+        loader_dock.setStretch(420, 720)
         dock_state_save_widget, save_dock_state = self.get_dock_state_widget()
         # main_dock_area.addDock(dock_state_save_widget, 'right', self.data_widget.roi_manager.roi_table_dock)
 

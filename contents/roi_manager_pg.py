@@ -83,7 +83,7 @@ class ROIManager(QtCore.QObject):
         self.fixed_w_seed_view = None
         # Creating a dock
         # Set up the ROI table and add it to the ROI table dock
-        self.roi_table_dock = Dock("Seed ROIs", size=(810, 1000))
+        self.roi_table_dock = Dock("Seed ROIs", size=(810, 500))
         self.roi_table = QtWidgets.QTableWidget()
         cols = ['Name', 'Color', 'Resonance', 'Background', 'Subtract', 'Scale', 'Offset', 'Gaussian σ', 'Export',
                 'ROI Shape', 'Live Update', 'Plot', 'Show', 'Remove']
@@ -175,7 +175,8 @@ class ROIManager(QtCore.QObject):
         QtCore.QTimer.singleShot(0, self._refresh_roi_table_layout)
 
         # %% ROI plot
-        self.roi_plot_dock= Dock("ROI Average Plot", size=(400, 300), closable=False)
+        self.roi_plot_dock= Dock("ROI Average Plot", size=(320, 240), closable=False)
+        self.roi_plot_dock.setStretch(320, 240)
         self.roi_plotter = ROIPlotter(self)
         self.roi_plot_dock.addWidget(self.roi_plotter)
 

@@ -81,9 +81,10 @@ class DataWidget(QtWidgets.QWidget):
         self.dock_area = DockArea()
         self.dock_area_layout.addWidget(self.dock_area)
 
-        self.linescan_dock = Dock("Linescan", size=(50, 500))
-        self.image_view_dock = Dock("Image", size=(500, 500))
-        self.image_view_dock.setStretch(500)
+        self.linescan_dock = Dock("Linescan", size=(42, 720))
+        self.linescan_dock.setStretch(42, 720)
+        self.image_view_dock = Dock("Image", size=(900, 900))
+        self.image_view_dock.setStretch(900, 900)
         # Adding the docks to the DockArea()
 
 
@@ -690,6 +691,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         main_layout = QtWidgets.QVBoxLayout(self)  # Changed to Vertical to stack Mode select on top
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(5)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
 
         self.setStyleSheet("""
         QGroupBox {
@@ -734,15 +736,19 @@ class WavenumberWidget(QtWidgets.QWidget):
 
         # --- Stacked Widget for Modes ---
         self.stack = QtWidgets.QStackedWidget()
+        self.stack.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         main_layout.addWidget(self.stack)
 
         # PAGE 1: Calculated (Existing Logic)
         self.page_calc = QtWidgets.QWidget()
+        self.page_calc.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         calc_layout = QtWidgets.QHBoxLayout(self.page_calc)
         calc_layout.setContentsMargins(10, 8, 10, 8)
         calc_layout.setSpacing(10)
+        calc_layout.setAlignment(QtCore.Qt.AlignTop)
 
         self.pump_beam_group = QtWidgets.QGroupBox("Pump Beam")
+        self.pump_beam_group.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
         var_beam_layout = QtWidgets.QGridLayout(self.pump_beam_group)
         var_beam_layout.setHorizontalSpacing(10)
         var_beam_layout.setVerticalSpacing(6)
@@ -779,6 +785,7 @@ class WavenumberWidget(QtWidgets.QWidget):
 
         # Swap Button
         swap_button = QtWidgets.QToolButton()
+        swap_button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         swap_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
         swap_button.setToolTip("Swap which beam is tuned (Pump ↔ Stokes)")
         swap_button.clicked.connect(self.swap_beams)
@@ -786,6 +793,7 @@ class WavenumberWidget(QtWidgets.QWidget):
 
         # Stokes Group
         self.stokes_beam_group = QtWidgets.QGroupBox("Stokes Beam")
+        self.stokes_beam_group.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
         fixed_beam_layout = QtWidgets.QGridLayout(self.stokes_beam_group)
         fixed_beam_layout.setHorizontalSpacing(10)
         fixed_beam_layout.setVerticalSpacing(6)
@@ -806,10 +814,13 @@ class WavenumberWidget(QtWidgets.QWidget):
 
         # PAGE 2: Custom (New)
         self.page_custom = QtWidgets.QWidget()
+        self.page_custom.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         custom_layout = QtWidgets.QHBoxLayout(self.page_custom)
         custom_layout.setContentsMargins(10, 8, 10, 8)
+        custom_layout.setAlignment(QtCore.Qt.AlignTop)
 
         custom_group = QtWidgets.QGroupBox("Custom Wavenumbers")
+        custom_group.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
         cg_layout = QtWidgets.QHBoxLayout(custom_group)
 
         self.btn_load_custom = QtWidgets.QPushButton("Edit / Load Wavenumbers...")
@@ -853,6 +864,7 @@ class WavenumberWidget(QtWidgets.QWidget):
 
         # Wrap Info in a widget to add to main VBox
         calc_layout.addWidget(info_box)
+        main_layout.addStretch(1)
 
         # --- Connections ---
         self.min_max_checkbox.stateChanged.connect(self.on_min_max_checked)
@@ -1288,7 +1300,8 @@ class DataHandler(QtWidgets.QWidget):
         analysis_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.loader_widget.main_grid_layout.addWidget(analysis_widget, 2, 0, 4, 6, alignment=QtCore.Qt.AlignTop | QtCore.Qt.AlignBottom)
 
-        self.loader_dock = Dock("Data", size=(300, 300))
+        self.loader_dock = Dock("Data", size=(360, 720))
+        self.loader_dock.setStretch(360, 720)
         self.loader_dock.addWidget(self.loader_widget, 1, 0, 1, 1)
         self.loader_dock.addWidget(self.wavenumber_widget, 0, 0, 1, 1)
         self.slice_selector_widget = QtWidgets.QWidget()

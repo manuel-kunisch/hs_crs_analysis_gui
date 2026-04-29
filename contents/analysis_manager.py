@@ -337,6 +337,8 @@ class AnalysisManager(QtCore.QObject):
         self.nnmf_solver_dropdown = QtWidgets.QComboBox()
         self.nnmf_solver_dropdown.addItem("Coordinate Descent (cd)", "cd")
         self.nnmf_solver_dropdown.addItem("Multiplicative Updates (mu)", "mu")
+        self.nnmf_solver_dropdown.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
+        self.nnmf_solver_dropdown.setMaximumWidth(130)
         self.nnmf_solver_dropdown.setToolTip(solver_label.toolTip())
         self.nnmf_solver_dropdown.currentIndexChanged.connect(
             lambda index: (
@@ -392,6 +394,77 @@ class AnalysisManager(QtCore.QObject):
         options_layout.addLayout(options_form)
         options_layout.addStretch(1)
         analysis_layout.addWidget(options_panel)
+        analysis_layout.addWidget(_make_divider())
+
+        seed_panel = QtWidgets.QWidget()
+        seed_panel.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+        seed_layout = QtWidgets.QVBoxLayout(seed_panel)
+        seed_layout.setContentsMargins(0, 0, 0, 0)
+        seed_layout.setSpacing(4)
+        seed_title = _make_section_title("Seed Initialization")
+        seed_layout.addWidget(seed_title)
+
+        w_seed_mode_row = QtWidgets.QHBoxLayout()
+        w_seed_mode_row.setContentsMargins(0, 0, 0, 0)
+        w_seed_mode_row.setSpacing(8)
+        w_seed_mode_label = QtWidgets.QLabel("W map from H:")
+        self.w_seed_mode_dropdown = QtWidgets.QComboBox()
+        self.w_seed_mode_dropdown.addItem("NNLS abundance map (recommended)", "NNLS abundance map")
+        self.w_seed_mode_dropdown.addItem("Selective score map", "Selective score map")
+        self.w_seed_mode_dropdown.addItem("H-weighted average (legacy)", "H weights")
+        self.w_seed_mode_dropdown.addItem("Average image (fallback)", "Average image")
+        self.w_seed_mode_dropdown.addItem("Homogeneous (empty)", "Homogeneous (empty)")
+        self.w_seed_mode_dropdown.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
+        self.w_seed_mode_dropdown.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.w_seed_mode_dropdown.setMinimumContentsLength(20)
+        self.w_seed_mode_dropdown.currentIndexChanged.connect(
+            lambda index: self.mv_analyzer.set_W_seed_mode(self.w_seed_mode_dropdown.itemData(index))
+        )
+        w_seed_mode_row.addWidget(w_seed_mode_label)
+        w_seed_mode_row.addWidget(self.w_seed_mode_dropdown)
+        w_seed_mode_row.addStretch(1)
+        seed_layout.addLayout(w_seed_mode_row)
+
+        seed_pixel_metric_row = QtWidgets.QHBoxLayout()
+        seed_pixel_metric_row.setContentsMargins(0, 0, 0, 0)
+        seed_pixel_metric_row.setSpacing(8)
+        seed_pixel_metric_label = QtWidgets.QLabel("H seed pixel metric:")
+        self.seed_pixel_mode_dropdown = QtWidgets.QComboBox()
+        self.seed_pixel_mode_dropdown.addItems(["Max Intensity", "Score"])
+        self.seed_pixel_mode_dropdown.setCurrentIndex(0)
+        self.seed_pixel_mode_dropdown.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
+        self.seed_pixel_mode_dropdown.currentTextChanged.connect(
+            lambda text: setattr(self, "_seed_pixel_mode", text)
+        )
+        seed_pixel_metric_row.addWidget(seed_pixel_metric_label)
+        seed_pixel_metric_row.addWidget(self.seed_pixel_mode_dropdown)
+        seed_pixel_metric_row.addStretch(1)
+        seed_layout.addLayout(seed_pixel_metric_row)
+
+        self.overwrite_W_from_H_check = QtWidgets.QCheckBox("Overwrite existing W with H-based map")
+        self.overwrite_W_from_H_check.setChecked(self._overwrite_existing_W_from_H)
+        self.overwrite_W_from_H_check.setToolTip(
+            "If enabled, H-based W estimation replaces existing spectral W seeds. "
+            "If disabled, it only fills missing W columns."
+        )
+        self.overwrite_W_from_H_check.toggled.connect(
+            lambda state: setattr(self, "_overwrite_existing_W_from_H", bool(state))
+        )
+        seed_layout.addWidget(self.overwrite_W_from_H_check)
+
+        wseed_hint = QtWidgets.QLabel(
+            "Uses the current H seed to build the spatial W map. "
+            "Fixed W masks from ROIs are kept unchanged."
+        )
+        wseed_hint.setWordWrap(True)
+        wseed_hint.setStyleSheet("color: #6b7280;")
+        seed_layout.addWidget(wseed_hint)
+        seed_layout.addStretch(1)
+
+        self.w_seed_mode_dropdown.setCurrentIndex(0)
+        self.mv_analyzer.set_W_seed_mode(self.w_seed_mode_dropdown.itemData(0))
+
+        analysis_layout.addWidget(seed_panel)
         analysis_layout.addStretch(1)
 
         self._nnmf_option_widgets = [
@@ -407,6 +480,7 @@ class AnalysisManager(QtCore.QObject):
             custom_init_check,
             self.fixed_h_nnls_only_check,
             self.fast_multislice_nnmf_check,
+            seed_panel,
         ]
 
         self._sync_nnmf_backend_controls()
@@ -435,8 +509,9 @@ class AnalysisManager(QtCore.QObject):
         self.analyze_button.setMinimumSize(170, 52)
         self.analyze_button.clicked.connect(self.analyze_data)
 
-        self.scale_w_to_16bit_check = QtWidgets.QCheckBox("Scale results to 16-bit")
+        self.scale_w_to_16bit_check = QtWidgets.QCheckBox("Scale results\nto 16-bit")
         self.scale_w_to_16bit_check.setChecked(True)
+        self.scale_w_to_16bit_check.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
         self.scale_w_to_16bit_check.setToolTip(
             "Globally scale displayed NNMF/NNLS result maps to the uint16 range. "
             "Disable this to inspect raw floating-point result values."
@@ -451,18 +526,20 @@ class AnalysisManager(QtCore.QObject):
         run_layout.addLayout(run_button_row)
 
         self.analysis_progress_widget = QtWidgets.QWidget()
-        progress_layout = QtWidgets.QHBoxLayout(self.analysis_progress_widget)
+        self.analysis_progress_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        progress_layout = QtWidgets.QVBoxLayout(self.analysis_progress_widget)
         progress_layout.setContentsMargins(0, 0, 0, 0)
-        progress_layout.setSpacing(6)
+        progress_layout.setSpacing(3)
         self.analysis_progress_label = QtWidgets.QLabel("Slice progress")
         self.analysis_progress_label.setStyleSheet("color: #97a3af; font-size: 11px;")
         self.analysis_progress_bar = QtWidgets.QProgressBar()
         self.analysis_progress_bar.setRange(0, 100)
         self.analysis_progress_bar.setValue(0)
+        self.analysis_progress_bar.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.analysis_progress_bar.setFixedHeight(12)
         self.analysis_progress_bar.setTextVisible(False)
         progress_layout.addWidget(self.analysis_progress_label)
-        progress_layout.addWidget(self.analysis_progress_bar, 1)
+        progress_layout.addWidget(self.analysis_progress_bar)
         run_layout.addWidget(self.analysis_progress_widget)
 
         top_row.addWidget(run_group_box)
@@ -603,61 +680,6 @@ class AnalysisManager(QtCore.QObject):
         bg_btn_row.addStretch(1)
         bg_gb_layout.addLayout(bg_btn_row)
         right_layout.addWidget(bg_gb)
-
-        # (3) Seed init settings
-        wseed_gb = QtWidgets.QGroupBox("Seed initialization")
-        wseed_layout = QtWidgets.QVBoxLayout(wseed_gb)
-        wseed_layout.setSpacing(8)
-
-        method_row = QtWidgets.QHBoxLayout()
-        method_row.setSpacing(10)
-        method_row.addWidget(QtWidgets.QLabel("W map from H:"))
-        self.w_seed_mode_dropdown = QtWidgets.QComboBox()
-        self.w_seed_mode_dropdown.addItem("NNLS abundance map (recommended)", "NNLS abundance map")
-        self.w_seed_mode_dropdown.addItem("Selective score map", "Selective score map")
-        self.w_seed_mode_dropdown.addItem("H-weighted average (legacy)", "H weights")
-        self.w_seed_mode_dropdown.addItem("Average image (fallback)", "Average image")
-        self.w_seed_mode_dropdown.addItem("Homogeneous (empty)", "Homogeneous (empty)")
-        self.w_seed_mode_dropdown.currentIndexChanged.connect(
-            lambda index: self.mv_analyzer.set_W_seed_mode(self.w_seed_mode_dropdown.itemData(index))
-        )
-        method_row.addWidget(self.w_seed_mode_dropdown, 1)
-        wseed_layout.addLayout(method_row)
-
-        wseed_hint = QtWidgets.QLabel(
-            "Uses the current H seed to build the spatial W map. "
-            "Fixed W masks from ROIs are kept unchanged."
-        )
-        wseed_hint.setWordWrap(True)
-        wseed_hint.setStyleSheet("color: #6b7280;")
-        wseed_layout.addWidget(wseed_hint)
-
-        self.w_seed_mode_dropdown.setCurrentIndex(0)
-        self.mv_analyzer.set_W_seed_mode(self.w_seed_mode_dropdown.itemData(0))
-
-        self.overwrite_W_from_H_check = QtWidgets.QCheckBox("Overwrite existing W with H-based map")
-        self.overwrite_W_from_H_check.setChecked(self._overwrite_existing_W_from_H)
-        self.overwrite_W_from_H_check.setToolTip(
-            "If enabled, H-based W estimation replaces existing spectral W seeds. "
-            "If disabled, it only fills missing W columns."
-        )
-        self.overwrite_W_from_H_check.toggled.connect(
-            lambda state: setattr(self, "_overwrite_existing_W_from_H", bool(state))
-        )
-        wseed_layout.addWidget(self.overwrite_W_from_H_check)
-
-        # Seed pixel metric
-        metric_row = QtWidgets.QHBoxLayout()
-        metric_row.setSpacing(10)
-        metric_row.addWidget(QtWidgets.QLabel("H seed pixel metric:"))
-        self.seed_pixel_mode_dropdown = QtWidgets.QComboBox()
-        self.seed_pixel_mode_dropdown.addItems(["Max Intensity", "Score"])
-        self.seed_pixel_mode_dropdown.setCurrentIndex(0)
-        self.seed_pixel_mode_dropdown.currentTextChanged.connect(lambda text: setattr(self, "_seed_pixel_mode", text))
-        metric_row.addWidget(self.seed_pixel_mode_dropdown, 1)
-        wseed_layout.addLayout(metric_row)
-
-        right_layout.addWidget(wseed_gb)
 
         right_layout.addStretch(1)
         splitter.addWidget(right)

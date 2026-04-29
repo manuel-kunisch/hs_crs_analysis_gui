@@ -46,6 +46,13 @@ Main entry points on the live site:
 - [Examples](https://manuel-kunisch.github.io/hs_crs_analysis_gui/examples/reproduce_figure_1/): figure-linked and modality-specific workflows
 - [Reference](https://manuel-kunisch.github.io/hs_crs_analysis_gui/reference/nnmf_nnls_modes/): feature-specific notes
 
+> [!IMPORTANT]
+> Two markdown pages explain the analysis modes, but they serve different purposes:
+> - [`docs/tutorials/02_analysis_modes.md`](docs/tutorials/02_analysis_modes.md)
+>   This is the practical user page: which mode to choose in the GUI, what kind of result to expect, and when to switch from PCA to random NNMF, seeded NNMF, or fixed-H NNLS.
+> - [`docs/reference/nnmf_nnls_modes.md`](docs/reference/nnmf_nnls_modes.md)
+>   This is the concept and algorithm page: the thesis-style explanation of PCA, NNMF, and NNLS, the matrix model, the interpretation of `W` and `H`, and the methodological references.
+
 Documentation sources in the repository live in [`docs/`](docs/index.md).
 
 Recommended starting points:
@@ -63,7 +70,37 @@ py -3 -m pip install -r docs-requirements.txt
 py -3 -m mkdocs serve
 ```
 
-The repository also contains a GitHub Pages workflow at `.github/workflows/docs.yml` that builds the MkDocs site from `main`.
+## Analysis Modes At A Glance
+
+> [!IMPORTANT]
+> Choose the mode by how much prior knowledge you already have:
+> - **PCA**: find the strongest variance patterns
+> - **Random NNMF**: discover non-negative components without prior seeds
+> - **Seeded NNMF**: guide the decomposition with spectral or spatial seeds, but still allow adaptation
+> - **Fixed-H NNLS**: keep spectra fixed and solve only for abundance maps
+
+- **PCA**
+  Good for a first inspection of unknown data. PCA finds orthogonal variance directions, not chemically pure components, and can produce negative values.
+- **Random NNMF**
+  Good for exploratory non-negative decomposition when no reliable prior spectra are available yet. It often gives more physically intuitive maps than PCA, but the result can depend on initialization.
+- **Seeded NNMF**
+  Good when you already know approximate spectra or spatial regions. The seeds act as informed starting points, but both the spectra `H` and the maps `W` can still change during the fit.
+- **Fixed-H NNLS**
+  Good when the spectra are already trusted and should stay fixed. Only the abundance maps `W` are solved, which makes this the most controlled mode for cross-slice, cross-time, or reference-based analysis.
+
+Rule of thumb:
+
+- use **PCA** for diagnostics
+- use **Random NNMF** for a first non-negative estimate
+- use **Seeded NNMF** for the main user-guided workflow
+- use **Fixed-H NNLS** when spectra must remain stable
+
+More detail:
+
+- practical mode-selection page: [Analysis modes tutorial](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/02_analysis_modes/)
+- concept and algorithm page: [NNMF and NNLS modes reference](https://manuel-kunisch.github.io/hs_crs_analysis_gui/reference/nnmf_nnls_modes/)
+- repo source tutorial: [`docs/tutorials/02_analysis_modes.md`](docs/tutorials/02_analysis_modes.md)
+- repo source reference: [`docs/reference/nnmf_nnls_modes.md`](docs/reference/nnmf_nnls_modes.md)
 
 ## Repository Status
 

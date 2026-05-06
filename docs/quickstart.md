@@ -9,6 +9,16 @@ This page walks through a minimal end-to-end analysis in roughly 10 minutes. It 
 
 If you do not have real data yet, the [Synthetic quickstart example](examples/synthetic_quickstart.md) shows how to generate a small test dataset from Python.
 
+## Minimal workflow at a glance
+
+| Stage | GUI area | Main control |
+|---|---|---|
+| Load data | **Single HS Image** tab | Drag-and-drop area or click the drop area |
+| Check axis | Spectral-axis widget | Calculated pump/Stokes or custom/manual axis |
+| Define seeds | **ROI Manager** | **Add ROI** or **Load Spectrum from File** |
+| Run seeded NNMF | **Analysis** panel | **NNMF** + **Custom initialization** + **Run Analysis** |
+| Inspect/export | Result viewer | **Composite Overview**, **Save H as CSV**, **Export Composite** |
+
 ## Step 1: Start the GUI
 
 From an activated environment:
@@ -57,10 +67,15 @@ Repeat for each expected component. If you have known reference spectra, use **L
 In the **Analysis** panel:
 
 1. Set **Number of components** to match the number of ROIs or seeds.
-2. Choose **Seeded NNMF** as the analysis method.
-3. Click **Analyze**.
+2. Select **NNMF**.
+3. Keep **Custom initialization** enabled. This is the seeded NNMF workflow.
+4. Leave **Fixed-H NNLS mode** disabled for the first run.
+5. Leave **W map from H** at **NNLS abundance map (recommended)** unless you have a reason to change it.
+6. Click **Run Analysis**.
 
 The analysis runs in a background thread. A progress bar shows status. When it finishes, the result viewer opens.
+
+To run fixed-H NNLS later, keep **NNMF** and **Custom initialization** enabled, enable **Fixed-H NNLS mode**, and make sure every component has an H seed.
 
 ## Step 6: Inspect the result
 

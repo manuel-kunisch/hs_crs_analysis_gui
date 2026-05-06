@@ -46,7 +46,7 @@ This is especially common when:
 
 ### Optional display scaling
 
-Next to **Analyze**, the GUI provides the checkbox:
+Next to **Run Analysis**, the GUI provides the checkbox:
 
 ```text
 Scale results to 16-bit

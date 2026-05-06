@@ -13,6 +13,18 @@ This page explains which mode to choose in the GUI and what kind of result to ex
 
 The modes form a progression: each one uses more prior knowledge and enforces it more strictly.
 
+## How the GUI Controls Map to Modes
+
+The GUI exposes `PCA` and `NNMF` as the main method buttons. The practical NNMF variants are selected with checkboxes and seed settings:
+
+| Practical mode | GUI settings | Required input |
+|---|---|---|
+| PCA | Select **PCA**, then **Run Analysis**. | Loaded image only. |
+| Random NNMF | Select **NNMF**, disable **Custom initialization**, leave **Fixed-H NNLS mode** disabled, then **Run Analysis**. | Loaded image and component count. |
+| Seeded NNMF | Select **NNMF**, enable **Custom initialization**, leave **Fixed-H NNLS mode** disabled, then **Run Analysis**. | At least useful H and/or W seeds from ROIs, spectra, Gaussian models, or imported results. |
+| Fixed-H NNLS | Select **NNMF**, enable **Custom initialization** and **Fixed-H NNLS mode**, then **Run Analysis**. | Every component must have an H seed. |
+| 4D hybrid NNMF/NNLS | For 4D data, select **NNMF**, enable **Custom initialization**, enable **4D: NNMF ref slice, NNLS others**, then **Run Analysis**. | Seeds for the reference slice; the fitted H is reused across other slices. |
+
 ## Why different modes exist
 
 Hyperspectral data is a stack of many grayscale images over a spectral axis. Chemically meaningful signals, non-resonant background, and acquisition artifacts all overlap in that stack. Looking at slices one by one is slow and often ambiguous.

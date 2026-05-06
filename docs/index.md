@@ -1,13 +1,7 @@
 # HS MV Analysis Documentation
 
 Welcome to the documentation for HS MV Analysis, a software tool for analyzing hyperspectral microscopy data using multivariate analysis techniques.
- This documentation is designed to guide users through the installation, usage, and troubleshooting of the software, as well as provide detailed tutorials and reference materials.
-
-TODO:
-- [] add screenshots and short GIFs for each major workflow.
-- [] link small example datasets and expected outputs.
-- [] replace placeholders with final paper datasets, presets, and expected outputs.
-- [] check text for errors
+This documentation is designed to guide users through the installation, usage, and troubleshooting of the software, as well as provide detailed tutorials and reference materials.
 
 
 ## Start Here
@@ -40,12 +34,12 @@ The app can load both 3D TIFFs (x/y/spectral) and 4D TIFFs (x/y/z/spectral or x/
 
 ### 02 Analysis
 
-To understand the concepts of the multivariate anaylsis, it is essential to understand the different analysis modes and how they work. This section explains the different modes and how to use them.
-TThe overview can help in particular to find better seed spectra for the NNMF and NNLS modes (see [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)), which can be crucial for getting good results.
+To understand the concepts of multivariate analysis, it is essential to understand the different analysis modes and how they work. This section explains the different modes and how to use them.
+The overview can help in particular to find better seed spectra for the NNMF and NNLS modes (see [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)), which can be crucial for getting good results.
 
 - [Analysis modes](tutorials/02_analysis_modes.md)
 
-The GPU acceleration just outlines for advanced users how the GPU accelerations was set up.
+The GPU acceleration page outlines how the optional GPU acceleration paths are set up.
 It is not essential to understand this for using the app, but it can be helpful for troubleshooting and for understanding the performance of the app.
 
 - [GPU acceleration](tutorials/02a_gpu_acceleration.md)
@@ -84,9 +78,3 @@ The example section is reserved for data-specific workflows and for reproducing 
 - [NNMF and NNLS modes](reference/nnmf_nnls_modes.md)
 - [Fiji export](reference/fiji_export.md)
 - [Presets](reference/presets.md)
-
-## TODO
-
-- Add screenshots and short GIFs for each major workflow.
-- Link small example datasets and expected outputs.
-- Replace placeholders with final paper datasets, presets, and expected outputs.

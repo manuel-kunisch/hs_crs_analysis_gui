@@ -2,6 +2,8 @@
 
 The GUI can use optional PyTorch backends for selected NNMF and NNLS paths. If PyTorch or CUDA is not available, the analysis falls back to CPU implementations where supported.
 
+For installation instructions, environment files, and platform-specific notes, see [Installation – GPU notes](../installation.md#gpu-notes).
+
 ## What Can Use The GPU
 
 GPU acceleration is currently relevant for:

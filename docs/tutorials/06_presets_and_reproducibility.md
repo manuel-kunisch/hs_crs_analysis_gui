@@ -53,7 +53,7 @@ A shortened preset looks like this:
   "num_components": 3,
   "analysis_method": "Fixed-H NNLS",
   "nnmf_solver": "mu",
-  "nnmf_backend": "Automatic",
+  "nnmf_backend": "auto",
   "stitch_manager": {
     "pattern": "*.tif",
     "binning": 1,

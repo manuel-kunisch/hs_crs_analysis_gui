@@ -334,7 +334,13 @@ run_hs_crs_analysis_gui.bat     Windows launcher
 - Presets, ROI state, and imported dummy ROI seed rows are intended to support iterative analysis workflows.
 - Some functionality is optimized for Windows/PyQt usage, especially the provided batch launcher.
 
-**[TODO: add any data-format assumptions, instrument-specific notes, or known workflow caveats.]**
+Data format and workflow notes:
+
+- The main input format is TIFF. 3D stacks must have shape `(channels, y, x)`. 4D stacks can have any axis order; the spectral and outer axes are selected in a dialog on load.
+- Non-`uint16` TIFFs (float32, int32, etc.) are remapped to the GUI's 0–65535 working range. Raw absolute values are not preserved after loading.
+- A `wavelength.json` file placed next to the TIFF is automatically used for the spectral axis. See [Spectral axis reference](docs/reference/spectral_axis_and_wavelength_json.md) for the supported keys.
+- The PyTorch backends (NNMF and NNLS) are optional. Without PyTorch, the GUI falls back to scikit-learn NMF and SciPy NNLS.
+- Presets are JSON files. They store the full analysis state but not the image data itself. Move or rename the TIFF after saving a preset and re-open it manually before loading the preset.
 
 ## Citation
 

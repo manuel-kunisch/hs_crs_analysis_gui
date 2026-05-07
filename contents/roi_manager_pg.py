@@ -13,6 +13,7 @@ from composite_image import max_dtype_val, CompositeImageViewWidget as ci
 from contents.custom_pyqt_objects import ImageViewYX
 from contents.hs_image_view import ROITableDelegate, ColorButton
 from contents.spectrum_loader import SpectrumLoader
+from contents.spectral_axis import normalize_spectral_unit, spectral_axis_label, spectral_csv_header
 
 logger = logging.getLogger('ROI Manager')
 
@@ -65,6 +66,7 @@ class ROIManager(QtCore.QObject):
         super().__init__()
         self.image_view = image_view
         self.spectral_units = "cm⁻¹"
+        self.axis_labels = None
         self.rois = []  # list that stores each roi object sorted by index
         self.gaussian_specs_by_component: dict[int, list[tuple[float, float, float]]] = {}
         self.roi_region_change_signals = {}
@@ -148,7 +150,7 @@ class ROIManager(QtCore.QObject):
         )
         suggest_rois_button.clicked.connect(self.suggest_rois_from_image)
 
-        load_spectra_button = QtWidgets.QPushButton("Load Spectrum from File")
+        load_spectra_button = QtWidgets.QPushButton("Load Spectra from File")
         load_spectra_button.setIcon(button_style.standardIcon(QtWidgets.QStyle.SP_DialogOpenButton))
         load_spectra_button.clicked.connect(self.load_spectra)
         
@@ -2252,20 +2254,22 @@ class ROIManager(QtCore.QObject):
         roi_idx = self.roi_id_idx.get(str(roi))
         signal = self.get_roi_average(roi).T
         header = 'rel. Intensity (a.u.)'
+        fmt = '%.18e'
         # add the wavenumbers to the signal column 0 are the wavenumbers, column 1 the intensity values
-        if self.wavenumbers is not None:
+        axis_labels = getattr(self, "axis_labels", None)
+        if axis_labels is not None and len(axis_labels) == len(signal):
+            signal = np.column_stack((np.asarray(axis_labels, dtype=object), signal))
+            header = f"{spectral_csv_header(self.spectral_units, labels=True)}, {header}"
+            fmt = '%s'
+        elif self.wavenumbers is not None:
             signal = np.vstack((self.wavenumbers, signal)).T
-            unit = getattr(self, "spectral_units", "cm⁻¹")
-            if unit == "nm":
-                header = "Wavelength (nm), " + header
-            else:
-                header = "Wavenumber (cm-1), " + header
+            header = f"{spectral_csv_header(getattr(self, 'spectral_units', 'cm⁻¹'))}, {header}"
 
         # open user prompt to enter name of the file, default is the label of the ROI
         file_name, _ = QtWidgets.QFileDialog.getSaveFileName(None, "Export ROI", f"{roi.label}", "CSV Files (*.csv)")
         if not file_name:
             return # Cancelled
-        np.savetxt(f"{file_name}", signal, delimiter=",", header=header, comments='')
+        np.savetxt(f"{file_name}", signal, delimiter=",", header=header, comments='', fmt=fmt)
         logger.info(f"Exported ROI {roi_idx} to {file_name}")
 
     def remove_roi(self, roi: pg.ROI):
@@ -3137,7 +3141,7 @@ class ROIPlotter(pg.PlotWidget):
         self.legend = self.addLegend()
         self.roi_plot_dock = None
         # Add labels to the PlotWidget
-        self.setLabel('bottom', 'Wavenumber [cm-1]')
+        self.setLabel('bottom', spectral_axis_label(self.spectral_units))
         self.setLabel('left', text='Intensity [a.u.]')
         self.roi_avg_lines = dict()
         self.roi_highlights = dict()
@@ -3451,10 +3455,10 @@ class ROIPlotter(pg.PlotWidget):
         self.set_spectral_units(self.spectral_units)
 
     def set_spectral_units(self, unit: str):
-        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
+        unit = normalize_spectral_unit(unit)
         self.spectral_units = unit
         axis_labels = getattr(self, "axis_labels", None)
-        self.setLabel('bottom', 'Channel' if axis_labels is not None else ('Wavelength [nm]' if unit == "nm" else 'Wavenumber [cm⁻¹]'))
+        self.setLabel('bottom', 'Channel' if axis_labels is not None else spectral_axis_label(unit))
 
     @staticmethod
     def _generate_gaussian(wavenumbers: np.ndarray, center_wavenumber: float, hwhm: float, amp: float = 1.0, eliminate_zeros=True) -> np.ndarray:

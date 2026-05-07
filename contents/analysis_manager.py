@@ -16,6 +16,13 @@ from composite_image import CompositeImageViewWidget
 from contents.custom_pyqt_objects import ImageViewYX
 from contents.multivariate_analyzer import MultivariateAnalyzer
 from contents.roi_manager_pg import ROIManager
+from contents.spectral_axis import (
+    is_index_unit,
+    normalize_spectral_unit,
+    spectral_axis_label,
+    spectral_csv_header,
+    spectral_unit_suffix,
+)
 from contents.color_manager import ComponentColorManager
 from contents.hs_image_view import ColorButton
 
@@ -846,8 +853,9 @@ class AnalysisManager(QtCore.QObject):
         if self._cancel_analysis_if_requested("single-slice analysis completion"):
             return
         if self.mv_analyzer.analysis_method == "PCA":
-            self._analysis_result_spectra = self.mv_analyzer.PCs
-            self._analysis_result_images = self.mv_analyzer.pca_2DX
+            n_components = self.mv_analyzer.get_n_components()
+            self._analysis_result_spectra = self.mv_analyzer.PCs[:n_components]
+            self._analysis_result_images = self.mv_analyzer.pca_2DX[:n_components]
             self._analysis_fit_info = None
         else:
             self._analysis_result_spectra = self.mv_analyzer.fixed_H
@@ -1409,6 +1417,7 @@ class AnalysisManager(QtCore.QObject):
                 seed_pixels,
                 self.roi_manager.get_color_rgba
             )
+            self.seed_window.set_spectral_units(self.spectral_units)
             logger.info("Created new seed window")
         else:
             # reuse existing window
@@ -1421,6 +1430,7 @@ class AnalysisManager(QtCore.QObject):
             self.seed_window.show()
             self.seed_window.raise_()
             self.seed_window.activateWindow()
+            self.seed_window.set_spectral_units(self.spectral_units)
         logger.info("Updated existing seed window")
 
     def _reload_seeds_from_rois(self):
@@ -1554,7 +1564,8 @@ class AnalysisManager(QtCore.QObject):
         if self._analysis_result_spectra is not None and self._analysis_result_images is not None:
             return self._analysis_result_spectra, self._analysis_result_images
         if self.pca_radio.isChecked():
-            return self.mv_analyzer.PCs, self.mv_analyzer.pca_2DX
+            n_components = self.mv_analyzer.get_n_components()
+            return self.mv_analyzer.PCs[:n_components], self.mv_analyzer.pca_2DX[:n_components]
         return self.mv_analyzer.fixed_H, self.mv_analyzer.fixed_W_2D
 
     def get_analysis_fit_info(self) -> dict | list[dict | None] | None:
@@ -1619,6 +1630,55 @@ class AnalysisManager(QtCore.QObject):
 
         self.resonance_table.resizeRowsToContents()
         self._resonance_table_auto_widths = auto_widths
+
+    def _axis_based_resonance_defaults(self, row_position: int) -> tuple[float, float]:
+        """
+        Determine default resonance center and width based on the spectral axis (e.g., wavenumbers) if available.
+        The center is set to a quantile of the axis values corresponding to the row position, and
+        the width is set based on the median spacing of the axis values or a fraction of the total span.
+        """
+        if self.wavenumbers is None:
+            return float(row_position), 1.0
+
+        axis = np.asarray(self.wavenumbers, dtype=float).ravel()
+        axis = axis[np.isfinite(axis)]
+        if axis.size == 0:
+            return float(row_position), 1.0
+
+        axis_sorted = np.sort(axis)
+        if axis_sorted.size == 1:
+            return float(axis_sorted[0]), 1.0
+
+        default_count = max(1, len(self.default_resonances))
+        default_index = row_position % default_count
+        fraction = (default_index + 1) / (default_count + 1)
+        center = float(np.quantile(axis_sorted, fraction))
+
+        unique_axis = np.unique(axis_sorted)
+        diffs = np.diff(unique_axis)
+        spacing = float(np.median(np.abs(diffs))) if diffs.size else 1.0
+        span = float(np.ptp(axis_sorted))
+        width = max(spacing, 0.02 * span)
+
+        if is_index_unit(self.spectral_units) and np.allclose(axis, np.rint(axis)):
+            center = float(round(center))
+            width = float(max(1, round(width)))
+
+        return center, width
+
+    def _default_resonance_values(self, row_position: int) -> tuple[float, float]:
+        default_index = row_position % len(self.default_resonances)
+        default_center, default_width = self.default_resonances[default_index]
+
+        unit = normalize_spectral_unit(self.spectral_units)
+        if unit == "cm⁻¹" and self.wavenumbers is not None:
+            # typical raman shifts
+            axis = np.asarray(self.wavenumbers, dtype=float)
+            finite_axis = axis[np.isfinite(axis)]
+            if finite_axis.size and np.amin(finite_axis) <= default_center <= np.amax(finite_axis):
+                return float(default_center), float(default_width)
+
+        return self._axis_based_resonance_defaults(row_position)
 
     def add_resonance_settings(self):
         # Add a row to the table
@@ -1699,10 +1759,15 @@ class AnalysisManager(QtCore.QObject):
         widget_amp.setSingleStep(1000)
 
 
-        default_wavenumber = self.default_resonances[row_position%len(self.default_resonances)][0]
-        if np.amin(self.wavenumbers) <= default_wavenumber <= np.amax(self.wavenumbers):
-            self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Wavenumber']).setValue((self.default_resonances[row_position%len(self.default_resonances)][0]))
-            self.resonance_table.cellWidget(row_position, self.res_settings_widget_columns['Width']).setValue((self.default_resonances[row_position%len(self.default_resonances)][1]))
+        default_center, default_width = self._default_resonance_values(row_position)
+        self.resonance_table.cellWidget(
+            row_position,
+            self.res_settings_widget_columns['Wavenumber'],
+        ).setValue(default_center)
+        self.resonance_table.cellWidget(
+            row_position,
+            self.res_settings_widget_columns['Width'],
+        ).setValue(default_width)
 
         for cell in [self.res_settings_widget_columns["Wavenumber"], self.res_settings_widget_columns["Width"], self.res_settings_widget_columns["# Seed Pixels"],
                      self.res_settings_widget_columns["Amplitude"]]:
@@ -2739,10 +2804,11 @@ class AnalysisManager(QtCore.QObject):
         wn_col = self.res_settings_widget_columns.get("Wavenumber")
         wd_col = self.res_settings_widget_columns.get("Width")
         axis_labels = getattr(self, "axis_labels", None)
-        unit = getattr(self, "spectral_units", "cm⁻¹")
-        wn_label = "Channel" if axis_labels is not None else ("Wavelength (nm)" if unit == "nm" else "Wavenumber (cm⁻¹)")
-        wd_label = "Width (channels)" if axis_labels is not None else ("Width (nm)" if unit == "nm" else "Width (cm⁻¹)")
-        suffix = " ch" if axis_labels is not None else (" nm" if unit == "nm" else " cm⁻¹")
+        unit = normalize_spectral_unit(getattr(self, "spectral_units", "cm⁻¹"))
+        use_channels = axis_labels is not None or is_index_unit(unit)
+        wn_label = "Channel" if use_channels else ("Wavelength (nm)" if unit == "nm" else "Wavenumber (cm⁻¹)")
+        wd_label = "Width (channels)" if use_channels else ("Width (nm)" if unit == "nm" else "Width (cm⁻¹)")
+        suffix = " ch" if use_channels else spectral_unit_suffix(unit)
         if wn_col is not None:
             item = self.resonance_table.horizontalHeaderItem(wn_col)
             if item:
@@ -2766,8 +2832,9 @@ class AnalysisManager(QtCore.QObject):
         self._refresh_spectral_column_labels()
 
     def set_spectral_units(self, unit: str):
-        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
+        unit = normalize_spectral_unit(unit)
         self.spectral_units = unit
+        self.mv_analyzer.set_spectral_units(unit)
         self._refresh_spectral_column_labels()
 
         # If seed window is open, update its axis label too
@@ -2782,6 +2849,7 @@ class SeedWidget(QtWidgets.QWidget):
         self.seed_W_3d = seed_W_3d
         self.seed_H = seed_H
         self.wavenumbers = wavenumbers
+        self.spectral_units = "cm⁻¹"
         self.seed_H_plot = pg.PlotWidget()
         self.seed_H_plot.addLegend()
         self.seed_W_view = ImageViewYX()
@@ -2799,7 +2867,7 @@ class SeedWidget(QtWidgets.QWidget):
         for i in range(self.seed_H.shape[0]):
             self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pg.mkPen(self.get_color(i)), name=f'Component {i}')
         self.seed_H_plot.setLabel('left', 'Intensity')
-        self.seed_H_plot.setLabel('bottom', 'Wavenumber [1/cm]')
+        self.seed_H_plot.setLabel('bottom', spectral_axis_label(self.spectral_units))
 
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(self.seed_W_view)
@@ -2887,7 +2955,7 @@ class SeedWidget(QtWidgets.QWidget):
         csv_path = file_path.replace('.tif', '.csv')
         csv_path.replace('W_seeds', 'H_seeds')
         H = np.vstack((self.wavenumbers, self.seed_H)).T
-        header = 'Wavenumber (cm-1), ' + ', '.join([f'Component {i}' for i in range(self.seed_H.shape[0])])
+        header = spectral_csv_header(self.spectral_units) + ', ' + ', '.join([f'Component {i}' for i in range(self.seed_H.shape[0])])
         np.savetxt(csv_path, H, delimiter=',', header=header)
         logger.info(f'Saved seeds to {file_path} and {csv_path}')
 
@@ -3001,10 +3069,8 @@ class SeedWidget(QtWidgets.QWidget):
             self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pen, name=f'Component {i}')
 
     def set_spectral_units(self, units: str):
-        if units != 'nm':
-            self.seed_H_plot.setLabel('bottom', 'Wavenumber [1/cm]')
-        else:
-            self.seed_H_plot.setLabel('bottom', 'Wavelength [nm]')
+        self.spectral_units = normalize_spectral_unit(units)
+        self.seed_H_plot.setLabel('bottom', spectral_axis_label(self.spectral_units))
 
     def _replot_seeds(self):
         """Re-draw the seed markers based on current checkboxes and data."""

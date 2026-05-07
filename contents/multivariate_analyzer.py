@@ -12,6 +12,7 @@ from sklearn.decomposition import PCA, NMF
 from contents.custom_pyqt_objects import ImageViewYX
 from contents import nnls_pytorch
 from contents import torch_nmf
+from contents.spectral_axis import normalize_spectral_unit, spectral_axis_label
 
 d_type = '16bit'
 
@@ -26,6 +27,7 @@ class MultivariateAnalyzer(object):
         self.w_seed_mode = 'nnls'
         self.custom_nnmf_init:bool = False
         self.spectral_info = None
+        self.spectral_units = "cm⁻¹"
         self.wavenumbers = None
         self.seed_W = None
         self.seed_H = None
@@ -127,6 +129,9 @@ class MultivariateAnalyzer(object):
     def update_wavenumbers(self, wavenumbers):
         # TODO: in future also update the results then? If analysis is fast enough
         self.wavenumbers = wavenumbers
+
+    def set_spectral_units(self, unit: str):
+        self.spectral_units = normalize_spectral_unit(unit)
 
     def update_resonance_image_data(self, data: np.ndarray):
         logger.info('Updated resonance/subtracted data in the MV analyzer')
@@ -1460,12 +1465,13 @@ class MultivariateAnalyzer(object):
     # Optional matplotlib helpers for manual inspection.
     def plot_PCA_mpl(self):
         # Plot PCA spectra and score images with matplotlib.
+        x_values = self.wavenumbers if self.wavenumbers is not None else np.arange(self.PCs.shape[1])
         for i in range(0, self._n_components):  # only plot the interesting components
-            l, = plt.plot(self.PCs[i, :], label=f"PC {i:.0f}")
+            l, = plt.plot(x_values, self.PCs[i, :], label=f"PC {i:.0f}")
             # self.ax1_lines.append(l)
         ax = plt.gca()
         ax.legend()
-        ax.set_xlabel('Raman shift [cm$^{-1}$]')
+        ax.set_xlabel(spectral_axis_label(self.spectral_units))
         ax.set_ylabel('Intensity [a. u.]')
         ax.set_title('PCs')
         # plt.gcf().subplots_adjust(**adjust_options_tight)
@@ -1483,12 +1489,13 @@ class MultivariateAnalyzer(object):
     def plot_nnmf_mpl(self):
         # Plot NNMF spectra and component images with matplotlib.
         # loadings
+        x_values = self.wavenumbers if self.wavenumbers is not None else np.arange(self.fixed_H.shape[1])
         for i in range(0, self._n_components):  # only plot the interesting components
-            l, = plt.plot(self.fixed_H[i, :], label=fr" H {i:.0f}")
+            l, = plt.plot(x_values, self.fixed_H[i, :], label=fr" H {i:.0f}")
             # self.ax1_lines.append(l)
         ax = plt.gca()
         ax.legend()
-        ax.set_xlabel('Raman shift [cm$^{-1}$]')
+        ax.set_xlabel(spectral_axis_label(self.spectral_units))
         ax.set_ylabel('Intensity [a. u.]')
         ax.set_title(r'$H$')
 

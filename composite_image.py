@@ -19,6 +19,7 @@ from contents.color_manager import ComponentColorManager
 from contents.custom_pyqt_objects import ImageViewYXC, ImageViewLineRoiYXZ
 from contents.fiji_saver import FIJISaver
 from contents.scalebar import ScaleBar
+from contents.spectral_axis import normalize_spectral_unit, spectral_axis_label, spectral_csv_header
 
 max_but_size = (100, 50)
 dtype = np.uint16
@@ -58,6 +59,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectral_cmps_seed = None
         self.wavenumbers = None
         self.axis_labels = None
+        self.spectral_units = "cm⁻¹"
         self.result_mode = None
         self.outer_axis_label = "Slice"
         self.current_result_slice_index = 0
@@ -140,7 +142,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.channel_view.view.setTitle("Channel Preview")
         self.spectrum_view = pg.PlotWidget(title="Component Spectra", size=(100,300))
         self.spectrum_view.setLabel('left', 'Intensity counts')
-        self.spectrum_view.setLabel('bottom', 'Wavenumber (1/cm)')
+        self.spectrum_view.setLabel('bottom', spectral_axis_label(self.spectral_units, parentheses=True))
         self.legend = self.spectrum_view.addLegend()
         self.spectrum_lines = []
         self.seed_lines = []
@@ -512,6 +514,7 @@ class CompositeImageViewWidget(QMainWindow):
     def _update_spectrum_axis(self):
         axis = self.spectrum_view.getPlotItem().getAxis('bottom')
         if self.axis_labels is None:
+            axis.setLabel(spectral_axis_label(self.spectral_units, parentheses=True))
             axis.setTicks(None)
             return
 
@@ -1708,9 +1711,14 @@ class CompositeImageViewWidget(QMainWindow):
         if not file_path:  # User canceled the dialog
             return
 
-        axis_values = self.axis_labels if self.axis_labels is not None else [str(v) for v in self.wavenumbers[...]]
+        if self.axis_labels is not None:
+            axis_values = self.axis_labels
+        elif self.wavenumbers is not None:
+            axis_values = [str(v) for v in self.wavenumbers[...]]
+        else:
+            axis_values = [str(v) for v in range(self.spectral_cmps.shape[1])]
 
-        header_label = "Channel Label" if self.axis_labels is not None else "Wavenumber (1/cm)"
+        header_label = spectral_csv_header(self.spectral_units, labels=self.axis_labels is not None)
         header = header_label + "," + ",".join([f"Component {i}" for i in range(self.spectral_cmps.shape[0])])
         rows = [
             [axis_values[i], *self.spectral_cmps[:, i].tolist()]
@@ -1974,12 +1982,12 @@ class CompositeImageViewWidget(QMainWindow):
             self._restore_channel_histogram_widget_state(self.histogram_states[index])
 
     def set_spectral_units(self, units: str):
+        units = normalize_spectral_unit(units)
+        self.spectral_units = units
         if self.axis_labels is not None:
             self.spectrum_view.setLabel('bottom', 'Channels')
-        elif units.lower() == 'nm':
-            self.spectrum_view.setLabel('bottom', 'Wavelength (nm)')
         else:
-            self.spectrum_view.setLabel('bottom', 'Wavenumber (1/cm)')
+            self.spectrum_view.setLabel('bottom', spectral_axis_label(units, parentheses=True))
 
     def choose_color(self, color: QColor | None = None):
         # Open a QColorDialog to choose a color for colormap

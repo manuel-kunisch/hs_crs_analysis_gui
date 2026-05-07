@@ -16,6 +16,7 @@ from contents import analysis_manager, data_widgets
 from contents.color_manager import ComponentColorManager
 from contents.data_widgets import DataWidget
 from contents.scalebar import ScaleBar
+from contents.spectral_axis import normalize_spectral_unit, spectral_axis_label
 
 logger = logging.getLogger('Main')
 logger.setLevel(logging.INFO)
@@ -26,18 +27,6 @@ logger.setLevel(logging.INFO)
 
 # example_image2 = np.moveaxis(tifffile.imread('/Users/mkunisch/Nextcloud/Manuel_BA/HS_CARS_Lung_cells_day_2_Vukosaljevic_et_al/Results/2023_05_23_15614_reshaped_NMF_2017_03_23_Lungcells_Day2_60mWBoth_2xZoom_16ms_Pos2_HS_CARS_ch-1_C.tif'),
 #                            0, -1)
-
-def _norm_spec_unit(unit: str) -> str:
-    u = (unit or "").strip().lower()
-    return "nm" if u == "nm" else "cm⁻¹"
-
-def _spec_axis_label(unit: str) -> str:
-    unit = _norm_spec_unit(unit)
-    return "Wavelength [nm]" if unit == "nm" else "Wavenumber [cm⁻¹]"
-
-def _spec_unit_suffix(unit: str) -> str:
-    unit = _norm_spec_unit(unit)
-    return " nm" if unit == "nm" else " cm⁻¹"
 
 class MainApplication(QtWidgets.QMainWindow):
     def __init__(self):
@@ -229,6 +218,7 @@ class MainApplication(QtWidgets.QMainWindow):
         self.data_widget.set_spectral_axis_labels(axis_labels)
         self.analysis_manager.set_axis_labels(axis_labels)
         self.result_viewer_widget.set_axis_labels(axis_labels)
+        self.change_spectral_units(self.data_handler.wavenumber_widget.custom_unit_combo.currentText())
         # Inform Analyzer
 
     def update_data(self, img_array=None, preserve_channel: bool = False):
@@ -270,7 +260,7 @@ class MainApplication(QtWidgets.QMainWindow):
         self.result_viewer_widget.set_export_scalebar_config(length=float(len))
 
     def change_spectral_units(self, unit: str):
-        unit = _norm_spec_unit(unit)
+        unit = normalize_spectral_unit(unit)
 
         # 1) composite/result viewer
         self.result_viewer_widget.set_spectral_units(unit)
@@ -284,7 +274,10 @@ class MainApplication(QtWidgets.QMainWindow):
         # 4) optional: your extra ROI plot in data_widgets.py if it exists
         if getattr(self.data_widget, "roi_avg_plot_wid", None) is not None:
             axis_labels = getattr(self.data_handler.wavenumber_widget, "custom_axis_labels", None)
-            self.data_widget.roi_avg_plot_wid.setLabel('bottom', 'Channel' if axis_labels is not None else _spec_axis_label(unit))
+            self.data_widget.roi_avg_plot_wid.setLabel(
+                'bottom',
+                'Channel' if axis_labels is not None else spectral_axis_label(unit),
+            )
 
 
     def updated_widget_component_colors(self, lut_index: int, color: QColor):

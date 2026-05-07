@@ -1,4 +1,6 @@
 import logging
+import json
+import os
 
 import sys
 import numpy as np
@@ -11,6 +13,14 @@ from composite_image import dtype, max_dtype_val
 from contents.data_managers import ImageLoader
 from contents.hs_image_view import RamanImageView
 from contents.roi_manager_pg import ROIManager
+from contents.spectral_axis import (
+    INDEX_UNIT,
+    is_index_unit,
+    normalize_spectral_unit,
+    spectral_axis_label,
+    spectral_unit_display,
+    spectral_unit_suffix,
+)
 
 logger = logging.getLogger('Data Manager')
 
@@ -70,7 +80,7 @@ class DataWidget(QtWidgets.QWidget):
         self.roi_avg_plot_wid = pg.PlotWidget(title="ROI Average Plot")
         self.roi_avg_plot_wid.addLegend()
         # Add labels to the PlotWidget
-        self.roi_avg_plot_wid.setLabel('bottom', text='Wavenumbers')
+        self.roi_avg_plot_wid.setLabel('bottom', text=spectral_axis_label("cm⁻¹"))
         self.roi_avg_plot_wid.setLabel('left', text='Intensity [a.u.]')
         self.roi_avg_lines = dict()
 
@@ -157,18 +167,26 @@ class DataWidget(QtWidgets.QWidget):
         self.update_overview_images()  # Call this to display initial images
 
     def set_spectral_units(self, unit: str):
+        unit = normalize_spectral_unit(unit)
         self.roi_manager.spectral_units = unit
         self.roi_manager.roi_plotter.set_spectral_units(unit)
         self.raman_raw_image_view.set_spectral_units(unit)
         if self.roi_avg_plot_wid is not None:
             has_custom_labels = bool(getattr(self.roi_manager.roi_plotter, "axis_labels", None))
-            self.roi_avg_plot_wid.setLabel('bottom', text='Channel' if has_custom_labels else ('Wavelength [nm]' if unit == 'nm' else 'Wavenumber [cm⁻¹]'))
+            self.roi_avg_plot_wid.setLabel(
+                'bottom',
+                text='Channel' if has_custom_labels else spectral_axis_label(unit),
+            )
 
     def set_spectral_axis_labels(self, labels):
         self.raman_raw_image_view.set_axis_labels(labels)
         self.roi_manager.roi_plotter.set_axis_labels(labels)
+        self.roi_manager.axis_labels = None if labels is None else [str(label) for label in labels]
         if self.roi_avg_plot_wid is not None:
-            self.roi_avg_plot_wid.setLabel('bottom', text='Channel' if labels is not None else ('Wavelength [nm]' if self.roi_manager.spectral_units == 'nm' else 'Wavenumber [cm⁻¹]'))
+            self.roi_avg_plot_wid.setLabel(
+                'bottom',
+                text='Channel' if labels is not None else spectral_axis_label(self.roi_manager.spectral_units),
+            )
 
     def init_toolbar(self):
         self.lut_combo_box = QtWidgets.QComboBox(self)
@@ -605,7 +623,7 @@ class _NumericEntry(QtWidgets.QDoubleSpinBox):
 
 class WavenumberLoadDialog(QtWidgets.QDialog):
     """
-    Helper window to manually enter or load wavenumbers from a file.
+    Helper window to manually enter or load spectral-axis values from a file.
     """
 
     def __init__(self, target_length, current_data=None, parent=None):
@@ -663,7 +681,7 @@ class WavenumberLoadDialog(QtWidgets.QDialog):
 
     def load_from_file(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Open Wavenumber File", "", "Text Files (*.txt *.csv *.dat);;All Files (*)"
+            self, "Open Spectral Axis File", "", "Text Files (*.txt *.csv *.dat);;All Files (*)"
         )
         if path:
             try:
@@ -728,6 +746,7 @@ class WavenumberLoadDialog(QtWidgets.QDialog):
 
 class WavenumberWidget(QtWidgets.QWidget):
     wavenumbers_changed = QtCore.pyqtSignal(np.ndarray)
+    save_settings_requested = QtCore.pyqtSignal()
 
     def __init__(self, n_frames=100, **kwargs):
         super().__init__()
@@ -775,8 +794,8 @@ class WavenumberWidget(QtWidgets.QWidget):
         top_bar.addWidget(self.source_combo)
 
         self.custom_unit_combo = QtWidgets.QComboBox()
-        self.custom_unit_combo.addItems([ "cm⁻¹", "nm"])
-        self.custom_unit_combo.setFixedWidth(60)
+        self.custom_unit_combo.addItems(["cm⁻¹", "nm", "Index"])
+        self.custom_unit_combo.setFixedWidth(78)
         self.custom_unit_combo.currentIndexChanged.connect(self.update_wavenums)
 
         top_bar.addSpacing(15)
@@ -784,6 +803,13 @@ class WavenumberWidget(QtWidgets.QWidget):
         top_bar.addWidget(QtWidgets.QLabel("Unit:"))
         top_bar.addWidget(self.custom_unit_combo)
         top_bar.addStretch()
+
+        self.save_axis_btn = QtWidgets.QPushButton("Save wavelength.json...")
+        self.save_axis_btn.setToolTip(
+            "Save the current spectral-axis settings as wavelength.json for automatic loading with this dataset."
+        )
+        self.save_axis_btn.clicked.connect(self.save_settings_requested.emit)
+        top_bar.addWidget(self.save_axis_btn)
 
         main_layout.addLayout(top_bar)
 
@@ -859,7 +885,9 @@ class WavenumberWidget(QtWidgets.QWidget):
         fixed_beam_layout.addWidget(self.fixed_entry, 0, 1)
         fixed_beam_layout.addWidget(QtWidgets.QLabel("nm"), 0, 2)
 
-        self.source_combo.currentTextChanged.connect(lambda unit: self.fixed_entry.setEnabled(False) if unit == "nm" else self.fixed_entry.setEnabled(True))
+        self.custom_unit_combo.currentTextChanged.connect(
+            lambda unit: self.fixed_entry.setEnabled(normalize_spectral_unit(unit) == "cm⁻¹")
+        )
         calc_layout.addWidget(self.stokes_beam_group)
 
         # Add Page 1 to stack
@@ -872,11 +900,11 @@ class WavenumberWidget(QtWidgets.QWidget):
         custom_layout.setContentsMargins(10, 8, 10, 8)
         custom_layout.setAlignment(QtCore.Qt.AlignTop)
 
-        custom_group = QtWidgets.QGroupBox("Custom Wavenumbers")
+        custom_group = QtWidgets.QGroupBox("Custom Spectral Axis")
         custom_group.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
         cg_layout = QtWidgets.QHBoxLayout(custom_group)
 
-        self.btn_load_custom = QtWidgets.QPushButton("Edit / Load Wavenumbers...")
+        self.btn_load_custom = QtWidgets.QPushButton("Edit / Load Axis...")
         self.btn_load_custom.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogDetailedView))
         self.btn_load_custom.clicked.connect(self.open_custom_dialog)
 
@@ -930,6 +958,8 @@ class WavenumberWidget(QtWidgets.QWidget):
 
     def on_source_changed(self, index):
         self.stack.setCurrentIndex(index)
+        if index == 1 and not self.has_custom_source_data() and not is_index_unit(self.custom_unit_combo.currentText()):
+            self._set_unit_combo(INDEX_UNIT)
         self.update_wavenums()
 
     def open_custom_dialog(self):
@@ -938,6 +968,8 @@ class WavenumberWidget(QtWidgets.QWidget):
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             self.custom_wavenumbers = dlg.loaded_data
             self.custom_axis_labels = dlg.loaded_labels
+            if self.custom_axis_labels is not None:
+                self._set_unit_combo(INDEX_UNIT)
             self.update_wavenums()
 
     def on_min_max_checked(self, state):
@@ -976,6 +1008,20 @@ class WavenumberWidget(QtWidgets.QWidget):
     def has_custom_source_data(self) -> bool:
         return self.custom_wavenumbers is not None or self.custom_axis_labels is not None
 
+    def _unit_combo_index(self, unit: str | None) -> int:
+        wanted = normalize_spectral_unit(unit)
+        for idx in range(self.custom_unit_combo.count()):
+            if normalize_spectral_unit(self.custom_unit_combo.itemText(idx)) == wanted:
+                return idx
+        return -1
+
+    def _set_unit_combo(self, unit: str | None) -> bool:
+        idx = self._unit_combo_index(unit)
+        if idx < 0 or idx == self.custom_unit_combo.currentIndex():
+            return False
+        self.custom_unit_combo.setCurrentIndex(idx)
+        return True
+
     def warn_and_switch_from_custom_source(self, parent: QtWidgets.QWidget | None = None) -> bool:
         if not self.is_custom_source_active() or not self.has_custom_source_data():
             return False
@@ -995,7 +1041,18 @@ class WavenumberWidget(QtWidgets.QWidget):
         channels = max(1, int(self.n_frames))
         is_custom = (self.source_combo.currentIndex() == 1)
 
-        unit_str = self.custom_unit_combo.currentText()
+        unit_key = normalize_spectral_unit(self.custom_unit_combo.currentText())
+        if (
+                is_custom
+                and (self.custom_wavenumbers is None or self.custom_axis_labels is not None)
+                and unit_key != INDEX_UNIT
+        ):
+            idx = self._unit_combo_index(INDEX_UNIT)
+            if idx >= 0:
+                with QtCore.QSignalBlocker(self.custom_unit_combo):
+                    self.custom_unit_combo.setCurrentIndex(idx)
+                unit_key = INDEX_UNIT
+        suffix = spectral_unit_suffix(unit_key)
 
         if is_custom:
             if self.custom_wavenumbers is None:
@@ -1003,11 +1060,9 @@ class WavenumberWidget(QtWidgets.QWidget):
                 self.custom_axis_labels = None
                 self.custom_status_label.setText("Default: Indices")
                 # Fallback labels
-                self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.0f} (idx)")
-                self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.0f} (idx)")
+                self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.0f}")
+                self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.0f}")
                 self.warn_label.setVisible(False)
-                # Emit indices, but technically unit_str might be misleading here if not set
-                # but usually user loads data immediately.
             else:
                 self.wavenumbers = self.custom_wavenumbers
                 if self.custom_axis_labels is not None:
@@ -1026,8 +1081,8 @@ class WavenumberWidget(QtWidgets.QWidget):
                         self.min_label.setText(f"First: {self.custom_axis_labels[0]}")
                         self.max_label.setText(f"Last: {self.custom_axis_labels[-1]}")
                     else:
-                        self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} {unit_str}")
-                        self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} {unit_str}")
+                        self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f}{suffix}")
+                        self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f}{suffix}")
 
         else:
             # --- Calculated Logic ---
@@ -1061,7 +1116,9 @@ class WavenumberWidget(QtWidgets.QWidget):
 
             # 2. Calculate Axis
             # Check if we are doing Raman (Fixed enabled) or Hyperspectral (Fixed disabled)
-            if unit_str != "nm":
+            if unit_key == INDEX_UNIT:
+                self.wavenumbers = np.arange(channels, dtype=np.float32)
+            elif unit_key != "nm":
                 # --- RAMAN MODE (cm-1) ---
                 fixed_wavelength = float(self.fixed_entry.value())
 
@@ -1082,11 +1139,66 @@ class WavenumberWidget(QtWidgets.QWidget):
                 self.wavenumbers = np.linspace(minimum, maximum, channels, dtype=np.float32)
 
             # 3. Update Info Box
-            self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f} {unit_str}")
-            self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f} {unit_str}")
+            if unit_key == INDEX_UNIT:
+                self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.0f}")
+                self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.0f}")
+            else:
+                self.min_label.setText(f"Min: {float(np.min(self.wavenumbers)):.2f}{suffix}")
+                self.max_label.setText(f"Max: {float(np.max(self.wavenumbers)):.2f}{suffix}")
 
         self.num_label.setText(f"Frames: {self.n_frames}")
         self.wavenumbers_changed.emit(self.wavenumbers)
+
+    def export_wavelength_metadata(self) -> dict:
+        """Return a wavelength.json-compatible representation of the current axis settings."""
+        unit = spectral_unit_display(self.custom_unit_combo.currentText())
+        meta = {
+            "spectral_unit": unit,
+        }
+
+        if self.is_custom_source_active():
+            values = self.wavenumbers
+            if values is None:
+                values = np.arange(max(1, int(self.n_frames)), dtype=np.float32)
+            meta["custom_values"] = [float(value) for value in np.asarray(values, dtype=float).ravel()]
+            if self.custom_axis_labels is not None:
+                meta["custom_labels"] = [str(label) for label in self.custom_axis_labels]
+            return meta
+
+        meta["tuned_beam"] = "pump" if self.beam_mode == 0 else "stokes"
+        meta["fixed_beam_nm"] = float(self.fixed_entry.value())
+        meta["tuned_min_nm"] = float(self.min_wavelength_entry.value())
+        if self.min_max_checkbox.isChecked():
+            meta["tuned_max_nm"] = float(self.max_wavelength_entry.value())
+        else:
+            meta["tuned_step_nm"] = float(self.stepsize_entry.value())
+        return meta
+
+    def save_wavelength_json(self, default_path: str | None = None):
+        if not default_path:
+            default_path = os.path.join(os.getcwd(), "wavelength.json")
+
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Save wavelength.json",
+            default_path,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(self.export_wavelength_metadata(), fh, indent=2)
+                fh.write("\n")
+        except Exception as exc:
+            logger.exception("Failed to save wavelength metadata to %s", path)
+            QtWidgets.QMessageBox.critical(self, "Save failed", f"Could not save wavelength.json:\n{exc}")
+            return
+
+        QtWidgets.QMessageBox.information(self, "Saved wavelength.json", f"Saved spectral-axis settings to:\n{path}")
 
     def apply_wavelength_meta(self, meta: dict, n_frames: int):
         custom_values = meta.get("custom_values")
@@ -1104,9 +1216,9 @@ class WavenumberWidget(QtWidgets.QWidget):
                 w.blockSignals(True)
 
             if spectral_unit is not None:
-                unit_index = self.custom_unit_combo.findText(str(spectral_unit))
-                if unit_index >= 0:
-                    self.custom_unit_combo.setCurrentIndex(unit_index)
+                self._set_unit_combo(spectral_unit)
+            elif custom_labels is not None:
+                self._set_unit_combo(INDEX_UNIT)
 
             self.source_combo.setCurrentIndex(1)
             self.stack.setCurrentIndex(1)
@@ -1140,6 +1252,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.n_frames = int(n_frames)
 
         widgets = [
+            self.source_combo,
             self.custom_unit_combo,
             self.min_wavelength_entry,
             self.max_wavelength_entry,
@@ -1152,9 +1265,10 @@ class WavenumberWidget(QtWidgets.QWidget):
             w.blockSignals(True)
 
         if spectral_unit is not None:
-            unit_index = self.custom_unit_combo.findText(str(spectral_unit))
-            if unit_index >= 0:
-                self.custom_unit_combo.setCurrentIndex(unit_index)
+            self._set_unit_combo(spectral_unit)
+
+        self.source_combo.setCurrentIndex(0)
+        self.stack.setCurrentIndex(0)
 
         if fixed_nm is not None:
             self.fixed_entry.setValue(float(fixed_nm))
@@ -1193,7 +1307,7 @@ class WavenumberWidget(QtWidgets.QWidget):
 
             # UI choices
             "source_index": int(self.source_combo.currentIndex()),  # 0=Calculated, 1=Custom
-            "unit": str(self.custom_unit_combo.currentText()),  # "cm⁻¹" or "nm"
+            "unit": spectral_unit_display(self.custom_unit_combo.currentText()),
             "beam_mode": int(self.beam_mode),  # 0/1
 
             # calculated-mode inputs (still useful to store even if custom)
@@ -1281,8 +1395,8 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.source_combo.setCurrentIndex(source_index)
         self.stack.setCurrentIndex(source_index)
 
-        unit = str(state.get("unit", "cm⁻¹"))
-        uidx = self.custom_unit_combo.findText(unit)
+        unit = state.get("unit", INDEX_UNIT if custom_labels is not None else "cm⁻¹")
+        uidx = self._unit_combo_index(unit)
         if uidx >= 0:
             self.custom_unit_combo.setCurrentIndex(uidx)
 
@@ -1386,9 +1500,19 @@ class DataHandler(QtWidgets.QWidget):
         self._source_image = None   # canonical image used for analysis, before spatial binning
         self._analysis_image = None  # 3D or 4D image after spatial binning
         self._display_image = None   # 3D image currently shown in the raw-data widget
-        self._suspend_custom_axis_warning = False
+        self._suspend_custom_axis_warning = True
         self._current_slice_index = 0
         self._slice_axis_label = "Slice"
+        self.wavenumber_widget.save_settings_requested.connect(self.save_wavelength_json)
+
+    def save_wavelength_json(self):
+        current_path = getattr(self.loader_widget, "current_path", None)
+        if current_path:
+            default_dir = os.path.dirname(current_path)
+        else:
+            default_dir = os.getcwd()
+        default_path = os.path.join(default_dir, "wavelength.json")
+        self.wavenumber_widget.save_wavelength_json(default_path)
 
     class _AxisRoleDialog(QtWidgets.QDialog):
         def __init__(self, shape: tuple[int, ...], parent: QtWidgets.QWidget | None = None):

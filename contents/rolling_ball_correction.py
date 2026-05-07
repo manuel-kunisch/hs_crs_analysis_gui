@@ -337,7 +337,9 @@ class RollingBallSnapshot:
         shape_yx = a2.shape
 
         # --- reference model path (recommended) ---
-        if self.cfg.mode == "reference" and self.reference_model is not None:
+        if self.cfg.mode == "reference":
+            if self.reference_model is None:
+                return img
             g = _make_gaussian_field_from_model(shape_yx, self.reference_model)
             center_xy = _center_xy_from_offsets(self.reference_model.dx_px, self.reference_model.dy_px, self.reference_model.ref_shape_yx)
             # NOTE: center_xy above is in REF coords. For factor we want target coords center.
@@ -520,6 +522,9 @@ class RollingBallCorrectionController(QtCore.QObject):
     def apply(self, img: np.ndarray) -> np.ndarray:
         if not self.cfg.enabled:
             return img
+
+        if self.cfg.mode == "reference" and self._reference_model is None:
+            self.ensure_model(_as_2d_float(img).shape)
 
         snap = self.snapshot()
         out = snap.apply(img)
@@ -814,6 +819,8 @@ class RollingBallCorrectionWidget(QtWidgets.QWidget):
         layout.addWidget(est_box, 1, 0)
         layout.addWidget(ref_box, 0, 1, 2, 1)
         layout.addWidget(self.preview_last_btn, 2, 0)
+
+        self.ctrl.ensure_model((int(self.syn_h.value()), int(self.syn_w.value())))
 
         # ---- init sync ----
         self._sync_from_controller()

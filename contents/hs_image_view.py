@@ -6,6 +6,12 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 from pyqtgraph import VTickGroup
 
 from contents.custom_pyqt_objects import ImageViewLineRoi
+from contents.spectral_axis import (
+    is_index_unit,
+    normalize_spectral_unit,
+    spectral_axis_label,
+    spectral_unit_suffix,
+)
 
 logger = logging.getLogger('HS Image Viewer')
 
@@ -64,19 +70,19 @@ class RamanImageView(ImageViewLineRoi):
         self.roiPlotWidget = roi_plot_widget
 
     def set_spectral_units(self, unit: str):
-        unit = "nm" if (unit or "").strip().lower() == "nm" else "cm⁻¹"
+        unit = normalize_spectral_unit(unit)
         if self.axis_labels is not None:
             self.ui.roiPlot.getAxis('bottom').setLabel('Channels')
-        elif unit == "nm":
-            self.ui.roiPlot.getAxis('bottom').setLabel('Wavelength [nm]')
         else:
-            self.ui.roiPlot.getAxis('bottom').setLabel('Raman Shift [1/cm]')
+            self.ui.roiPlot.getAxis('bottom').setLabel(spectral_axis_label(unit, raman_shift=True))
         self.unit = unit
+        self.update_timeline_ticks()
         self.updateImage()
 
     def set_axis_labels(self, labels):
         self.axis_labels = None if labels is None else [str(label) for label in labels]
         if self.axis_labels is None:
+            self.ui.roiPlot.getAxis('bottom').setTicks(None)
             self.set_spectral_units(self.unit)
         else:
             self.ui.roiPlot.getAxis('bottom').setLabel('Channels')
@@ -105,7 +111,11 @@ class RamanImageView(ImageViewLineRoi):
         if self.view is not None and self.axis_labels is not None and 0 <= frame < len(self.axis_labels):
             self.view.setTitle(f'Frame: {frame} @ {self.axis_labels[frame]}')
         elif self.view is not None and self.wavenumber is not None and 0 <= frame < len(self.wavenumber):
-            self.view.setTitle(f'Frame: {frame} @ {self.wavenumber[self.currentIndex]:.1f} {self.unit}')
+            value = self.wavenumber[self.currentIndex]
+            if is_index_unit(self.unit):
+                self.view.setTitle(f'Frame: {frame} @ {value:g}')
+            else:
+                self.view.setTitle(f'Frame: {frame} @ {value:.1f}{spectral_unit_suffix(self.unit)}')
 
     def roiChanged(self, *args, plot_widget=None):
         # args is the line roi which is passed at the event call

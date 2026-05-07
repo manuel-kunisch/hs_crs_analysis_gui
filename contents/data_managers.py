@@ -10,6 +10,7 @@ from tifffile import TiffFile, imread
 from contents import stitch_functions as stitching
 from contents.physical_units_manager import PhysicalUnitsManager
 from contents.rolling_ball_correction import RollingBallCorrectionWidget, RollingBallCorrectionController
+from contents.spectral_axis import normalize_spectral_unit
 from contents.stitch_manager import StitchManager
 
 logger = logging.getLogger('Data Manager')
@@ -131,10 +132,12 @@ class ImageLoader(QtWidgets.QWidget):
         if not self.rb_ctrl.cfg.enabled:
             return None
 
-        # Strong recommendation: only allow reference mode for stitching
-        if self.rb_ctrl.cfg.mode != "reference" or self.rb_ctrl.reference_model() is None:
-            logger.warning("Rolling-ball enabled but not in reference mode; not applying to tiles to avoid seams.")
+        # Use one fixed reference/manual model for all tiles to keep stitching consistent.
+        if self.rb_ctrl.cfg.mode != "reference":
+            logger.warning("Rolling-ball enabled but not in reference/manual model mode; not applying to tiles to avoid seams.")
             return None
+        if self.rb_ctrl.reference_model() is None:
+            self.rb_ctrl.ensure_model((int(self.rb_widget.syn_h.value()), int(self.rb_widget.syn_w.value())))
 
         snap = self.rb_ctrl.snapshot()  # thread-safe frozen config/model
         return snap.apply
@@ -353,12 +356,9 @@ class ImageLoader(QtWidgets.QWidget):
             logger.warning("No image loaded; cannot reprocess")
             return
         if self._raw_image is None:
-            # inform the user that processing is not possible
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Reprocessing Not Possible",
-                "No raw image data available for reprocessing.\n\n"
-                "Please rerun the image loading step (e.g. stitching).",
+            logger.info(
+                "Rolling-ball settings changed but no raw image cache is available; "
+                "the current settings will be used the next time data is loaded or stitched."
             )
             return
         if self.rb_ctrl.cfg.enabled and self._raw_image.ndim == 4:
@@ -388,13 +388,7 @@ class ImageLoader(QtWidgets.QWidget):
                 spectral_unit = meta.get("spectral_unit", meta.get("unit"))
 
                 if spectral_unit is not None:
-                    spectral_unit = str(spectral_unit).strip().lower()
-                    if spectral_unit in {"nm", "nanometer", "nanometers", "wavelength"}:
-                        spectral_unit = "nm"
-                    elif spectral_unit in {"cm-1", "cm^-1", "1/cm", "cm⁻¹", "wavenumber", "raman"}:
-                        spectral_unit = "cm⁻¹"
-                    else:
-                        raise ValueError("spectral_unit must be 'nm' or 'cm⁻¹'")
+                    spectral_unit = normalize_spectral_unit(spectral_unit)
 
                 if custom_values is not None or custom_labels is not None:
                     if custom_values is not None:

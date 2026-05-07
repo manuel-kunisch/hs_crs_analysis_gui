@@ -46,15 +46,22 @@ Numeric and text information can be combined: providing both `custom_values` and
 
 Place a file named exactly `wavelength.json` in the **same folder** as the TIFF file. When the GUI loads the TIFF, it automatically reads this file and applies the spectral axis.
 
+To write this file from the GUI, configure the spectral-axis widget and press **Save wavelength.json...**. The save dialog opens next to the currently loaded dataset, but the location and file name can still be changed before saving.
+
 ### Accepted keys
 
 | Key | Alias | Type | Description |
 |---|---|---|---|
-| `spectral_unit` | `unit` | string | Spectral unit. Accepted values: `"nm"`, `"nanometer"`, `"nanometers"`, `"wavelength"` → treated as `nm`; `"cm-1"`, `"cm^-1"`, `"1/cm"`, `"cm⁻¹"`, `"wavenumber"`, `"raman"` → treated as `cm⁻¹`. |
+| `spectral_unit` | `unit` | string | Spectral unit. Accepted values: `"nm"`, `"nanometer"`, `"nanometers"`, `"wavelength"` → treated as `nm`; `"cm-1"`, `"cm^-1"`, `"1/cm"`, `"cm⁻¹"`, `"wavenumber"`, `"raman"` → treated as `cm⁻¹`; `"index"`, `"indices"`, `"channel"`, `"channels"` → treated as a unitless channel-index axis. |
 | `custom_values` | `custom_points` | list of numbers | Numeric axis positions, one per channel. |
 | `custom_labels` | `labels` | list of strings | Text labels, one per channel. |
+| `tuned_beam` | - | string | Calculated Raman-axis mode only. `"pump"` or `"stokes"`, depending on which beam was scanned. |
+| `fixed_beam_nm` | - | number | Calculated Raman-axis mode only. Fixed laser wavelength in nm. |
+| `tuned_min_nm` | - | number | Calculated Raman-axis mode only. First tuned wavelength in nm. |
+| `tuned_max_nm` | - | number | Calculated Raman-axis mode with min/max input. Last tuned wavelength in nm. |
+| `tuned_step_nm` | - | number | Calculated Raman-axis mode with step-size input. Tuned wavelength step in nm. |
 
-All keys are optional, but at least one of `custom_values` or `custom_labels` should be present for the file to have any effect.
+For custom/manual axes, provide `custom_values`, `custom_labels`, or both. For calculated Raman axes, provide the tuned/fixed laser keys instead. Files written from the GUI include the currently active mode.
 
 The number of values or labels must match the number of spectral channels in the loaded image. A mismatch generates a warning and the axis falls back to channel indices.
 

@@ -50,6 +50,8 @@ Numeric values are used as the x-axis values in plots. Text labels are shown as 
 
 If a file named `wavelength.json` is placed next to the loaded TIFF, the GUI tries to apply it automatically.
 
+To create this file from the GUI, set the spectral axis as needed and press **Save wavelength.json...** in the spectral-axis widget. The save dialog opens in the folder of the currently loaded dataset and can be redirected to another location before saving.
+
 Accepted keys are:
 
 - `spectral_unit` or `unit`.

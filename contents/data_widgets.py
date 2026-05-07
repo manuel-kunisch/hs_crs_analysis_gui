@@ -908,10 +908,16 @@ class WavenumberWidget(QtWidgets.QWidget):
         self.btn_load_custom.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogDetailedView))
         self.btn_load_custom.clicked.connect(self.open_custom_dialog)
 
+        self.btn_remove_custom = QtWidgets.QPushButton("Remove")
+        self.btn_remove_custom.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_TrashIcon))
+        self.btn_remove_custom.clicked.connect(self.clear_custom_data)
+        self.btn_remove_custom.setEnabled(False)
+
         self.custom_status_label = QtWidgets.QLabel("No data loaded.")
         self.custom_status_label.setStyleSheet("color: gray; font-style: italic;")
 
         cg_layout.addWidget(self.btn_load_custom)
+        cg_layout.addWidget(self.btn_remove_custom)
         cg_layout.addWidget(self.custom_status_label)
         cg_layout.addStretch()
 
@@ -971,6 +977,11 @@ class WavenumberWidget(QtWidgets.QWidget):
             if self.custom_axis_labels is not None:
                 self._set_unit_combo(INDEX_UNIT)
             self.update_wavenums()
+
+    def clear_custom_data(self):
+        self.custom_wavenumbers = None
+        self.custom_axis_labels = None
+        self.source_combo.setCurrentIndex(0)  # switches to Calculated mode and calls update_wavenums
 
     def on_min_max_checked(self, state):
         if state == QtCore.Qt.Checked:
@@ -1055,6 +1066,7 @@ class WavenumberWidget(QtWidgets.QWidget):
         suffix = spectral_unit_suffix(unit_key)
 
         if is_custom:
+            self.btn_remove_custom.setEnabled(self.has_custom_source_data())
             if self.custom_wavenumbers is None:
                 self.wavenumbers = np.arange(channels, dtype=np.float32)
                 self.custom_axis_labels = None
@@ -1670,7 +1682,7 @@ class DataHandler(QtWidgets.QWidget):
 
         self._update_slice_selector()
 
-    def new_image_loaded(self, image: np.ndarray):
+    def new_image_loaded(self, image: np.ndarray, preserve_channel: bool = False):
         logger.info('New image loaded')
 
         # --- normalize (if requested) ---
@@ -1721,7 +1733,7 @@ class DataHandler(QtWidgets.QWidget):
             self.wavenumber_widget.set_nframes(n_frames)
 
         # push image to the rest of the pipeline
-        self.update_image_callback(self._display_image)
+        self.update_image_callback(self._display_image, preserve_channel=preserve_channel)
 
     def get_dock_widget(self):
         return self.loader_dock

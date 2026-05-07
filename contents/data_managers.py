@@ -30,6 +30,7 @@ class ImageLoader(QtWidgets.QWidget):
         self.wavelength_meta = None
         self.update_img_callback = update_img_callback
         self._image = None
+        self._preserve_channel_on_update = False
         self.init_ui()
 
 
@@ -371,6 +372,7 @@ class ImageLoader(QtWidgets.QWidget):
             img = self._raw_image
         else:
             img = self.rb_ctrl.apply(self._raw_image) if self.rb_ctrl.cfg.enabled else self._raw_image
+        self._preserve_channel_on_update = True
         self.image = img    # trigger callback attached to update_img_callback
 
     def try_load_wavelength_json(self, directory: str):
@@ -440,6 +442,7 @@ class ImageLoader(QtWidgets.QWidget):
     def load_image(self, image_data):
         # load image from external source (e.g., stitching manager)
         self._raw_image = None  # prevent reprocessing from raw
+        self._preserve_channel_on_update = True
         self.image = image_data
         return image_data
 
@@ -451,5 +454,7 @@ class ImageLoader(QtWidgets.QWidget):
     def image(self, new_image):
         self._image = new_image
         if self.update_img_callback:
-            self.update_img_callback(new_image)
+            preserve = self._preserve_channel_on_update
+            self._preserve_channel_on_update = False
+            self.update_img_callback(new_image, preserve_channel=preserve)
 

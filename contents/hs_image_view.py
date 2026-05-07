@@ -216,6 +216,10 @@ class RamanImageView(ImageViewLineRoi):
         self.set_playing(True)
 
     def timeout(self):
+        if not self.is_playing():
+            # Qt may deliver one stale timeout event after stop() was called;
+            # ignore it so we never advance frames or jump to center after a manual stop.
+            return
         if self.image is None or self.nframes() <= 1:
             self.set_playing(False)
             return

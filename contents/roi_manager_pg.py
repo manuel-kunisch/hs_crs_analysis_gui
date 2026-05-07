@@ -173,6 +173,8 @@ class ROIManager(QtCore.QObject):
         # bind shortcut on del press to remove the selected row / ROI
         del_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Del"), self.roi_table)
         del_shortcut.activated.connect(self._remove_selected_or_active_roi)
+        esc_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Escape"), self.roi_table)
+        esc_shortcut.activated.connect(lambda: self._select_roi(None))
         self._refresh_roi_table_layout()
         QtCore.QTimer.singleShot(0, self._refresh_roi_table_layout)
 
@@ -254,15 +256,20 @@ class ROIManager(QtCore.QObject):
         if not self._selection_sync_in_progress and event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.FocusIn):
             row = self._row_for_table_widget(watched)
             if row is not None:
-                QtCore.QTimer.singleShot(
-                    0,
-                    lambda row=row: self._select_roi_by_row(
-                        row,
-                        ensure_image_visible=False,
-                        ensure_table_visible=False,
-                        sync_table_selection=False,
-                    ),
-                )
+                is_click = event.type() == QtCore.QEvent.MouseButtonPress
+                already_active = is_click and 0 <= row < len(self.rois) and self.rois[row] is self.active_roi
+                if already_active:
+                    QtCore.QTimer.singleShot(0, lambda: self._select_roi(None))
+                else:
+                    QtCore.QTimer.singleShot(
+                        0,
+                        lambda row=row: self._select_roi_by_row(
+                            row,
+                            ensure_image_visible=False,
+                            ensure_table_visible=False,
+                            sync_table_selection=False,
+                        ),
+                    )
         return super().eventFilter(watched, event)
 
     def _register_table_selection_widget(self, widget: QtWidgets.QWidget | None):
@@ -764,7 +771,10 @@ class ROIManager(QtCore.QObject):
         self.sync_components(roi, state)
 
     def _on_roi_clicked(self, roi: pg.ROI, *_):
-        self._select_roi(roi, ensure_image_visible=False, ensure_table_visible=True)
+        if roi is self.active_roi:
+            self._select_roi(None)
+        else:
+            self._select_roi(roi, ensure_image_visible=False, ensure_table_visible=True)
 
     def component_prompt(self) -> int | None:
         default_component_number = self._suggest_component_number()
@@ -2383,6 +2393,7 @@ class ROIManager(QtCore.QObject):
             return
         selected_row = self.roi_table.currentRow()
         if selected_row < 0:
+            self._select_roi(None)
             return
         logger.debug('New ROI selected in Table')
         self._select_roi_by_row(

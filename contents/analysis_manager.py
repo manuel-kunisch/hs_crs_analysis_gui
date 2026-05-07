@@ -1723,7 +1723,7 @@ class AnalysisManager(QtCore.QObject):
 
         # 3. Remove button
         widget_remove = QtWidgets.QPushButton("Remove")
-        widget_remove.clicked.connect(lambda: self.remove_res_settings(row_position))
+        widget_remove.clicked.connect(self._on_remove_res_btn_clicked)
         self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Remove"], widget_remove)
 
         # Add text fields from column 2 to 4
@@ -1790,6 +1790,14 @@ class AnalysisManager(QtCore.QObject):
         if self.scale_w_to_16bit_check is None:
             return True
         return bool(self.scale_w_to_16bit_check.isChecked())
+
+    def _on_remove_res_btn_clicked(self):
+        btn = self.sender()
+        remove_col = self.res_settings_widget_columns["Remove"]
+        for row in range(self.resonance_table.rowCount()):
+            if self.resonance_table.cellWidget(row, remove_col) is btn:
+                self.remove_res_settings(row)
+                return
 
     def remove_res_settings(self, row):
         self.resonance_table.removeRow(row)

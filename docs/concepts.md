@@ -22,6 +22,8 @@ The challenge with hyperspectral data is that looking at dozens of frames one by
 
 Multivariate analysis addresses this by summarizing the whole stack as a small set of component maps and spectra.
 
+> Schematic placeholder: hyperspectral stack as `(channel, y, x)` with one example pixel spectrum extracted from the cube.
+
 ## The Unmixing Model: X ≈ WH
 
 The core idea is that each pixel spectrum can be approximated as a weighted sum of a few basis spectra:
@@ -48,6 +50,8 @@ In the GUI:
 - component spectra (rows of \(H\)) appear in the spectral plot,
 - component maps (columns of \(W\)) appear as grayscale images and as layers in the composite,
 - the composite view fuses all component maps into a false-color image.
+
+> Schematic placeholder: matrix view of `X = W H`, with `X` as pixel spectra, `W` as component maps, and `H` as component spectra.
 
 ## Spatial Maps W and Spectral Components H
 
@@ -108,6 +112,8 @@ The two main user-facing analysis modes differ in one important way:
 
 Use seeded NNMF when you want the algorithm to adapt and refine the spectral estimates. Use fixed-H NNLS when the spectra are already trusted and must stay stable.
 
+> Figure placeholder: side-by-side comparison of seeded NNMF and fixed-H NNLS, showing that seeded NNMF can adjust `H` while fixed-H NNLS keeps reference spectra locked.
+
 ## 4D z/Time Workflows
 
 When data is 4D (z-stack or time series), the stack has an extra outer axis:
@@ -125,6 +131,8 @@ The GUI can analyze each z/time slice independently using the same seed setup, w
 In **fixed-H NNLS** mode, the same spectral basis is applied to every slice, making the resulting W maps directly comparable. In seeded NNMF mode, the basis is re-initialized for each slice from the same seeds, so mild per-slice adaptation is possible.
 
 A special option, **fast multislice NNMF**, uses NNMF on a reference slice and then NNLS for all other slices. This is faster than running full NNMF on every slice and keeps the spectral basis consistent across the series.
+
+> Schematic placeholder: 4D z/time workflow showing one reference slice used for NNMF and the fitted spectra reused by NNLS on the remaining slices.
 
 ## Non-Negativity Constraint
 

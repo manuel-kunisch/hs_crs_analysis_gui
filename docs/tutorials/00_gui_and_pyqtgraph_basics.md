@@ -2,8 +2,9 @@
 
 The GUI uses pyqtgraph for image views, histograms, line plots, ROI overlays, and result plots. This page summarizes the interactions that are used repeatedly throughout the app.
 
+> Screenshot placeholder: annotated pyqtgraph GUI anatomy showing the image view, histogram/LUT controls, channel or component slider, ROI overlay, spectral plot, and right-click context menu area.
 
-![Recentering the view](../assets/gifs/00_recentering_view.gif)
+![Recentering the view](../assets/gifs/00_gui_recentering_view.gif)
 
 > GIF placeholder: right-clicking a pyqtgraph plot, setting exact axis ranges, adjusting a histogram, and exporting a plot.
 
@@ -27,6 +28,8 @@ This is useful when the mouse wheel gives an approximate view, but you need repr
 
 Image views are used for the raw data, the channel preview, W seed previews, and the composite result image.
 
+> Screenshot placeholder: image view with the visible image area, axes, ROI overlay, channel/component slider, and auto-range control labeled.
+
 Common interactions:
 
 - Mouse wheel: zoom in and out around the cursor position.
@@ -42,6 +45,8 @@ For exact image view limits, use the right-click context menu on the image view 
 ## Histogram And LUT Controls
 
 The histogram panel controls how image intensities are displayed. It does not change the underlying data unless the image is explicitly exported as a rendered PNG.
+
+> Screenshot placeholder: histogram/LUT panel with the lower and upper level handles, color gradient, and selected component/channel label annotated.
 
 There are two related but different concepts:
 
@@ -136,6 +141,8 @@ If exact plot limits are required, right-click the plot, open the x-axis or y-ax
 
 ROIs are pyqtgraph graphics items. Their exact behavior depends on the ROI type, but the common interactions are:
 
+> Screenshot placeholder: image view with one selected ROI, resize handles, and the matching ROI Manager table row highlighted.
+
 - Drag inside the ROI to move it.
 - Drag ROI handles to resize it.
 - Click an ROI or its table row to select it.
@@ -146,6 +153,8 @@ The ROI average plot updates from the selected ROI spectra. If custom channel la
 ## Spectral Plots
 
 Spectral plots are used for:
+
+> Screenshot placeholder: spectral plot showing ROI average spectra or fitted H components, with axis labels, legend, curve colors, and right-click export area annotated.
 
 - ROI average spectra;
 - loaded seed spectra;
@@ -180,6 +189,8 @@ Use TIFF export for quantitative work and Fiji-compatible downstream analysis. U
 
 Pyqtgraph itself also has a right-click **Export** action for many image and plot widgets. This is useful for quick screenshots or debugging. For final composite images, prefer the app's **Export Composite** button because it knows about component LUTs, labels, physical pixel size, and optional scale bars.
 
+> Screenshot placeholder: result viewer export controls showing **Export Composite**, rendered PNG/TIFF choice, scale-bar options, and final composite preview.
+
 ## Exporting Spectral Plots
 
 Use **Export Spectra** in the spectral plot panel to export the visible H/component plot.
@@ -209,6 +220,8 @@ The Matplotlib export is especially useful when the plot should be restyled for 
 3. Select **Matplotlib** to open the data in a Matplotlib figure.
 4. Adjust fonts, axis labels, line widths, and layout in Matplotlib.
 5. Save the final figure panel from Matplotlib.
+
+For publication defaults such as fonts, mirrored ticks, vector text export, and save dpi, see [Publication plots with Matplotlib rc defaults](00a_publication_plots_matplotlibrc.md).
 
 Use the app's **Export Spectra** button when you want a fast direct PNG/PDF from the GUI. Use pyqtgraph's built-in **Export** menu when you want raw plot data, SVG, or a Matplotlib handoff.
 

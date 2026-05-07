@@ -23,6 +23,8 @@ The export includes:
 - pixel-size metadata,
 - axis metadata for Fiji/ImageJ.
 
+> Screenshot placeholder: GUI result viewer next to the exported Fiji/ImageJ composite, showing matching component colors and labels.
+
 ## LUTs, Ranges, And Labels
 
 The exporter stores the current component colors and histogram ranges so that Fiji/ImageJ opens the file with a matching composite view as closely as possible.
@@ -82,6 +84,8 @@ Recommended workflow:
 3. Check that channel labels, colors, and ranges look reasonable.
 4. Verify the pixel size in **Image > Properties...** if physical units matter.
 5. If needed, compare the opened file with the GUI screenshot or preset used for export.
+
+> Screenshot placeholder: Fiji/ImageJ **Image > Properties...** dialog showing pixel width, pixel height, unit, channels, and z/time dimensions.
 
 ## Practical Recommendations
 

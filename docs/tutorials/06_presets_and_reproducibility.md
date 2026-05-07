@@ -28,6 +28,10 @@ It includes:
 
 This preset is the best option for reproducing a full GUI analysis.
 
+![Save and load the main analysis settings JSON preset](../assets/images/06_save_analysis_settings_json.png)
+
+Use **Save Preset** in the analysis/data area to write the main analysis settings JSON file. Use **Load Preset** to restore the saved setup later. Save the preset after the spectral axis, analysis settings, ROI rows, component labels, colors, and histogram levels are in the state you want to reproduce.
+
 > GIF placeholder: saving and loading a main JSON preset.
 
 ## Example Preset Structure
@@ -124,6 +128,8 @@ The `.preset` file stores:
 - spectral axis values stored with the preset.
 
 It does not replace the full JSON application preset because it does not capture the entire GUI state, ROI geometry, physical units, 4D slice selection, solver settings, or all preprocessing choices.
+
+> Screenshot placeholder: ROI Manager prompt for loading a result-viewer `.preset`, showing the `LUTs Only` and `LUTs + ROIs` choices.
 
 > GIF placeholder: loading a result-viewer `.preset` as `LUTs Only` and as `LUTs + ROIs`.
 

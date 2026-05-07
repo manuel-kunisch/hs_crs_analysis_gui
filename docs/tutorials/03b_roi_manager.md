@@ -13,6 +13,10 @@ The ROI Manager connects four things:
 - The ROI average plot, where ROI spectra and model spectra are displayed.
 - The analysis setup, where rows are converted into H seeds, W seeds, labels, colors, and background settings.
 
+![ROI Manager overview with selected ROI row](../assets/images/03b_roi_manager_overview.png)
+
+The selected ROI row links the table, image view, and ROI average plot. In the screenshot, **ROI 2** is selected in the ROI table. The same user ROI is marked with a yellow selection frame in the image view, and its corresponding spectrum is visible in the ROI average plot. The row's color column still defines the component/result color; the yellow frame is only the current selection indicator.
+
 The most important rule is:
 
 ```text
@@ -36,6 +40,8 @@ Removes all ROI Manager rows and image ROIs. Use this when starting a new seed s
 `Suggest ROIs`
 
 Runs automatic ROI suggestion. Suggested ROIs are normal spatial ROI rows after creation: they can be renamed, moved, removed, reassigned, plotted, or used as seeds.
+
+The full settings dialog is explained in [Auto-Suggested ROIs](03_seeds_spectral_and_spatial.md#auto-suggested-rois).
 
 `Load Spectrum from File`
 
@@ -134,6 +140,8 @@ Centers the image view on a spatial ROI. If the row stores a fixed W seed, this 
 
 Deletes the row and its associated ROI or dummy seed.
 
+> Screenshot placeholder: ROI table with examples of a spatial ROI row, loaded spectrum dummy row, Gaussian/model row, W-only row, and imported H+W result row.
+
 ## H seeds from spatial ROIs
 
 For a spatial ROI, the H seed is the average spectrum of the pixels inside the ROI:
@@ -207,6 +215,8 @@ The ROI average plot shows spectra from plotted ROI Manager rows. It uses the cu
 - Channel labels for custom labeled data.
 
 Gaussian/model curves can be shown as fallback curves for a component. If an ROI spectrum for that component is plotted, the model curve is hidden so the plot does not show two competing seed curves for the same component.
+
+Clicking a ROI row selects the matching ROI object and makes it easier to connect the table entry with the plotted spectrum. This is useful when several ROIs overlap spatially or when several spectra are shown in the ROI average plot at once.
 
 ## Background and subtraction
 

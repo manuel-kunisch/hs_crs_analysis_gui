@@ -25,6 +25,8 @@ The GUI exposes `PCA` and `NNMF` as the main method buttons. The practical NNMF 
 | Fixed-H NNLS | Select **NNMF**, enable **Custom initialization** and **Fixed-H NNLS mode**, then **Run Analysis**. | Every component must have an H seed. |
 | 4D hybrid NNMF/NNLS | For 4D data, select **NNMF**, enable **Custom initialization**, enable **4D: NNMF ref slice, NNLS others**, then **Run Analysis**. | Seeds for the reference slice; the fitted H is reused across other slices. |
 
+> Screenshot placeholder: Analysis panel with **PCA**, **NNMF**, **Custom initialization**, **Fixed-H NNLS mode**, **W map from H**, backend, solver, iteration limits, component count, and **Run Analysis** labeled.
+
 ## Why different modes exist
 
 Hyperspectral data is a stack of many grayscale images over a spectral axis. Chemically meaningful signals, non-resonant background, and acquisition artifacts all overlap in that stack. Looking at slices one by one is slow and often ambiguous.
@@ -75,6 +77,8 @@ For most datasets, the practical sequence is:
 3. Import useful result components or draw ROIs to build seeds.
 4. Run **Seeded NNMF** for the main guided analysis.
 5. Once the spectral basis looks stable, switch to **Fixed-H NNLS** for cross-slice comparison or 4D workflows.
+
+> Flowchart placeholder: mode-selection path from unknown dataset -> PCA/random NNMF -> seeds -> seeded NNMF -> fixed-H NNLS for stable comparison.
 
 ## Advanced settings
 

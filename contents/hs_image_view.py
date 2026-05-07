@@ -210,6 +210,9 @@ class RamanImageView(ImageViewLineRoi):
         self.set_playing(not self.is_playing())
 
     def play(self, fps=None):
+        if fps is not None and fps == 0:
+            self.set_playing(False)
+            return
         logger.debug('play(): Keep playing')
         if fps is not None:
             self.fps = max(0.1, float(fps))

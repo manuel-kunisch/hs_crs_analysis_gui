@@ -4,6 +4,8 @@ The spectral axis tells the GUI what each image channel represents. This page is
 
 For a workflow-oriented introduction, see [Spectral axis and channel labels](../tutorials/01a_spectral_axis_and_channel_labels.md).
 
+> Screenshot placeholder: spectral-axis widget with calculated Raman axis, wavelength axis, and manual/custom axis controls labeled.
+
 ## Axis Modes
 
 ### Calculated Pump/Stokes Raman axis
@@ -55,6 +57,8 @@ Place a file named exactly `wavelength.json` in the **same folder** as the TIFF 
 All keys are optional, but at least one of `custom_values` or `custom_labels` should be present for the file to have any effect.
 
 The number of values or labels must match the number of spectral channels in the loaded image. A mismatch generates a warning and the axis falls back to channel indices.
+
+> Screenshot placeholder: file browser or folder view showing a TIFF stack and matching `wavelength.json` side by side.
 
 ### Example: numeric wavelength axis
 

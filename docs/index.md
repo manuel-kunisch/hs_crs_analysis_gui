@@ -3,6 +3,9 @@
 Welcome to the documentation for HS MV Analysis, a software tool for analyzing hyperspectral microscopy data using multivariate analysis techniques.
 This documentation is designed to guide users through the installation, usage, and troubleshooting of the software, as well as provide detailed tutorials and reference materials.
 
+> Screenshot placeholder: annotated full GUI overview with the data loader, image viewer, spectral-axis widget, ROI Manager, analysis panel, and result/export areas labeled.
+
+> GIF placeholder: first-use overview from launching the GUI to loading a stack, adding a seed, running analysis, and opening the result viewer.
 
 ## Start Here
 

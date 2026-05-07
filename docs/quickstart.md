@@ -9,6 +9,10 @@ This page walks through a minimal end-to-end analysis in roughly 10 minutes. It 
 
 If you do not have real data yet, the [Synthetic quickstart example](examples/synthetic_quickstart.md) shows how to generate a small test dataset from Python.
 
+> Screenshot placeholder: annotated main GUI with numbered regions matching the quickstart steps: load data, set spectral axis, create seeds, choose analysis settings, run analysis, inspect/export results.
+
+> GIF placeholder: complete quickstart on the synthetic dataset, from loading `synthetic_hs_stack.tif` to exporting the result composite.
+
 ## Minimal workflow at a glance
 
 | Stage | GUI area | Main control |

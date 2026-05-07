@@ -132,7 +132,7 @@ Use **IGNORECASE** when filename capitalization is inconsistent.
 
 ## What the main settings mean
 
-![Stitch manager overview](../assets/images/stitch_manager.png)
+![Stitch manager overview](../assets/images/01b_stitch_manager.png)
 
 The screenshot below shows the main regions that matter for parameter choice:
 

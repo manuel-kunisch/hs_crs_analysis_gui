@@ -2,7 +2,7 @@
 
 The result viewer shows the output of PCA, NNMF, or fixed-H NNLS. It combines the spatial component maps, spectra, colormaps, labels, and export tools.
 
-For general pyqtgraph interaction, histogram/LUT adjustment, zooming, and plot export behavior, see [GUI and pyqtgraph basics](00_gui_and_pyqtgraph_basics.md).
+For general pyqtgraph interaction, histogram/LUT adjustment, zooming, and plot export behavior, see [GUI and pyqtgraph basics](00_gui_and_pyqtgraph_basics.md). For publication-style spectral plots, see [Publication plots with Matplotlib rc defaults](00a_publication_plots_matplotlibrc.md).
 
 ## Composite Overview
 
@@ -93,6 +93,8 @@ Use this plot to check:
 - whether fixed-H NNLS used the expected spectra,
 - whether component labels and colors match the intended interpretation.
 
+> Screenshot placeholder: spectral component plot with fitted H spectra, optional seed overlays, component labels, and color-matched result channels.
+
 ## Saving Spectra
 
 Use **Save H as CSV** to export spectral components. The CSV export uses the current spectral axis or custom labels.
@@ -125,6 +127,8 @@ mCherry,0.00,0.25,1.00
 The component columns follow the component order in the result. Rename components in the ROI manager before export if the exported files should carry publication-ready labels elsewhere in the workflow.
 
 Use **Export Spectra** to export the visible spectral plot as PNG or PDF. PNG export can use a transparent background. The export keeps the plot aspect ratio to avoid distorted text.
+
+> Screenshot placeholder: **Export Spectra** dialog showing PNG/PDF choice, maximum size fields, and transparent-background option.
 
 ## Saving Composite TIFFs
 
@@ -163,6 +167,8 @@ For publication workflows, it is therefore useful to save:
 ## Component Labels
 
 Component labels from the ROI manager are propagated to the result viewer and to Fiji/ImageJ export metadata. This makes exported files easier to interpret later.
+
+> Screenshot placeholder: result viewer with renamed components, final colors, adjusted histogram levels, and visible export controls.
 
 Before exporting, check that:
 

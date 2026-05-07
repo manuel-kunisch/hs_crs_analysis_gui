@@ -80,17 +80,27 @@ The ROI suggestion tool searches for bright or structured image regions that can
 
 The method first looks for spatial candidate regions and then optionally groups or filters them by spectral similarity. This helps avoid collecting many ROIs with nearly identical spectra when the user wants several distinct component groups.
 
-Important settings include:
+![Suggest ROIs dialog](../assets/images/03_suggest_rois_dialog.png)
 
-- projection mode,
-- local background subtraction scale,
-- smoothing,
-- threshold ratio,
-- minimum area,
-- minimum ROI diagonal,
-- number of groups,
-- ROIs per group,
-- spectral similarity threshold.
+The dialog scans the current image stack without requiring resonance positions or reference spectra. It first collapses the stack into one 2D response image, enhances local bright structures, finds candidate regions, and then assigns suggested ROIs to available component numbers.
+
+| Setting | What it controls | Practical effect |
+|---|---|---|
+| **Projection** | How the spectral stack is collapsed into one 2D response image. | **Balanced stack scan** rescales channels before combining them, so weak resonances are less likely to be hidden by one dominant channel. **Average image** favors structures that are bright across many channels. **Maximum projection** favors the brightest response in any channel. **Current frame** suggests ROIs only from the currently displayed channel. |
+| **Processed data** | Whether the processed/background-subtracted stack is used when available. | Enable this if subtraction or preprocessing reveals the structures you want to seed better than the raw stack. It is disabled when no processed data are available. |
+| **Local background sigma** | Size of the blurred background estimate subtracted from the projection. | Increase it to remove broad illumination gradients. Lower it if real broad structures are being suppressed. |
+| **Spatial binning** | Downsampling before peak finding. | Higher binning is faster and more robust against pixel noise, but it can miss very small structures. |
+| **Peak smoothing** | Spatial smoothing before candidate detection. | Increase it to suppress noisy speckles. Decrease it to keep sharp or small structures. |
+| **Peak threshold** | Required brightness relative to the response map. | Lower values find more and weaker regions. Higher values keep only stronger candidates. |
+| **Min group area** | Smallest connected bright region accepted as a candidate. | Increase it to reject tiny speckles or detector noise. |
+| **Min ROI diagonal** | Minimum size of the final ROI box in pixels. | Use this to prefer larger structures. `0 px` effectively disables this size filter. |
+| **Max suggested groups** | Maximum number of distinct spectral groups/components created in one run. | Increase it when several different components should be proposed at once. |
+| **Max ROIs per group** | Maximum number of spatial ROIs kept for each spectral group. | Increase it when multiple examples of the same component are useful for averaging. |
+| **Merge duplicates** | Whether regions with very similar mean spectra should be merged into one component group. | Usually keep this enabled so the suggester does not fill the ROI table with several copies of the same spectral class. |
+| **Similarity threshold** | Spectral similarity required for duplicate merging. | Higher values merge fewer regions. Lower values merge more aggressively. |
+| **Replace previous auto ROI suggestions** | Removes only earlier auto-suggested ROIs before creating new suggestions. | Keep it enabled while tuning settings. Disable it if you want to add another batch without removing earlier suggestions. |
+
+After suggestions are created, treat them like normal ROIs: move or resize them if needed, rename the rows, assign colors, check the ROI average spectra, and remove suggestions that are not useful seeds.
 
 > GIF placeholder: running Suggest ROIs and accepting suggested ROI boxes.
 

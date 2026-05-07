@@ -73,6 +73,8 @@ run_hs_crs_analysis_gui.bat
 python main.py
 ```
 
+> Screenshot placeholder: first successful GUI startup, showing the main window after launch and the empty data-loading area.
+
 ## GPU Notes
 
 ### NVIDIA (Windows and Linux)

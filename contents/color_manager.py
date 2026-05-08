@@ -37,7 +37,7 @@ class ComponentColorManager(QObject):
 
     def get_pg_color(self, index: int):
         """Get color in format suitable for pyqtgraph (R,G,B,A)."""
-        c = self.get_color(index)
+        c = self.get_qcolor(index)
         return (c.red(), c.green(), c.blue(), 255)
 
     def set_color(self, index: int, color: QColor):

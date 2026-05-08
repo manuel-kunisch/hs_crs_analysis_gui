@@ -146,13 +146,14 @@ PCA does not enforce non-negativity and is therefore primarily a diagnostic tool
 
 ## Background Components
 
-The analysis model allows one or more components to represent the broad, slowly varying background rather than a chemical species. Background components can be:
+The analysis model allows one or more components to represent a broad, slowly varying background rather than a chemical species. This is not usually the first tool to try; it is most useful when the background is hard to detect with ordinary ROIs or when removing it as preprocessing would also remove real sample signal. Background components can be:
 
 - drawn as spatial ROIs over background-dominated regions,
 - generated as a W-only seed from a projected image (mean, max, or min projection),
 - imported as a fixed W map from a previous result.
 
-Having an explicit background component in the model often improves the separation of weak chemical components from the baseline.
+Having an explicit background component in the model can improve the separation of weak chemical components from a difficult baseline, but it should be treated as a modeling choice that needs inspection rather than a default correction step.
+This setting can help in particular when background is disturbing false color channels that carry specific information.
 
 ## Scale Bars and Physical Units
 

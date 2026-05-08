@@ -39,12 +39,10 @@ These two columns look similar but do different things.
 
 **Background flag**
 
-Marks the component as a background contributor rather than a sample signal. This is purely a labeling and initialization hint — it does not prevent the component from being included in the NNMF/NNLS model. The main uses are:
+Use the Background flag mainly for hard-to-isolate backgrounds that should remain inside the NNMF/NNLS model and
+if other components are disturbed by background contribution in combination with the background subtraction.
 
-- indicating to yourself and collaborators that this component represents non-resonant background, autofluorescence, or illumination variation,
-- enabling the background W-map generation tool in the analysis panel, which uses background-flagged components to build a spatial prior.
-
-A component can carry a fixed W seed (e.g. from a mean-image projection) and be marked as Background at the same time. Together these tell the model exactly where background is expected spatially and that it should be treated as a separate non-chemical contributor.
+A component can carry a fixed W seed (e.g. from a mean-image projection) and be marked as Background at the same time. Together these tell the model where a difficult background is expected spatially and that it should be treated as a separate non-chemical contributor.
 
 **Subtract flag**
 
@@ -52,15 +50,15 @@ Enables ROI-mean background subtraction. The data shown in the **Processed** vie
 
 This changes what is *displayed* as processed data and what enters seed estimation or analysis steps that are configured to use processed/subtracted data. It does not overwrite the raw loaded image; removing the Subtract flag restores the raw-data path.
 
-Use Subtract only when you have a clear rationale for removing a measured signal before inspecting the residual. When in doubt, model background as a component instead of subtracting it.
+Use Subtract only when you have a clear rationale for removing a measured signal before inspecting the residual. When in doubt, leave subtraction off; use a background component only if the background is hard to isolate and should be represented explicitly in the model.
 
 **Typical usage patterns**
 
 | Goal | Recommended approach |
 |---|---|
-| Separate background from signal in NNMF | Mark the background row with Background only. |
+| Separate a hard-to-detect background from signal in NNMF | Mark the background row with Background only. |
 | Visually inspect data with background removed | Mark the background row with Subtract. |
-| Both: model it and inspect cleaned data | Mark the row with both Background and Subtract. |
+| Explicitly model a difficult background and inspect cleaned data | Mark the row with both Background and Subtract. |
 | Flat background not in the model | Use rolling-ball preprocessing instead of a background row. |
 
 ## Seed priority

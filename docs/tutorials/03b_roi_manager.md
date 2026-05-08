@@ -43,6 +43,8 @@ Runs automatic ROI suggestion. Suggested ROIs are normal spatial ROI rows after 
 
 The full settings dialog is explained in [Auto-Suggested ROIs](03_seeds_spectral_and_spatial.md#auto-suggested-rois).
 
+**Existing ROIs are respected.** Before candidate detection starts, every pixel already covered by a drawn ROI — whether placed manually or from a previous auto-suggestion run — is zeroed out in the response map. The algorithm is completely blind to those areas and will not place a new suggestion on top of an existing one. This means you can place a ROI manually on a known structure first and then run `Suggest ROIs` to fill in the remaining structures automatically without getting duplicates. Dummy spectrum rows and Gaussian model rows have no spatial footprint and are not masked.
+
 `Load Spectrum from File`
 
 Loads external spectra from CSV, TXT, or ASC files. Loaded spectra appear as dummy ROI rows because they carry spectral information without a drawn image ROI.
@@ -99,6 +101,7 @@ This column is the component assignment. The label is historical. Selecting `Com
 `Background`
 
 Marks the row as a background component. This is useful when a component should be interpreted or initialized as background rather than sample signal.
+The algorithm always assigns unsubtracted singal to the latter to minimize cross talk with components containing spcific information.
 
 `Subtract`
 
@@ -227,7 +230,7 @@ Background rows have two different meanings depending on the settings:
 
 These are not the same operation. A background component can be modeled during analysis, while subtraction changes the data before or during seed estimation.
 
-Use subtraction only when you intentionally want to remove a measured background spectrum. Use a background component when you want the decomposition to explicitly model background structure.
+Use subtraction only when you intentionally want to remove a measured background spectrum. Use a background component when the background level is relatively high.
 
 ## Interaction with result viewer
 

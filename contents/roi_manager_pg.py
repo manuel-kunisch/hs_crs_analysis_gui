@@ -1,6 +1,6 @@
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dc_replace
 
 import numpy as np
 import pyqtgraph as pg
@@ -8,6 +8,7 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtGui import QColor
 from pyqtgraph.dockarea import Dock
 from scipy.ndimage import gaussian_filter1d, gaussian_filter, label, maximum_filter
+from scipy.cluster.hierarchy import linkage, fcluster
 
 from composite_image import max_dtype_val, CompositeImageViewWidget as ci
 from contents.custom_pyqt_objects import ImageViewYX
@@ -24,18 +25,20 @@ class AutoROISuggestionSettings:
     use_processed_data: bool = False
     local_background_sigma: float = 8.0
     spatial_bin_factor: int = 1
-    smoothing_sigma: float = 2
-    threshold_ratio: float = 0.40
+    smoothing_sigma: float = 1.0
+    threshold_ratio: float = 0.65
     peak_region_ratio: float = 0.72
     peak_window: int = 5
-    min_group_area: int = 6
+    min_group_area: int = 3
     min_roi_diagonal_px: int = 0
-    max_groups_per_component: int = 4
-    max_rois_per_group: int = 2
+    max_groups_per_component: int = 3
+    max_rois_per_group: int = 1
     candidate_pool_factor: int = 6
     padding_px: int = 4
     merge_similar_spectra: bool = True
-    spectral_similarity_threshold: float = 0.9
+    spectral_similarity_threshold: float = 0.82
+    use_gradient_fingerprint: bool = True
+    use_hierarchical_grouping: bool = True
     spectral_smoothing_sigma: float = 1.0
     replace_previous_auto: bool = True
 
@@ -153,7 +156,7 @@ class ROIManager(QtCore.QObject):
         load_spectra_button = QtWidgets.QPushButton("Load Spectra from File")
         load_spectra_button.setIcon(button_style.standardIcon(QtWidgets.QStyle.SP_DialogOpenButton))
         load_spectra_button.clicked.connect(self.load_spectra)
-        
+
         load_preset_button = QtWidgets.QPushButton("Load Lookup Table and Spectra Preset")
         load_preset_button.setIcon(button_style.standardIcon(QtWidgets.QStyle.SP_FileIcon))
         load_preset_button.clicked.connect(self.load_presets)
@@ -890,25 +893,26 @@ class ROIManager(QtCore.QObject):
         if settings.replace_previous_auto:
             removed = self.clear_auto_suggested_rois()
 
-        # Stage 1: collapse the spectral stack into one spatial response map.
-        response_map = self._build_spatial_response_map(settings)
-        if response_map is None or response_map.size == 0 or float(np.max(response_map)) <= 0:
-            QtWidgets.QMessageBox.information(
-                None,
-                "Suggest ROIs",
-                "No usable image projection could be built from the current stack.",
-            )
-            return
-        # response map is a 2D numpy array with the selected projection method
-
-        # ignore already occupied ROI areas
         occupied_mask = self._spatial_roi_mask(include_auto=True)
-        if occupied_mask.any():
-            response_map = response_map.copy()
-            response_map[occupied_mask] = 0.0
 
-        # Stage 2: find localized bright spatial candidates from that map alone.
-        raw_suggestions = self._extract_suggestions_from_response_map(response_map, settings)
+        # Stage 1 + 2: build response map(s) and extract spatial candidates.
+        if settings.projection_mode.lower() == "multi-band scan":
+            n_bands = max(2, int(settings.max_groups_per_component))
+            raw_suggestions = self._extract_suggestions_multiband(settings, occupied_mask, n_bands)
+        else:
+            response_map = self._build_spatial_response_map(settings)
+            if response_map is None or response_map.size == 0 or float(np.max(response_map)) <= 0:
+                QtWidgets.QMessageBox.information(
+                    None,
+                    "Suggest ROIs",
+                    "No usable image projection could be built from the current stack.",
+                )
+                return
+            if occupied_mask.any():
+                response_map = response_map.copy()
+                response_map[occupied_mask] = 0.0
+            raw_suggestions = self._extract_suggestions_from_response_map(response_map, settings)
+
         if not raw_suggestions:
             QtWidgets.QMessageBox.information(
                 None,
@@ -1011,7 +1015,7 @@ class ROIManager(QtCore.QObject):
             form.addRow(label, widget)
 
         projection_combo = QtWidgets.QComboBox()
-        projection_combo.addItems(["Balanced stack scan", "Average image", "Maximum projection", "Current frame"])
+        projection_combo.addItems(["Balanced stack scan", "Multi-band scan", "Average image", "Maximum projection", "Current frame"])
         projection_combo.setCurrentText(self.auto_roi_settings.projection_mode)
         projection_tooltip = (
             "Chooses how the image stack is collapsed into one 2D scan image. "
@@ -1088,9 +1092,6 @@ class ROIManager(QtCore.QObject):
         max_rois_spin = QtWidgets.QSpinBox()
         max_rois_spin.setRange(1, self.max_component_slots)
         max_rois_spin.setValue(int(self.auto_roi_settings.max_groups_per_component))
-        max_groups_tooltip = (
-            "Maximum number of distinct spectral groups/components to suggest in one scan."
-        )
 
         max_per_group_spin = QtWidgets.QSpinBox()
         max_per_group_spin.setRange(1, 25)
@@ -1105,17 +1106,46 @@ class ROIManager(QtCore.QObject):
             "Keeps detection image-based, but merges regions whose mean spectra are nearly identical so they share one component."
         )
 
+        # hierarchical_check is created here (before spectral_threshold_spin) so the threshold
+        # enabled logic and the max-groups label can reference it immediately.
+        hierarchical_check = QtWidgets.QCheckBox("Hierarchical clustering (recommended)")
+        hierarchical_check.setChecked(bool(self.auto_roi_settings.use_hierarchical_grouping))
+        hierarchical_check.setEnabled(merge_spectra_check.isChecked())
+        merge_spectra_check.toggled.connect(hierarchical_check.setEnabled)
+        hierarchical_tooltip = (
+            "Uses Ward hierarchical clustering to force exactly the requested number of spectral groups. "
+            "Strongly recommended when components share a dominant peak (e.g. lipid variants). "
+            "Disable to use the original greedy cosine-threshold assignment instead."
+        )
+
         spectral_threshold_spin = QtWidgets.QDoubleSpinBox()
         spectral_threshold_spin.setRange(70.0, 100.0)
         spectral_threshold_spin.setDecimals(0)
         spectral_threshold_spin.setSingleStep(1.0)
         spectral_threshold_spin.setSuffix(" %")
         spectral_threshold_spin.setValue(float(self.auto_roi_settings.spectral_similarity_threshold * 100.0))
-        spectral_threshold_spin.setEnabled(merge_spectra_check.isChecked())
-        merge_spectra_check.toggled.connect(spectral_threshold_spin.setEnabled)
+        # Threshold is only active in greedy mode (hierarchical off) with merging on.
+        def _update_threshold_enabled():
+            spectral_threshold_spin.setEnabled(
+                merge_spectra_check.isChecked() and not hierarchical_check.isChecked()
+            )
+        _update_threshold_enabled()
+        merge_spectra_check.toggled.connect(lambda _: _update_threshold_enabled())
+        hierarchical_check.toggled.connect(lambda _: _update_threshold_enabled())
         similarity_tooltip = (
-            "Similarity required to treat two ROI mean spectra as the same group. "
-            "Higher values merge fewer regions; lower values merge more aggressively."
+            "Cosine similarity cutoff used only in greedy grouping mode (hierarchical off). "
+            "Higher values merge fewer regions; lower values merge more aggressively. "
+            "Has no effect when hierarchical clustering is enabled."
+        )
+
+        gradient_check = QtWidgets.QCheckBox("Use gradient fingerprint")
+        gradient_check.setChecked(bool(self.auto_roi_settings.use_gradient_fingerprint))
+        gradient_check.setEnabled(merge_spectra_check.isChecked())
+        merge_spectra_check.toggled.connect(gradient_check.setEnabled)
+        gradient_tooltip = (
+            "Augments each spectrum with its derivative before comparing. "
+            "This separates components that share a dominant peak but differ in secondary features or tails, "
+            "at the cost of being more sensitive to noise."
         )
 
         replace_auto_check = QtWidgets.QCheckBox("Replace previous auto ROI suggestions")
@@ -1132,10 +1162,28 @@ class ROIManager(QtCore.QObject):
         add_tooltip_row("Peak threshold:", threshold_spin, threshold_tooltip)
         add_tooltip_row("Min group area:", min_area_spin, min_area_tooltip)
         add_tooltip_row("Min ROI diagonal:", min_diagonal_spin, min_diagonal_tooltip)
-        add_tooltip_row("Max suggested groups:", max_rois_spin, max_groups_tooltip)
+
+        # Max-groups label changes dynamically: "Exact groups (k):" in hierarchical mode,
+        # "Max suggested groups:" in greedy mode.
+        max_groups_tooltip = (
+            "In hierarchical mode: the exact number of spectral clusters (k) to force from the candidate pool. "
+            "In greedy mode: the maximum number of groups the algorithm may create."
+        )
+        max_groups_label = QtWidgets.QLabel(
+            "Exact groups (k):" if hierarchical_check.isChecked() else "Max suggested groups:"
+        )
+        max_groups_label.setToolTip(max_groups_tooltip)
+        max_rois_spin.setToolTip(max_groups_tooltip)
+        hierarchical_check.toggled.connect(
+            lambda checked: max_groups_label.setText("Exact groups (k):" if checked else "Max suggested groups:")
+        )
+        form.addRow(max_groups_label, max_rois_spin)
+
         add_tooltip_row("Max ROIs per group:", max_per_group_spin, max_per_group_tooltip)
         add_tooltip_row("Merge duplicates:", merge_spectra_check, merge_duplicates_tooltip)
         add_tooltip_row("Similarity threshold:", spectral_threshold_spin, similarity_tooltip)
+        add_tooltip_row("Gradient fingerprint:", gradient_check, gradient_tooltip)
+        add_tooltip_row("Grouping method:", hierarchical_check, hierarchical_tooltip)
         replace_auto_check.setToolTip(replace_auto_tooltip)
         layout.addLayout(form)
         layout.addWidget(replace_auto_check)
@@ -1166,6 +1214,8 @@ class ROIManager(QtCore.QObject):
             merge_similar_spectra=bool(merge_spectra_check.isChecked()),
             spectral_similarity_threshold=float(spectral_threshold_spin.value()) / 100.0,
             spectral_smoothing_sigma=float(self.auto_roi_settings.spectral_smoothing_sigma),
+            use_gradient_fingerprint=bool(gradient_check.isChecked()),
+            use_hierarchical_grouping=bool(hierarchical_check.isChecked()),
             replace_previous_auto=bool(replace_auto_check.isChecked()),
         )
         return self.auto_roi_settings
@@ -1229,10 +1279,20 @@ class ROIManager(QtCore.QObject):
             return np.zeros(stack.shape[1:], dtype=np.float32)
 
         normalized_stack = np.stack(frame_responses, axis=0)
-        top_k = min(3, normalized_stack.shape[0])
-        kth_index = max(0, normalized_stack.shape[0] - top_k)
-        top_responses = np.partition(normalized_stack, kth_index, axis=0)[kth_index:, ...]
-        projection = np.mean(top_responses, axis=0)
+        # Weight each frame by its spatial variance: channels where certain pixels
+        # are much brighter than the mean (bead resonances) contribute more than
+        # flat background frames. This prevents one dominant resonance from hiding
+        # weaker bead types that only appear in narrow spectral channels.
+        spatial_vars = np.array([float(np.var(frame)) for frame in frame_responses])
+        total_var = spatial_vars.sum()
+        if total_var > 0:
+            weights = (spatial_vars / total_var).astype(np.float32)
+            projection = np.average(normalized_stack, axis=0, weights=weights)
+        else:
+            top_k = min(3, normalized_stack.shape[0])
+            kth_index = max(0, normalized_stack.shape[0] - top_k)
+            top_responses = np.partition(normalized_stack, kth_index, axis=0)[kth_index:, ...]
+            projection = np.mean(top_responses, axis=0)
         return projection.astype(np.float32, copy=False)
 
     def _build_spatial_response_map(self, settings: AutoROISuggestionSettings) -> np.ndarray | None:
@@ -1317,12 +1377,15 @@ class ROIManager(QtCore.QObject):
         max_members_per_group: int | None = None,
     ) -> list[list[AutoROISuggestion]]:
         """
-        Merge spatially separate candidate boxes if their mean spectra look like the
-        same underlying component.
+        Group spatially separate candidate boxes by spectral similarity.
 
-        The detection step is image-driven first: find bright localized structures.
-        This step is spectrum-driven second: decide which of those structures are
-        probably manifestations of the same chemistry or morphology.
+        When use_hierarchical_grouping is enabled (default), Ward hierarchical
+        clustering on gradient-augmented fingerprints is used to force exactly
+        target_group_count clusters — this separates closely related components
+        (e.g. mutant spectral variants sharing a dominant peak) that greedy
+        cosine-threshold assignment would merge into one group.
+
+        When disabled, falls back to the original greedy cosine-similarity approach.
         """
         if not suggestions:
             return []
@@ -1339,90 +1402,130 @@ class ROIManager(QtCore.QObject):
         if self.raw_data is None or not settings.merge_similar_spectra:
             return [[suggestion] for suggestion in ranked_suggestions[:target_group_count]]
 
-        threshold = float(np.clip(settings.spectral_similarity_threshold, 0.0, 1.0))
-        grouped: list[dict[str, object]] = []
+        if settings.use_hierarchical_grouping:
+            return self._group_suggestions_hierarchical(
+                ranked_suggestions, settings, target_group_count, max_members_per_group
+            )
+        return self._group_suggestions_greedy(
+            ranked_suggestions, settings, target_group_count, max_members_per_group
+        )
 
+    def _group_suggestions_hierarchical(
+        self,
+        ranked_suggestions: list[AutoROISuggestion],
+        settings: AutoROISuggestionSettings,
+        target_group_count: int,
+        max_members_per_group: int,
+    ) -> list[list[AutoROISuggestion]]:
+        """
+        Ward hierarchical clustering on spectral fingerprints.
+        Forces exactly target_group_count clusters so that closely related
+        components that share a dominant peak are still separated.
+        """
+        fingerprints, valid_suggestions = [], []
+        orphans = []
         for suggestion in ranked_suggestions:
-            # Use the mean spectrum inside each candidate box as a compact spectral
-            # fingerprint for deciding whether two spatially distant ROIs should be
-            # treated as one component.
             spectrum = self._spectrum_for_bounds(suggestion)
             vector = self._normalize_spectrum_for_similarity(
                 spectrum,
                 sigma=float(settings.spectral_smoothing_sigma),
+                use_gradient=bool(settings.use_gradient_fingerprint),
+            )
+            if vector is not None:
+                fingerprints.append(vector)
+                valid_suggestions.append(suggestion)
+            else:
+                orphans.append(suggestion)
+
+        if not fingerprints:
+            return [[s] for s in ranked_suggestions[:target_group_count]]
+
+        k = min(target_group_count, len(fingerprints))
+        fp_matrix = np.vstack(fingerprints)
+        # Cosine distance matrix; clip to avoid tiny negative values from float arithmetic
+        cos_sim = np.clip(fp_matrix @ fp_matrix.T, -1.0, 1.0)
+        dist_matrix = np.clip(1.0 - cos_sim, 0.0, 2.0)
+        # Symmetrise and extract condensed form for linkage
+        dist_sym = (dist_matrix + dist_matrix.T) / 2.0
+        n = len(fingerprints)
+        condensed = dist_sym[np.triu_indices(n, k=1)]
+        Z = linkage(condensed, method="ward")
+        cluster_labels = fcluster(Z, k, criterion="maxclust")
+
+        cluster_map: dict[int, list[AutoROISuggestion]] = {}
+        for suggestion, label_id in zip(valid_suggestions, cluster_labels):
+            cluster_map.setdefault(int(label_id), []).append(suggestion)
+
+        # Assign orphans (no valid spectrum) to largest existing cluster
+        if orphans and cluster_map:
+            largest_key = max(cluster_map, key=lambda cid: len(cluster_map[cid]))
+            cluster_map[largest_key].extend(orphans)
+
+        # Sort clusters by best member score descending; cap members per group
+        groups = sorted(cluster_map.values(), key=lambda g: max(s.score for s in g), reverse=True)
+        return [
+            sorted(g, key=lambda s: s.score, reverse=True)[:max_members_per_group]
+            for g in groups
+        ]
+
+    def _group_suggestions_greedy(
+        self,
+        ranked_suggestions: list[AutoROISuggestion],
+        settings: AutoROISuggestionSettings,
+        target_group_count: int,
+        max_members_per_group: int,
+    ) -> list[list[AutoROISuggestion]]:
+        """
+        cosine-threshold grouping.
+
+        All spectra that have cosine similarity above the threshold will be treated identically.
+        """
+        threshold = float(np.clip(settings.spectral_similarity_threshold, 0.0, 1.0))
+        grouped: list[dict[str, object]] = []
+
+        for suggestion in ranked_suggestions:
+            spectrum = self._spectrum_for_bounds(suggestion)
+            vector = self._normalize_spectrum_for_similarity(
+                spectrum,
+                sigma=float(settings.spectral_smoothing_sigma),
+                use_gradient=bool(settings.use_gradient_fingerprint),
             )
 
             if vector is None:
-                if len(grouped) >= target_group_count:
-                    if all(
-                        len(existing_group["members"]) >= max_members_per_group
-                        for existing_group in grouped
-                    ):
-                        break
-                    continue
-                grouped.append({"prototype": None, "vectors": [], "members": [suggestion]})
+                if len(grouped) < target_group_count:
+                    grouped.append({"prototype": None, "vectors": [], "members": [suggestion]})
                 continue
 
-            best_index = None
-            best_similarity = -1.0
+            best_index, best_similarity = None, -1.0
             for group_index, group in enumerate(grouped):
                 prototype = group["prototype"]
                 if prototype is None:
                     continue
-                # Cosine similarity compares spectral shape more than absolute
-                # brightness, which is what we want for "same component?" logic.
-                similarity = float(np.dot(vector, prototype))   # cosine similarity without norm
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_index = group_index
+                sim = float(np.dot(vector, prototype))
+                if sim > best_similarity:
+                    best_similarity, best_index = sim, group_index
 
             if best_index is not None and best_similarity >= threshold:
                 group = grouped[best_index]
-                members = group["members"]
-                if len(members) >= max_members_per_group:
-                    if len(grouped) >= target_group_count and all(
-                        len(existing_group["members"]) >= max_members_per_group
-                        for existing_group in grouped
-                    ):
-                        break
-                    continue
-                members.append(suggestion)
-                vectors = group["vectors"]
-                if vector is not None:
-                    vectors.append(vector)
-                    stacked = np.vstack(vectors)
-                    prototype = np.mean(stacked, axis=0)
-                    norm = np.linalg.norm(prototype)
-                    group["prototype"] = prototype / norm if norm > 0 else prototype
-                if len(grouped) >= target_group_count and all(
-                    len(existing_group["members"]) >= max_members_per_group
-                    for existing_group in grouped
-                ):
-                    break
-                continue
+                if len(group["members"]) < max_members_per_group:
+                    group["members"].append(suggestion)
+                    group["vectors"].append(vector)
+                    stacked = np.vstack(group["vectors"])
+                    proto = np.mean(stacked, axis=0)
+                    norm = np.linalg.norm(proto)
+                    group["prototype"] = proto / norm if norm > 0 else proto
+            elif len(grouped) < target_group_count:
+                grouped.append({"prototype": vector, "vectors": [vector], "members": [suggestion]})
 
-            if len(grouped) >= target_group_count:
-                if all(
-                    len(existing_group["members"]) >= max_members_per_group
-                    for existing_group in grouped
-                ):
-                    break
-                continue
-
-            grouped.append({"prototype": vector, "vectors": [vector], "members": [suggestion]})
             if len(grouped) >= target_group_count and all(
-                len(existing_group["members"]) >= max_members_per_group
-                for existing_group in grouped
+                len(g["members"]) >= max_members_per_group for g in grouped
             ):
                 break
 
-        grouped.sort(
-            key=lambda group: max(member.score for member in group["members"]),
-            reverse=True,
-        )
+        grouped.sort(key=lambda g: max(m.score for m in g["members"]), reverse=True)
         return [
-            sorted(group["members"], key=lambda member: member.score, reverse=True)
-            for group in grouped
+            sorted(g["members"], key=lambda m: m.score, reverse=True)
+            for g in grouped
         ]
 
     def _spectrum_for_bounds(self, suggestion: AutoROISuggestion) -> np.ndarray | None:
@@ -1444,7 +1547,11 @@ class ROIManager(QtCore.QObject):
         return np.mean(block, axis=(1, 2))
 
     @staticmethod
-    def _normalize_spectrum_for_similarity(spectrum: np.ndarray | None, sigma: float = 0.0) -> np.ndarray | None:
+    def _normalize_spectrum_for_similarity(
+        spectrum: np.ndarray | None,
+        sigma: float = 0.0,
+        use_gradient: bool = False,
+    ) -> np.ndarray | None:
         if spectrum is None:
             return None
 
@@ -1461,6 +1568,21 @@ class ROIManager(QtCore.QObject):
         baseline = float(np.percentile(vector, 10))
         vector = vector - baseline
         vector[vector < 0] = 0.0
+
+        if use_gradient and vector.size >= 3:
+            # Augment with the spectral gradient so that spectra sharing a dominant
+            # peak (e.g. all beads at 2850 cm⁻¹) can still be separated by
+            # secondary features and tail shapes. Each half is unit-normalised
+            # independently so both contribute equally to the similarity score.
+            grad = np.gradient(vector)
+            norm_v = float(np.linalg.norm(vector))
+            norm_g = float(np.linalg.norm(grad))
+            v_part = vector / norm_v if norm_v > 0 else vector
+            g_part = grad / norm_g if norm_g > 0 else grad
+            combined = np.concatenate([v_part, g_part])
+            norm = float(np.linalg.norm(combined))
+            return combined / norm if norm > 0 else None
+
         norm = float(np.linalg.norm(vector))
         if norm <= 0:
             return None
@@ -1507,6 +1629,68 @@ class ROIManager(QtCore.QObject):
         if union <= 0:
             return 0.0
         return intersection / union
+
+    def _extract_suggestions_multiband(
+        self,
+        settings: AutoROISuggestionSettings,
+        occupied_mask: np.ndarray,
+        n_bands: int,
+    ) -> list[AutoROISuggestion]:
+        """
+        Run spatial detection independently on N equal spectral sub-bands so that
+        bead types whose resonance falls in a narrow wavenumber range cannot be
+        suppressed by a brighter resonance elsewhere in the stack.
+
+        Each band produces its own balanced projection and candidate list; the
+        results are merged across bands with IoU deduplication so spatially
+        overlapping boxes from different bands are collapsed to one suggestion.
+        """
+        stack = self.subtracted_data if settings.use_processed_data and self.subtracted_data is not None else self.raw_data
+        if stack is None or stack.ndim < 3 or stack.shape[0] == 0:
+            return []
+
+        n_frames = stack.shape[0]
+        band_size = max(1, n_frames // n_bands)
+        # Each band is expected to contain at most ~2 distinct bead types
+        band_settings = dc_replace(settings, max_groups_per_component=2)
+
+        all_suggestions: list[AutoROISuggestion] = []
+        seen_coarse_boxes: list[tuple[int, int, int, int]] = []
+        factor = max(1, int(settings.spatial_bin_factor))
+
+        for band_idx in range(n_bands):
+            start = band_idx * band_size
+            end = n_frames if band_idx == n_bands - 1 else start + band_size
+            band_stack = stack[start:end].astype(float)
+            if band_stack.shape[0] == 0:
+                continue
+
+            band_projection = self._build_balanced_stack_projection(
+                band_stack,
+                background_sigma=float(settings.local_background_sigma),
+            )
+            if band_projection is None or band_projection.size == 0 or float(np.max(band_projection)) <= 0:
+                continue
+
+            if occupied_mask.shape == band_projection.shape and occupied_mask.any():
+                band_projection = band_projection.copy()
+                band_projection[occupied_mask] = 0.0
+
+            band_suggestions = self._extract_suggestions_from_response_map(band_projection, band_settings)
+
+            for suggestion in band_suggestions:
+                coarse_box = (
+                    int(suggestion.y // factor),
+                    int(suggestion.x // factor),
+                    int((suggestion.y + suggestion.height) // factor),
+                    int((suggestion.x + suggestion.width) // factor),
+                )
+                if not any(self._bbox_iou(coarse_box, seen) >= 0.45 for seen in seen_coarse_boxes):
+                    seen_coarse_boxes.append(coarse_box)
+                    all_suggestions.append(suggestion)
+
+        all_suggestions.sort(key=lambda s: s.score, reverse=True)
+        return all_suggestions
 
     @classmethod
     def _extract_suggestions_from_response_map(
@@ -1564,11 +1748,14 @@ class ROIManager(QtCore.QObject):
         )
         # try to scale actual number by pool factor since later candidates may merge to the same group
 
-        # define 5 search levels relative to the global max to find also weaker resonances
+        # define search levels relative to the global max to find also weaker resonances;
+        # sweep down to 5 % of the max so bead types that are 4-5x dimmer than the dominant
+        # one are still detected; the percentile floor drops in parallel so it does not
+        # clamp the threshold above weak-signal regions.
         high_ratio = float(np.clip(settings.threshold_ratio, 0.05, 0.99))
-        low_ratio = max(0.12, high_ratio * 0.35)    # clip low ratio to 1/e or at least 12 %
-        threshold_ratios = np.linspace(high_ratio, low_ratio, num=5)
-        percentile_levels = np.linspace(85.0, 50.0, num=5)  # stop percentile at median to avoid too much noise
+        low_ratio = max(0.05, high_ratio * 0.12)
+        threshold_ratios = np.linspace(high_ratio, low_ratio, num=8)
+        percentile_levels = np.linspace(75.0, 15.0, num=8)
 
         for threshold_ratio, percentile_level in zip(threshold_ratios, percentile_levels):
             robust_floor = float(np.percentile(positive_values, percentile_level))
@@ -1620,9 +1807,9 @@ class ROIManager(QtCore.QObject):
                     y0, x0 = coords.min(axis=0)
                     y1, x1 = coords.max(axis=0) + 1
                     coarse_box = (int(y0), int(x0), int(y1), int(x1))
-                    if any(cls._bbox_iou(coarse_box, other_box) >= 0.85 for other_box in local_boxes):
+                    if any(cls._bbox_iou(coarse_box, other_box) >= 0.60 for other_box in local_boxes):
                         continue
-                    if any(cls._bbox_iou(coarse_box, other_box) >= 0.75 for other_box in seen_boxes):
+                    if any(cls._bbox_iou(coarse_box, other_box) >= 0.45 for other_box in seen_boxes):
                         continue
 
                     # At this point the suggestion is purely spatial: "there is a

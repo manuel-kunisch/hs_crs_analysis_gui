@@ -212,13 +212,13 @@ class CompositeImageViewWidget(QMainWindow):
         self.channel_slider.setTickPosition(QSlider.TicksBothSides)
         self.channel_slider.setTickInterval(1)
         self.channel_slider.setOrientation(1)  # Horizontal orientation
-        self.channel_slider.setMinimum(0)
-        self.channel_slider.setMaximum(image_channels - 1)
+        self.channel_slider.setMinimum(1)
+        self.channel_slider.setMaximum(max(1, image_channels))
         self.channel_slider.valueChanged.connect(self.callback_channel)
 
         # Create a QSpinBox for selecting the channel
         self.channel_spinbox = QSpinBox()
-        self.channel_spinbox.setRange(0, image_channels - 1)
+        self.channel_spinbox.setRange(1, max(1, image_channels))
         self.channel_spinbox.valueChanged.connect(self.callback_channel)
         channel_label = QLabel("Channel: ")
 
@@ -749,12 +749,12 @@ class CompositeImageViewWidget(QMainWindow):
         new_label = self.custom_labels.get(component_index, f'Component {component_index}')
         self.legend.addItem(line, new_label)
 
-        if self.channel_slider.value() == component_index:
+        if self._channel_idx == component_index:
             # Update the title of the channel view
             slice_suffix = ""
             if self.img_series is not None:
                 slice_suffix = f" | {self.outer_axis_label} {self.current_result_slice_index + 1}"
-            self.channel_view.view.setTitle(f"Channel {component_index} {new_label}{slice_suffix}")
+            self.channel_view.view.setTitle(f"Channel {component_index + 1} {new_label}{slice_suffix}")
 
 
     def plot_seeds(self, seeds: np.ndarray, dashed: bool = True):
@@ -853,8 +853,8 @@ class CompositeImageViewWidget(QMainWindow):
             self.current_result_slice_index = 0
         self._sync_result_slice_controls()
         self.composite_view.setImage(self.img)
-        # adjust slider and scrollbar to max....
-        channels = self.img.shape[-1] - 1
+        # adjust slider and scrollbar to max (1-based: range 1..n_channels)
+        channels = self.img.shape[-1]
         self.channel_slider.setMaximum(channels)
         self.channel_spinbox.setMaximum(channels)
 
@@ -871,7 +871,7 @@ class CompositeImageViewWidget(QMainWindow):
             self.reset_levels()
         else:
             # self.update_channel_view(0)
-            self.channel_slider.setValue(0)
+            self.channel_slider.setValue(1)
 
         self.spectral_cmps_series = spectral_cmps if spectral_cmps is not None and spectral_cmps.ndim == 3 else None
         self.spectral_cmps = None if self.spectral_cmps_series is not None else spectral_cmps
@@ -909,7 +909,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.composite_view.setImage(self.img, autoLevels=False)
         self._update_fit_info_label()
         self._restore_viewbox_range(self.composite_view, composite_view_range)
-        self.update_channel_view(min(self.channel_slider.value(), self.img.shape[-1] - 1))
+        self.update_channel_view(min(self._channel_idx, self.img.shape[-1] - 1))
         self.plot_components(self.spectral_cmps_series if self.spectral_cmps_series is not None else self.spectral_cmps)
         self.update_channel_and_composite_levels(composite_levels=composite_levels)
 
@@ -1047,7 +1047,7 @@ class CompositeImageViewWidget(QMainWindow):
             'ticks': [(float(pos), self._normalize_rgba(color)) for pos, color in ticks],
             'ticksVisible': True,
         }
-        if channel_index == self.channel_slider.value():
+        if channel_index == self._channel_idx:
             self._restore_channel_histogram_widget_state(histogram_state)
         self._refresh_composite_from_histogram_states()
         self._sync_color_button_to_gradient()
@@ -1055,7 +1055,7 @@ class CompositeImageViewWidget(QMainWindow):
     def reset_current_channel_gamma_curve(self):
         if self.img is None:
             return
-        channel_index = self.channel_slider.value()
+        channel_index = self._channel_idx
         histogram_state = self._ensure_channel_histogram_state(channel_index)
         if histogram_state is None:
             return
@@ -1075,7 +1075,7 @@ class CompositeImageViewWidget(QMainWindow):
     def invert_current_channel_lut(self):
         if self.img is None:
             return
-        channel_index = self.channel_slider.value()
+        channel_index = self._channel_idx
         histogram_state = self._ensure_channel_histogram_state(channel_index)
         if histogram_state is None:
             return
@@ -1123,7 +1123,7 @@ class CompositeImageViewWidget(QMainWindow):
             return 
         channel_view_range = self._capture_viewbox_range(self.channel_view)
         self.channel_slider.blockSignals(True)
-        self.channel_slider.setValue(channel_index)
+        self.channel_slider.setValue(channel_index + 1)
         self.channel_slider.blockSignals(False)
         logger.debug('Update Time %i' % channel_index)
         # Get the selected channel
@@ -1159,7 +1159,7 @@ class CompositeImageViewWidget(QMainWindow):
             logger.debug("Channel unknown")
         # Update the QSpinBox with the current channel index
         self.channel_spinbox.blockSignals(True)
-        self.channel_spinbox.setValue(channel_index)
+        self.channel_spinbox.setValue(channel_index + 1)
         self.channel_spinbox.blockSignals(False)
         # sync the channel spinbox and the promote seed spinbox for convenience
         if hasattr(self, "promote_seed_component_spinbox"):
@@ -1177,7 +1177,7 @@ class CompositeImageViewWidget(QMainWindow):
         slice_suffix = ""
         if self.img_series is not None:
             slice_suffix = f" | {self.outer_axis_label} {self.current_result_slice_index + 1}"
-        self.channel_view.view.setTitle(f"Channel {channel_index}{suffix}{slice_suffix}")
+        self.channel_view.view.setTitle(f"Channel {channel_index + 1}{suffix}{slice_suffix}")
 
     def callback_color_widget(self):
         # Get the selected color from the ColorButton
@@ -1192,7 +1192,7 @@ class CompositeImageViewWidget(QMainWindow):
 
         # Convert QColor to pg.Color and set it as colormap color
         colormap_color = (selected_color.red(), selected_color.green(), selected_color.blue())
-        channel_index = self.channel_slider.value()
+        channel_index = self._channel_idx
         histogram_state = self.histogram_states.get(channel_index)
         if histogram_state is None:
             return
@@ -1250,7 +1250,7 @@ class CompositeImageViewWidget(QMainWindow):
                 logger.debug('Propagating channel %s color change to the shared color manager.', index)
                 self.color_manager.set_color_rgb(index, color)
 
-        if index == self.channel_slider.value():
+        if index == self._channel_idx:
             self.color_widget.blockSignals(True)
             self.color_widget.setColor(pg.mkColor(color))
             self.color_widget.blockSignals(False)
@@ -1271,7 +1271,7 @@ class CompositeImageViewWidget(QMainWindow):
 
         # update the composite image with the new colormap color
         self.update_plot_line_color(index, QColor(*color))
-        if index == self.channel_slider.value():
+        if index == self._channel_idx:
             self.sync_colormap_current_channel_to_widget()
         else:
             self._refresh_composite_from_histogram_states()
@@ -1871,7 +1871,7 @@ class CompositeImageViewWidget(QMainWindow):
             self.seed_lines[index].setPen(pg.mkPen(color))
 
     def reload_color_current_channel(self):
-        cur_channel = self.channel_slider.value()
+        cur_channel = self._channel_idx
         # comes from the color manager, so no need to change it there
         self.set_colormap(cur_channel, self.get_color(cur_channel), change_color_manager=False)
 
@@ -1914,7 +1914,7 @@ class CompositeImageViewWidget(QMainWindow):
         logger.info(f'Created histogram state for channel {index} with info {self.histogram_states[index]}')
 
         # set the current histogram state in the channel view
-        if index == self.channel_slider.value():
+        if index == self._channel_idx:
             self._restore_channel_histogram_widget_state(self.histogram_states[index])
 
     def restore_histogram_state_from_preset(self, index: int, preset_state: dict):
@@ -1978,7 +1978,7 @@ class CompositeImageViewWidget(QMainWindow):
         }
         logger.info('Restored histogram state for channel %s from preset: %s', index, self.histogram_states[index])
 
-        if index == self.channel_slider.value():
+        if index == self._channel_idx:
             self._restore_channel_histogram_widget_state(self.histogram_states[index])
 
     def set_spectral_units(self, units: str):
@@ -1997,7 +1997,7 @@ class CompositeImageViewWidget(QMainWindow):
         if color.isValid():
             # Convert QColor to QColor object and
             qcolor = pg.mkColor(color.name())
-            self.set_colormap(self.channel_slider.value(), (qcolor.red(), qcolor.green(), qcolor.blue()))
+            self.set_colormap(self._channel_idx, (qcolor.red(), qcolor.green(), qcolor.blue()))
 
     # new implementation of the get_rgba method where the colormap is applied to the image similar to FIJI
     # with 8 bit colormaps
@@ -2061,7 +2061,7 @@ class CompositeImageViewWidget(QMainWindow):
         # Get the current channel index
         if self.img is None:
             return
-        channel_index = self.channel_slider.value()
+        channel_index = self._channel_idx
         # Save the histogram state
         histogram_state = self.channel_view.getHistogramWidget().saveState()
         self.histogram_states[channel_index] = histogram_state
@@ -2099,9 +2099,16 @@ class CompositeImageViewWidget(QMainWindow):
 
         return min_levels, max_levels
 
+    @property
+    def _channel_idx(self) -> int:
+        """Current channel as a 0-based array index. The slider/spinbox are 1-based for display."""
+        return self.channel_slider.value() - 1
+
     def callback_channel(self, *args):
         if not self.timeout_callbacks:
-            self.update_channel_view(*args)
+            # slider/spinbox fire with 1-based value; convert to 0-based for update_channel_view
+            idx = (args[0] - 1) if args else self._channel_idx
+            self.update_channel_view(idx)
 
     def reset_levels(self):
         # Reset the levels of the composite image to the default range (0 - 65535)
@@ -2131,7 +2138,7 @@ class CompositeImageViewWidget(QMainWindow):
             histogram_state = self.channel_view.getHistogramWidget().saveState()
         except Exception:
             return
-        channel_index = self.channel_slider.value()
+        channel_index = self._channel_idx
         top_color = self._extract_channel_color_from_ticks(
             self._sorted_gradient_ticks(histogram_state),
             fallback=self.colormap_colors[channel_index % len(self.colormap_colors)],
@@ -2156,7 +2163,7 @@ class CompositeImageViewWidget(QMainWindow):
         locked_color = (0, 0, 0, 255)
 
         def enforce_lock():
-            chan = self.channel_slider.value()
+            chan = self._channel_idx
             if chan not in self.histogram_states:
                 return
 
@@ -2204,11 +2211,11 @@ class UpdateImageWorker(QObject):
                 self.result_viewer_widget.img = np.moveaxis(self.result_viewer_widget.img, self.spectral_axis, -1)
         self.result_viewer_widget.composite_view.setImage(self.img_file)
         # adjust slider and scrollbar to max....
-        channels = self.result_viewer_widget.img.shape[-1] - 1
+        channels = self.result_viewer_widget.img.shape[-1]
         self.result_viewer_widget.channel_slider.setMaximum(channels)
         self.result_viewer_widget.channel_spinbox.setMaximum(channels)
         if channels:
-            ch_selected = self.result_viewer_widget.channel_slider.value()
+            ch_selected = self.result_viewer_widget._channel_idx
             # Initialize the channel view with all channels and switch to selected afterwards
             for i in range(self.result_viewer_widget.img.shape[-1]):
                 # triggers channel update!
@@ -2217,7 +2224,7 @@ class UpdateImageWorker(QObject):
             self.result_viewer_widget.reset_levels()
         else:
             # self.result_viewer_widget.update_channel_view(0)
-            self.result_viewer_widget.channel_slider.setValue(0)
+            self.result_viewer_widget.channel_slider.setValue(1)
 
         self.result_viewer_widget.spectral_cmps = self.spectral_cmps
         if self.spectral_cmps is not None:

@@ -1,6 +1,6 @@
 # 04 Physical units and rolling-ball correction
 
-This page covers physical pixel sizes, scale bars, TIFF metadata, and rolling-ball/background correction.
+This page covers physical pixel sizes, scale bars, TIFF metadata, and rolling-ball illumination correction.
 
 ## Physical units
 
@@ -33,15 +33,20 @@ Check the pixel size before exporting publication images, especially after:
 - Loading a preset.
 - Loading data from a different microscope.
 
-## Rolling-ball / illumination correction
+## Illumination correction
 
-Rolling-ball correction is available as a preprocessing step for 2D and 3D data. It is intended to remove smooth background or illumination variation.
+The rolling-ball correction tab is used as an illumination-correction preprocessor for 2D and 3D data. Use it when the image has smooth shading, vignetting, or a broad multiplicative illumination pattern that should be corrected before ROI work, stitching, analysis, or export.
 
-The correction can be configured in the rolling-ball correction tab. For stitching, reference-mode correction is preferred because it avoids estimating a different correction field for every tile.
+![Rolling-ball illumination correction panel](../assets/images/04_rolling_ball_illumination_correction.png)
 
-> GIF placeholder: loading a reference image and applying rolling-ball correction.
+The correction can be configured in two main ways:
 
-## What the rolling-ball settings mean
+- **Reference/manual model**: use `reference` mode. The model can be fitted from a reference TIFF, but it can also be edited manually without loading a reference image. This is useful when you want to tune `dx`, `dy`, `sigma_x`, `sigma_y`, `strength`, and `floor` from the preview.
+- **Per-image estimation**: use `blur` or `gaussfit`. These modes estimate a smooth correction field from each image separately.
+
+> **Stitching compatibility:** for stitching, use `reference` mode. The same stored/manual correction model is applied to every tile individually before stitching. If you change illumination-correction settings after a stitch has already been generated, rerun the stitch so the updated correction is applied to the tiles.
+
+## What the illumination-correction settings mean
 
 ### Enable illumination correction
 
@@ -49,7 +54,7 @@ This is the master on/off switch. Leave it off unless you clearly see smooth sha
 
 ### Mode
 
-- `reference`: uses one stored reference model for all images. This is the recommended mode for stitching and for consistent preprocessing across a dataset.
+- `reference`: uses one stored model for all images. The model can come from a reference TIFF or from manual/synthetic settings. This is the recommended mode for stitching and for consistent preprocessing across a dataset.
 - `blur`: estimates a smooth correction field separately for each image by heavy smoothing. Use this when no stable reference image exists and the illumination pattern changes from image to image.
 - `gaussfit`: estimates a per-image smooth field and then fits a Gaussian-like model. Use this when a simple blur is not stable enough but you still do not want to build a dedicated reference first.
 
@@ -65,13 +70,13 @@ This limits how strongly dark regions may be amplified by the correction. Increa
 
 ### Fit-input smoothing
 
-These settings are used when fitting a reference TIFF:
+These settings are used only when fitting a reference TIFF or when a per-image fit needs a smoothed input:
 
 - `Blur sigma X [px]`
 - `Blur sigma Y [px]`
 - `Downsample`
 
-They do not directly define the final correction. They define how aggressively the reference image is simplified before estimating the smooth illumination field.
+They do not directly define the final manual/reference correction model. They define how aggressively the image is simplified before estimating a smooth illumination field.
 
 Use larger blur sigmas when:
 
@@ -94,45 +99,15 @@ These describe the smooth model itself:
 - `strength`: how strongly the correction is applied. `1` is the normal case, smaller values weaken the correction, larger values strengthen it.
 - `floor`: mixes in a constant baseline to avoid extreme gains in dark regions.
 
-In most workflows, load a representative reference TIFF first, preview it, and then only fine-tune `strength` and `floor` manually.
+In reference mode, these parameters are active even without a loaded reference TIFF. Use **Preview model...** to inspect the current synthetic/manual correction field, tune the parameters, and enable correction once the field looks reasonable. If a representative reference TIFF is available, load it first and then fine-tune `strength` and `floor`.
 
 ### Reference TIFF buttons
 
 - `Load reference TIFF...`: fit a stable model from one representative image.
-- `Preview model...`: inspect the current correction model before applying it broadly.
+- `Preview model...`: inspect the current correction model. This also works without a reference TIFF by using the synthetic preview size.
 - `Clear reference TIFF`: remove the loaded TIFF payload while keeping the current model parameters available.
 
-This makes `reference` mode practical for batch-like workflows: you can learn the model once and reuse it on similar images.
-
-## When to use preprocessing vs a background component
-
-Use rolling-ball / illumination correction as preprocessing when:
-
-- the background is mainly an imaging artifact,
-- the same artifact affects all channels broadly,
-- and you want cleaner images before ROI work or stitching.
-
-Use a background component seed in the analysis model when:
-
-- the broad background is part of the sample mixture,
-- you want the background represented explicitly in NNMF/NNLS,
-- or you want to compare corrected vs uncorrected modeling strategies.
-
-These are different choices. Preprocessing removes a signal before analysis. A background component keeps that signal inside the factorization model.
-
-## Background component seeds
-
-The analysis panel can also generate a background component from a projection image. The reference image can be based on:
-
-- Mean projection.
-- Maximum projection.
-- Minimum projection.
-
-The generated W background map can be previewed and added as a dummy ROI carrying a fixed W seed.
-
-Use this when a slowly varying background should be represented as a separate component in the unmixing model.
-
-> GIF placeholder: previewing a rolling-ball background component and adding it as a W seed.
+This makes `reference` mode practical for batch-like workflows: you can learn or manually tune the model once and reuse it on similar images.
 
 ## Practical checks
 
@@ -140,13 +115,12 @@ Before analysis or export, check:
 
 - Whether the image is binned.
 - Whether physical units still match the displayed image.
-- Whether rolling-ball correction should be applied before or after stitching.
-- Whether background correction is part of preprocessing or modeled as a component.
+- Whether illumination correction should be applied to tiles before stitching.
 
 Good default order for tiled hyperspectral data:
 
 1. confirm tile parsing and stitch geometry,
-2. decide whether a shared reference-mode correction should be applied to all tiles,
+2. decide whether a shared reference/manual illumination correction should be applied to all tiles,
 3. stitch the data,
 4. verify physical units and scale bars,
 5. then continue with ROI definition and multivariate analysis.

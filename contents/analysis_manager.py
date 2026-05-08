@@ -796,6 +796,41 @@ class AnalysisManager(QtCore.QObject):
                     )
                     return
             elif self.mv_analyzer.custom_nnmf_init:
+                unseeded, overranged = self._audit_component_seeds()
+                if unseeded or overranged:
+                    n = self.mv_analyzer.get_n_components()
+                    # Suggested n = highest component number that has any seed defined
+                    all_defined = [c for c in range(1, n + 1) if c not in unseeded] + overranged
+                    suggested_n = max(all_defined) if all_defined else 1
+                    body_parts = []
+                    if overranged:
+                        names = "\n".join(f"  • Component {c}" for c in overranged)
+                        body_parts.append(
+                            f"Seeds defined above the current component count ({n}) "
+                            f"— these will be silently ignored:\n{names}"
+                        )
+                    if unseeded:
+                        names = "\n".join(f"  • Component {c}" for c in unseeded)
+                        body_parts.append(
+                            f"Components within the current count that have no seed "
+                            f"— these will be initialized randomly:\n{names}"
+                        )
+                    msg = QtWidgets.QMessageBox(self.analysis_widget)
+                    msg.setWindowTitle("Component / seed mismatch")
+                    msg.setIcon(QtWidgets.QMessageBox.Warning)
+                    msg.setText("\n\n".join(body_parts))
+                    adjust_btn = msg.addButton(
+                        f"Adjust to {suggested_n} components", QtWidgets.QMessageBox.AcceptRole
+                    )
+                    msg.addButton("Continue anyway", QtWidgets.QMessageBox.DestructiveRole)
+                    msg.addButton(QtWidgets.QMessageBox.Cancel)
+                    msg.exec_()
+                    clicked = msg.clickedButton()
+                    if msg.buttonRole(clicked) == QtWidgets.QMessageBox.RejectRole:
+                        self._finish_analysis_progress()
+                        return
+                    if clicked is adjust_btn:
+                        self.num_components_spinbox.setValue(suggested_n)
                 if self._use_fast_multislice_nnmf():
                     self.make_all_seeds_from_inputs(show_seeds=True)
                 elif self._analysis_series_4d is not None:
@@ -1444,6 +1479,38 @@ class AnalysisManager(QtCore.QObject):
         # check if any fixed W seeds present in the ROIs may be incompatible with the image possibly due to binning
 
 
+    def _audit_component_seeds(self) -> tuple[list[int], list[int]]:
+        """Audit seed coverage against the current component count.
+
+        Returns a tuple of two lists (both use 1-based component numbers):
+          unseeded   – components within 1..n that have no seed defined anywhere;
+                       these would be initialized randomly in seeded NNMF.
+          overranged – component numbers found in ROI/resonance tables that exceed n;
+                       these seeds would be silently ignored during analysis.
+
+        A component is considered seeded if it has at least one entry in either:
+        - the ROI manager table (spatial ROI, dummy spectrum, or fixed-W row), or
+        - the resonance/spectral-info table (Gaussian model rows).
+        """
+        n = self.mv_analyzer.get_n_components()
+        defined: set[int] = set()
+        # component_number_from_table_index returns 0-based; convert to 1-based
+        for row in range(self.roi_manager.roi_table.rowCount()):
+            comp_0 = self.roi_manager.component_number_from_table_index(row)
+            if comp_0 is not None and comp_0 >= 0:
+                defined.add(comp_0 + 1)
+        # Resonance table uses 0-based component indices
+        for row in range(self.resonance_table.rowCount()):
+            try:
+                comp_1 = int(self.get_component_index(row)) + 1
+                if comp_1 >= 1:
+                    defined.add(comp_1)
+            except Exception:
+                pass
+        unseeded = [c for c in range(1, n + 1) if c not in defined]
+        overranged = sorted(c for c in defined if c > n)
+        return unseeded, overranged
+
     def reload_H_seeds_from_rois(self) -> None:
         seeds_list = self.roi_manager.get_roi_mean_curves()
         # TODO: Pass the seeds to the analyzer
@@ -1667,6 +1734,14 @@ class AnalysisManager(QtCore.QObject):
         return center, width
 
     def _default_resonance_values(self, row_position: int) -> tuple[float, float]:
+        """
+        Return a reasonable center and width for a new resonance-table row.
+
+        Raman-shift data reuse the configured default resonances when they fall
+        inside the current axis. Wavelength, index, and custom numeric axes fall
+        back to axis-based positions so the initial values match the selected
+        unit mode instead of inserting invalid cm-1 defaults.
+        """
         default_index = row_position % len(self.default_resonances)
         default_center, default_width = self.default_resonances[default_index]
 

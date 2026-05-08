@@ -1,4 +1,4 @@
-# HS MV Analysis
+# HS-MOSAIC
 
 > [!IMPORTANT]
 > Replace the placeholder sections in this README with your project-specific text before publishing.

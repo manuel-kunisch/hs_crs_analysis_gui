@@ -611,6 +611,39 @@ class ROIManager(QtCore.QObject):
         self.color_manager.set_color_rgb(component_number, rgb)
         del blocker
 
+    def _component_qcolor(self, component_number: int | None) -> QtGui.QColor | None:
+        if component_number is None:
+            return None
+        if self.color_manager is not None:
+            return QtGui.QColor(self.color_manager.get_qcolor(component_number))
+        rgb = self.default_colors[component_number % len(self.default_colors)]
+        return QtGui.QColor(*rgb)
+
+    def _swap_component_colors(self, first_component: int | None, second_component: int | None):
+        """
+        Swap component colors when a ROI is reassigned between components.
+
+        The visual identity follows the reassigned ROI: if a row moves from
+        component 2 to component 3, component 3 receives component 2's previous
+        color and component 2 receives component 3's previous color.
+        """
+        if first_component is None or second_component is None:
+            return
+        first_component = int(first_component)
+        second_component = int(second_component)
+        if first_component == second_component:
+            return
+
+        first_color = self._component_qcolor(first_component)
+        second_color = self._component_qcolor(second_component)
+        if first_color is None or second_color is None:
+            return
+
+        self._set_component_color(first_component, second_color, emit_signal=False)
+        self._set_component_color(second_component, first_color, emit_signal=False)
+        self.reload_colors()
+        self._emit_component_color_updates([first_component, second_component])
+
     def _emit_component_color_updates(self, component_numbers):
         """
         Send color update signals for the specified component numbers to ensure all listeners are updated with the current colors.
@@ -662,6 +695,7 @@ class ROIManager(QtCore.QObject):
         widget.setProperty("last_component_number", new_component)
         self.roi_plotter.roi_component_changed(str(self.rois[row]), new_component)
         if old_component is not None and old_component != new_component:
+            self._swap_component_colors(int(old_component), new_component)
             self._emit_label_for_component(int(old_component))
         if new_component is not None:
             self._emit_label_for_component(new_component, preferred_row=row)
@@ -2568,12 +2602,12 @@ class ROIManager(QtCore.QObject):
             self.color_change_signal.emit(roi_idx, qcolor.getRgb()[:-1])
 
     def reload_colors(self):
-        if self.color_manager:
-            for idx in range(self.roi_table.rowCount()):
-                component_number = self.component_number_from_table_index(idx)
-                qcolor = self.color_manager.get_qcolor(component_number)
+        for idx in range(self.roi_table.rowCount()):
+            component_number = self.component_number_from_table_index(idx)
+            qcolor = self._component_qcolor(component_number)
+            if qcolor is not None:
                 self.update_roi_color(idx, qcolor, emit_signal=False)
-            self.roi_plotter.refresh_all_component_fallbacks()
+        self.roi_plotter.refresh_all_component_fallbacks()
 
     def update_selected_roi(self, *_):
         if self._selection_sync_in_progress:

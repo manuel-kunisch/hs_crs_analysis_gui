@@ -1876,6 +1876,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.set_colormap(cur_channel, self.get_color(cur_channel), change_color_manager=False)
 
     def reload_color(self, channel_index: int):
+        """Apply a component-color change to the result channel LUT and composite image."""
         color = self.get_color(channel_index)
         if self.colormap_colors[channel_index % len(self.colormap_colors)] == color:
             return

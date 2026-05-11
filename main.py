@@ -651,6 +651,7 @@ if __name__ == '__main__':
 
     # set default size of the main window
     main_app.resize(1920, 1080)
+    main_app.setWindowTitle("HS-MOSAIC")
     # show window maximized
     # main_app.showMaximized()
 

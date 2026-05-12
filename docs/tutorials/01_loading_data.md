@@ -124,7 +124,7 @@ Before the image enters the analysis pipeline:
 
 - `NaN` and `Inf` are replaced by `0`.
 
-Exact zeros in the loaded image are preserved. NMF and NNLS only require entries to be non-negative (`>= 0`), not strictly positive, so legitimate zero pixels stay zero. Where multiplicative-update NMF needs a strictly positive *initialization*, the seed builders lift their own outputs to a small `eps` internally; this never overrides the loaded image data. See [Non-negativity, exact zeros, and the MU init eps lift](../reference/nnmf_nnls_modes.md#non-negativity-exact-zeros-and-the-mu-init-eps-lift) for the full reasoning.
+Exact zeros in the loaded image are preserved. NMF and NNLS only require entries to be non-negative (`>= 0`), not strictly positive, so legitimate zero pixels stay zero. Where multiplicative-update NMF needs a strictly positive *initialization*, the seed builders lift their own outputs to a small `eps` internally; this never overrides the loaded image data. See [Non-negativity, exact zeros, and the MU init eps lift](../methods/nnmf_nnls_modes.md#non-negativity-exact-zeros-and-the-mu-init-eps-lift) for the full reasoning.
 
 ### What binning changes
 

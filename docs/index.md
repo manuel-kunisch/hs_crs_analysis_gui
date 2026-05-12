@@ -75,10 +75,13 @@ The example section is reserved for data-specific workflows and for reproducing 
 - [4D fluorescence unmixing](examples/fluorescence_4d_unmixing.md)
 - [Stitching and preprocessing](examples/stitching_and_preprocessing.md)
 
+## Methods
+
+- [NNMF and NNLS modes](methods/nnmf_nnls_modes.md) — algorithms, math, convergence criteria, and literature references behind the analysis modes.
+
 ## Reference
 
 - [Spectral axis and wavelength.json](reference/spectral_axis_and_wavelength_json.md)
 - [ROI manager and seed types](reference/roi_manager_and_seed_types.md)
-- [NNMF and NNLS modes](reference/nnmf_nnls_modes.md)
 - [Fiji export](reference/fiji_export.md)
 - [Presets](reference/presets.md)

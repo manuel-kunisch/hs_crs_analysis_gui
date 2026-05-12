@@ -9,9 +9,9 @@ For the more workflow-oriented explanation, see [02 Analysis modes](../tutorials
 
 ## Why these modes are needed
 
-Hyperspectral CRS, CARS, SRS, Raman, or fluorescence stacks are usually recorded as many grayscale slices across a spectral axis [15, 16]. Looking at dozens of slices one by one is slow and often misleading because the relevant information is spread across the whole stack.
+Hyperspectral CRS, CARS, SRS, Raman, or fluorescence stacks are usually recorded as many grayscale slices across a spectral axis [16, 17]. Looking at dozens of slices one by one is slow and often misleading because the relevant information is spread across the whole stack.
 
-The point of multivariate analysis here is not only dimensionality reduction in the abstract. It is a practical reorganization of the stack into a small set of spectral patterns, a matching set of spatial maps, and a false-color view that makes the dominant structures easier to inspect in one image. The raw stack is largely redundant or background-dominated; the analysis modes compress it into a smaller number of components that can be inspected as spectra and maps [13, 14].
+The point of multivariate analysis here is not only dimensionality reduction in the abstract. It is a practical reorganization of the stack into a small set of spectral patterns, a matching set of spatial maps, and a false-color view that makes the dominant structures easier to inspect in one image. The raw stack is largely redundant or background-dominated; the analysis modes compress it into a smaller number of components that can be inspected as spectra and maps [14, 15].
 
 ## Data layout
 
@@ -40,7 +40,7 @@ This is the canonical NMF model [5, 8, 9]. In the GUI:
 - each column of `W` is reshaped back into an image,
 - the result viewer combines selected `W` maps into false-color composite images.
 
-`H` carries spectral behavior, `W` carries where that behavior occurs spatially [13].
+`H` carries spectral behavior, `W` carries where that behavior occurs spatially [14].
 
 There is a component-wise scale ambiguity in NNMF [8, 9]: for any positive constant \(a\), replacing one component by \(a W_i\) and \(H_i / a\) leaves that component's contribution unchanged. This is why normalized generated `W` seeds are valid for seeded NNMF: both `W` and `H` remain free during fitting, so the optimizer can adapt the matching `H` row to the normalized `W0` scale. The GUI uses this convention for seeded NNMF initialization — generated `W0` maps are normalized to a comparable unit maximum, while `H0` spectra keep the spectral/count scale from ROIs, files, Gaussian models, or seed pixels.
 
@@ -91,7 +91,7 @@ PCA is often a very good first look, but it has important limitations for chemic
 - one molecular signature can be split over several components,
 - strong non-chemical correlations can dominate the leading components.
 
-PCA often reveals the important resonances, but it can mix chemistry with gradients, split one resonance across several components, and produce signed outputs that are awkward to interpret physically [13]. Use PCA when you want a diagnostic or an initial estimate, not when you need strictly non-negative abundance-like maps.
+PCA often reveals the important resonances, but it can mix chemistry with gradients, split one resonance across several components, and produce signed outputs that are awkward to interpret physically [14]. Use PCA when you want a diagnostic or an initial estimate, not when you need strictly non-negative abundance-like maps.
 
 ## Random NNMF
 
@@ -141,7 +141,7 @@ Seeded NNMF keeps the same non-negative matrix factorization model but starts fr
 
 > If I already have a rough idea what some spectra or maps should look like, can the algorithm refine them while still adapting to the data?
 
-This matters most for difficult CRS data: if resonances overlap strongly or the signal-to-background ratio is poor, unguided methods can mix components, but a seeded decomposition can be steered toward the desired clustering [13].
+This matters most for difficult CRS data: if resonances overlap strongly or the signal-to-background ratio is poor, unguided methods can mix components, but a seeded decomposition can be steered toward the desired clustering [14].
 
 ### Model
 
@@ -277,7 +277,7 @@ $$
 w_p = \arg\min_{w_p \ge 0} \left\| x_p - w_p H_{\mathrm{seed}} \right\|_2^2
 $$
 
-This is the classical non-negative least-squares problem, originally solved by the Lawson–Hanson active-set algorithm [10]. SciPy's `nnls` is a direct implementation [10]; the GUI's optional PyTorch backend uses projected gradient with FISTA acceleration instead [11, 12], which is significantly faster on GPU for large pixel counts.
+This is the classical non-negative least-squares problem, originally solved by the Lawson–Hanson active-set algorithm [10]. SciPy's `nnls` is a direct implementation [10]; the GUI's optional PyTorch backend uses projected gradient with FISTA acceleration instead [11, 12], which is significantly faster on GPU for large pixel counts. FISTA in its basic form is non-monotone and can oscillate on ill-conditioned problems; adaptive restart schemes that restore monotonicity and accelerate convergence are well established [13] and are a natural extension of the current backend.
 
 Because `H_seed` is fixed, the fitted `W` in fixed-H NNLS is not just a seed-scale convention. The NNMF scale ambiguity is only harmless when both sides of a component pair can be rescaled together. In fixed-H NNLS, rescaling `W` alone changes \(W H_{\mathrm{seed}}\) and therefore changes the fit. Internally, these fixed-H NNLS coefficients should remain on their fitted scale rather than being normalized to unit maximum. Display and export scaling can still be applied afterward for visualization.
 
@@ -380,7 +380,7 @@ The modes are best viewed as a progression of prior knowledge:
 - `Seeded NNMF`: guide the decomposition but still let spectra adapt.
 - `Fixed-H NNLS`: keep spectra fixed and solve only abundances.
 
-For difficult CARS data, the practical conclusion from the thesis [13] still holds up well:
+For difficult CARS data, the practical conclusion from the thesis [14] still holds up well:
 
 - PCA and random NNMF are very useful first passes,
 - seeded NNMF is usually the strongest general-purpose mode when prior information exists,
@@ -410,10 +410,11 @@ References are numbered continuously; the topical headings below are visual grou
 10. Charles L. Lawson and Richard J. Hanson, *Solving Least Squares Problems*, Prentice-Hall, 1974 (reprinted as SIAM Classics in Applied Mathematics 15, 1995). The active-set NNLS algorithm used by SciPy's `nnls`.
 11. Chih-Jen Lin, "Projected gradient methods for non-negative matrix factorization," *Neural Computation* 19(10), 2756–2779, 2007. Projected-gradient analysis of NMF subproblems, including the NNLS step solved by the PyTorch backend.
 12. Amir Beck and Marc Teboulle, "A fast iterative shrinkage-thresholding algorithm for linear inverse problems," *SIAM Journal on Imaging Sciences* 2(1), 183–202, 2009. FISTA acceleration used by the PyTorch NNLS backend.
+13. Brendan O'Donoghue and Emmanuel Candès, "Adaptive Restart for Accelerated Gradient Schemes," *Foundations of Computational Mathematics* 15(3), 715–732, 2015. Adaptive-restart variant of FISTA that restores monotonic convergence on ill-conditioned problems; cited as a natural extension of the current backend.
 
 **CRS imaging context**
 
-13. Christian Pilger, *Development of novel Optics and Analysis Tools for enhancing Biomedical Imaging by Coherent Raman Scattering*, PhD thesis, University of Bielefeld, 2019. Group-specific CRS and analysis context, including the seeded-NNMF reasoning.
-14. Paul Greife, *Implementation of a Hyper-Spectral Image Scan Capability in a Coherent Anti-Stokes Raman Scattering (CARS) Microscope*, Master's thesis, University of Bielefeld, 2017. Project-specific image-stack reshaping and acquisition context.
-15. Branko Vukosavljevic et al., "Vibrational spectroscopic imaging and live cell video microscopy for studying differentiation of primary human alveolar epithelial cells," *Journal of Biophotonics* 12(6), e201800052, 2019. Example application of CRS imaging with biologically meaningful spectral separation.
-16. Chaoyang Zhang, Delong Zhang, and Ji-Xin Cheng, "Coherent Raman Scattering Microscopy in Biology and Medicine," *Annual Review of Biomedical Engineering* 17, 415–445, 2015. Broader motivation for CRS imaging in biological and clinical settings.
+14. Christian Pilger, *Development of novel Optics and Analysis Tools for enhancing Biomedical Imaging by Coherent Raman Scattering*, PhD thesis, University of Bielefeld, 2019. Group-specific CRS and analysis context, including the seeded-NNMF reasoning.
+15. Paul Greife, *Implementation of a Hyper-Spectral Image Scan Capability in a Coherent Anti-Stokes Raman Scattering (CARS) Microscope*, Master's thesis, University of Bielefeld, 2017. Project-specific image-stack reshaping and acquisition context.
+16. Branko Vukosavljevic et al., "Vibrational spectroscopic imaging and live cell video microscopy for studying differentiation of primary human alveolar epithelial cells," *Journal of Biophotonics* 12(6), e201800052, 2019. Example application of CRS imaging with biologically meaningful spectral separation.
+17. Chaoyang Zhang, Delong Zhang, and Ji-Xin Cheng, "Coherent Raman Scattering Microscopy in Biology and Medicine," *Annual Review of Biomedical Engineering* 17, 415–445, 2015. Broader motivation for CRS imaging in biological and clinical settings.

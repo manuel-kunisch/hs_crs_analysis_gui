@@ -61,7 +61,7 @@ For seeded NNMF, generated W maps are normalized component by component to unit 
 | `average` | Uses the mean image. A neutral starting point that lets NNMF build all spatial structure from scratch. |
 | `empty` | Near-zero homogeneous map. Use this when a component should be discovered entirely from the data without a spatial prior. |
 
-A quick rule of thumb: components live in different pixels → `nnls`; components share pixels by design → `selective_score`; if unsure, try `nnls` first and look at the W maps — if they come out implausibly clean and disjoint compared to what you'd expect from the sample, switch to `selective_score`. This only affects the *seed*; seeded NNMF can still recover mixed pixels because `W` and `H` are both updated during the fit. See [Picking nnls vs selective_score](../reference/nnmf_nnls_modes.md#picking-nnls-vs-selective_score) for the longer reasoning.
+A quick rule of thumb: components live in different pixels → `nnls`; components share pixels by design → `selective_score`; if unsure, try `nnls` first and look at the W maps — if they come out implausibly clean and disjoint compared to what you'd expect from the sample, switch to `selective_score`. This only affects the *seed*; seeded NNMF can still recover mixed pixels because `W` and `H` are both updated during the fit. See [Picking nnls vs selective_score](../methods/nnmf_nnls_modes.md#picking-nnls-vs-selective_score) for the longer reasoning.
 
 For the special case above where an `H` seed is missing, the residual spectrum is first derived from a fit against the already available `H` seeds. The residual-derived spectrum fills the missing spectral seed; after that, the selected W-seed mode builds the spatial map for that component.
 

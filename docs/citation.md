@@ -36,4 +36,4 @@ The multivariate analysis methods implemented in this software draw on the follo
 1. Lee, D. D. & Seung, H. S. (2001). Algorithms for non-negative matrix factorization. *Advances in Neural Information Processing Systems*, 13.
 2. Paatero, P., Tapper, U., Aalto, P. & Kulmala, M. (1991). Matrix factorization methods for analysing diffusion battery data. *Journal of Aerosol Science*, 22, S273–S276.
 
-For the CRS/CARS/SRS microscopy context, see the references listed in [NNMF and NNLS modes](reference/nnmf_nnls_modes.md).
+For the CRS/CARS/SRS microscopy context, see the references listed in [NNMF and NNLS modes](methods/nnmf_nnls_modes.md).

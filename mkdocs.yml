@@ -24,6 +24,8 @@ nav:
   - Full Python Installation: installation.md
   - Quickstart: quickstart.md
   - Concepts: concepts.md
+  - Methods:
+      - NNMF and NNLS modes: methods/nnmf_nnls_modes.md
   - Tutorials:
       - 00 GUI basics:
           - GUI and pyqtgraph basics: tutorials/00_gui_and_pyqtgraph_basics.md
@@ -54,7 +56,6 @@ nav:
   - Reference:
       - Spectral axis and wavelength.json: reference/spectral_axis_and_wavelength_json.md
       - ROI manager and seed types: reference/roi_manager_and_seed_types.md
-      - NNMF and NNLS modes: reference/nnmf_nnls_modes.md
       - Fiji export: reference/fiji_export.md
       - Presets: reference/presets.md
   - Troubleshooting: troubleshooting.md

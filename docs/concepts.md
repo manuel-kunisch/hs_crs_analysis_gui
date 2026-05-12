@@ -1,6 +1,6 @@
 # Concepts
 
-This page explains the scientific and algorithmic ideas behind the GUI. It is intended as background reading. For practical mode selection, see [Analysis modes](tutorials/02_analysis_modes.md). For the full mathematical treatment, see [NNMF and NNLS modes](reference/nnmf_nnls_modes.md).
+This page explains the scientific and algorithmic ideas behind the GUI. It is intended as background reading. For practical mode selection, see [Analysis modes](tutorials/02_analysis_modes.md). For the full mathematical treatment, see [NNMF and NNLS modes](methods/nnmf_nnls_modes.md).
 
 ## Hyperspectral Image Stacks
 

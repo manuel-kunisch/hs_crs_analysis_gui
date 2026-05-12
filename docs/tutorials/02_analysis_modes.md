@@ -55,7 +55,7 @@ This is the main workflow mode. It uses the same non-negative factorization as r
 
 Seeded NNMF is the best compromise for most real datasets. It is more stable and interpretable than random NNMF because the initialization steers it away from chemically meaningless local optima. It is less rigid than fixed-H NNLS, so it can still adapt if your seeds are only approximate.
 
-When only spectral seeds are given, the GUI estimates spatial starting maps automatically. The W-seed mode dropdown controls how: `nnls` fits coefficient maps from the seeded spectra (default, usually best), `selective_score` is a heuristic that downweights pixels already well explained by other components, and `average`/`empty` are neutral fallbacks. See [Seeds, spectra, and W maps](03_seeds_spectral_and_spatial.md) for details.
+When only spectral seeds are given, the GUI estimates spatial starting maps automatically. The W-seed mode dropdown controls how: `nnls` fits coefficient maps from the seeded spectra (default, the most aggressive choice — aims at maximum unmixing, prefer it when components occupy different pixels), `selective_score` is a softer heuristic that down-weights pixels also explained by competing spectra (prefer it when mixing across pixels is expected by design), and `average`/`empty` are neutral fallbacks. See [Seeds, spectra, and W maps](03_seeds_spectral_and_spatial.md) and [Picking nnls vs selective_score](../reference/nnmf_nnls_modes.md#picking-nnls-vs-selective_score) for details.
 
 **When to use:** whenever approximate resonances or ROI spectra are available — which is the normal case once you have looked at the data with PCA or random NNMF.
 
@@ -86,11 +86,11 @@ For most datasets, the practical sequence is:
 
 The analysis panel exposes several settings that affect how NNMF and NNLS run internally. They are all saved in the preset.
 
-**NNMF solver** — two update rules are available: *Multiplicative Update (mu)*, the default, is reliable and enforces non-negativity at every step; *Coordinate Descent (cd)* can be faster on some datasets but is less commonly needed.
+**NNMF solver** — two update rules are available: *Multiplicative Update (mu)*, the default, is reliable and enforces non-negativity at every step; *Coordinate Descent (cd)* can be faster on some datasets but is less commonly needed. Note that MU cannot escape an exact zero in the init (it multiplies every update), so MU custom inits are lifted to a small `eps` internally just before the solve. CD does not need this and is left unchanged. See [Non-negativity, exact zeros, and the MU init eps lift](../reference/nnmf_nnls_modes.md#non-negativity-exact-zeros-and-the-mu-init-eps-lift) in the reference for the full explanation.
 
 **Backend** — the GUI options are *Automatic*, *CPU only*, and *Prefer GPU*. With the multiplicative-update solver, *Automatic* uses the PyTorch/CUDA backend when CUDA is available and falls back to scikit-learn; *CPU only* uses the scikit-learn CPU backend; *Prefer GPU* requests PyTorch/CUDA and falls back to CPU if CUDA is unavailable. Coordinate Descent always uses the scikit-learn CPU backend. See [GPU acceleration](02a_gpu_acceleration.md).
 
-**Iteration limits** — *NNMF max iterations* and *NNLS max iterations* both default to 1000. Increase them if the fit summary shows the solver has not converged; decrease them to speed up exploratory runs.
+**Iteration limits** — *NNMF max iterations* and *NNLS max iterations* both default to 1000. Increase them if the fit summary shows the solver has not converged; decrease them to speed up exploratory runs. See [Convergence criteria](../reference/nnmf_nnls_modes.md#convergence-criteria) for the exact stopping rules used by each backend (the PyTorch MU criterion samples the residual every 10 iterations, which is worth knowing if you compare results against another implementation).
 
 **Custom initialization** — forces NNMF to use the seeded W and H matrices without any rescaling beforehand. Enable this when the seeds are already on the right amplitude scale and you do not want the initializer to modify them.
 

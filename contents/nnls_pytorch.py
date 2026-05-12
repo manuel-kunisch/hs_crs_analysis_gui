@@ -97,7 +97,7 @@ def solve_batched_nnls_projected_gradient(
     n_pixels, _ = x_np.shape
     n_components = b_np.shape[1]
     chunk_size = max(int(chunk_size), 1)
-    abundance = np.full((n_pixels, n_components), eps, dtype=np.float32)
+    abundance = np.zeros((n_pixels, n_components), dtype=np.float32)
     chunk_iterations: list[int] = []
     total_residual_sq = 0.0
 
@@ -152,9 +152,9 @@ def solve_batched_nnls_projected_gradient(
 
             a = a_next
 
-        a_final = torch.clamp(a, min=eps)
-        abundance[start:stop] = a_final.detach().cpu().numpy()
-        residual = x_chunk - (a_final @ basis_t.T)
+        # Inner loop already clamps each update to >= 0, so a is non-negative here.
+        abundance[start:stop] = a.detach().cpu().numpy()
+        residual = x_chunk - (a @ basis_t.T)
         total_residual_sq += float(torch.sum(residual * residual).item())
         chunk_iterations.append(int(iterations_used))
 

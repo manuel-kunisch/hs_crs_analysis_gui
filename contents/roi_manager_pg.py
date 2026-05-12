@@ -2951,7 +2951,7 @@ class ROIManager(QtCore.QObject):
             offset = self.roi_table.cellWidget(idx, self.widget_columns['Offset']).value()
             xy_avg += offset
             if clip_negative:
-                xy_avg[xy_avg <= 0] = 1
+                xy_avg[xy_avg < 0] = 0
         if apply_scale:
             scale = self.roi_table.cellWidget(idx, self.widget_columns['Scale']).value()
             xy_avg *= scale
@@ -3702,7 +3702,7 @@ class ROIPlotter(pg.PlotWidget):
             center_wavenumber (float): The center of the Gaussian curve.
             hwhm (float): The Half Width at Half Maximum of the Gaussian curve.
             amp (float): Amplitude of the Gaussian curve.
-            eliminate_zeros (bool): If True, replaces zeros with a small epsilon value. Note: the dtype of the returned array will be float.
+            eliminate_zeros (bool): If True, lifts exact zeros to machine eps. This is only useful when the spectrum will seed multiplicative-update NMF (MU cannot escape exact zeros at initialization); NMF itself only requires entries >= 0.
         Returns:
             np.ndarray: A numpy array representing the Gaussian curve.
         """
@@ -3716,7 +3716,7 @@ class ROIPlotter(pg.PlotWidget):
         gaussian *= amp
 
         if eliminate_zeros:
-            # add float info eps to avoid errors with zeros for NNMF
+            # MU NMF init-time lift; NMF only requires entries >= 0.
             gaussian[gaussian == 0] += np.finfo(float).eps
         return gaussian
 

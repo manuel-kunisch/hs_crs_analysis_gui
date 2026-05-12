@@ -122,10 +122,9 @@ This is a global normalization over the loaded stack. It makes datasets with ver
 
 Before the image enters the analysis pipeline:
 
-- `NaN` and `Inf` are replaced by `0`,
-- exact zeros are replaced by a very small positive epsilon.
+- `NaN` and `Inf` are replaced by `0`.
 
-The epsilon replacement avoids later numerical issues in operations that assume strictly positive values. If this replacement is needed, the array is promoted to floating point internally.
+Exact zeros in the loaded image are preserved. NMF and NNLS only require entries to be non-negative (`>= 0`), not strictly positive, so legitimate zero pixels stay zero. Where multiplicative-update NMF needs a strictly positive *initialization*, the seed builders lift their own outputs to a small `eps` internally; this never overrides the loaded image data. See [Non-negativity, exact zeros, and the MU init eps lift](../reference/nnmf_nnls_modes.md#non-negativity-exact-zeros-and-the-mu-init-eps-lift) for the full reasoning.
 
 ### What binning changes
 
@@ -134,7 +133,7 @@ Spatial binning averages neighboring pixels. Averaging usually produces floating
 So the practical pipeline is often:
 
 ```text
-TIFF -> uint16 working range -> optional normalization -> optional epsilon cleanup -> optional binned float image
+TIFF -> uint16 working range -> optional normalization -> NaN/Inf cleanup -> optional binned float image
 ```
 
 The binned image is then the canonical image used for analysis and display.

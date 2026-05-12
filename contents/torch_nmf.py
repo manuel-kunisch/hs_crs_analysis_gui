@@ -34,10 +34,13 @@ def default_device() -> str:
     raise RuntimeError("PyTorch is not available.")
 
 
-def _as_nonnegative_float32(array: np.ndarray, eps: float) -> np.ndarray:
+def _as_nonnegative_float32(array: np.ndarray) -> np.ndarray:
+    # NMF requires inputs >= 0, not strictly > 0. The init paths below add a
+    # separate eps lift for W and H to dodge the multiplicative-update
+    # zero-stuck-zero issue.
     arr = np.asarray(array, dtype=np.float32)
     arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-    return np.maximum(arr, eps)
+    return np.maximum(arr, 0.0)
 
 
 def _validate_nmf_inputs(
@@ -115,7 +118,7 @@ def solve_nmf_multiplicative_updates(
         raise RuntimeError(f"PyTorch is not available: {_TORCH_IMPORT_ERROR}")
 
     x_np, n_components, w_init, h_init = _validate_nmf_inputs(data, n_components, w_init, h_init)
-    x_np = _as_nonnegative_float32(x_np, eps)
+    x_np = _as_nonnegative_float32(x_np)
 
     resolved_device = device or default_device()
     dev = torch.device(resolved_device)
@@ -128,12 +131,12 @@ def solve_nmf_multiplicative_updates(
     if w_init is None:
         w_np = np.random.default_rng(seed).random((n_samples, n_components), dtype=np.float32)
     else:
-        w_np = _as_nonnegative_float32(w_init, eps)
+        w_np = _as_nonnegative_float32(w_init)
 
     if h_init is None:
         h_np = np.random.default_rng(seed + 1).random((n_components, n_features), dtype=np.float32)
     else:
-        h_np = _as_nonnegative_float32(h_init, eps)
+        h_np = _as_nonnegative_float32(h_init)
 
     w = torch.as_tensor(w_np, device=dev)
     h = torch.as_tensor(h_np, device=dev)
@@ -159,20 +162,22 @@ def solve_nmf_multiplicative_updates(
 
     # Multiplicative updates for W and H. The reconstruction error is sampled
     # every few iterations and used as the stopping criterion.
+    # Note: MU naturally drives entries toward zero to expose sparsity, so we do
+    # NOT clamp W/H to >= eps after each update — that would bias the factors
+    # away from true zeros. The eps lift on init above is enough to avoid the
+    # zero-stuck-zero startup degeneracy.
     for iteration in range(1, int(max_iter) + 1):
         # Update W: W_ij *= (X @ H^T)_ij / (W @ H @ H^T)_ij
         if update_w:
             hht = h @ h.T
             xht = x @ h.T
             w = w * (xht / (w @ hht + eps))
-            w = torch.clamp(w, min=eps)
 
         # Update H: H_ij *= (W^T @ X)_ij / (W^T @ W @ H)_ij
         if update_h:
             wtw = w.T @ w
             wtx = w.T @ x
             h = h * (wtx / (wtw @ h + eps))
-            h = torch.clamp(h, min=eps)
 
         if normalize_w_columns:
             scale = torch.clamp(torch.sum(w, dim=0, keepdim=True), min=eps)

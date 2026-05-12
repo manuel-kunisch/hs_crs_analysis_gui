@@ -96,8 +96,8 @@ When only an H seed exists, the GUI has to estimate an initial W map before star
 
 | Mode | Behavior |
 |---|---|
-| `nnls` | Solves a non-negative least-squares problem using the seeded H spectra to get coefficient maps. Usually the most physically motivated starting point. |
-| `selective_score` | A heuristic spatial score based on the projection of the image onto the target spectrum, down-weighted where competing spectra score higher. Useful when NNLS-based initialization mixes components. |
+| `nnls` | Solves a non-negative least-squares fit against all seeded H spectra simultaneously. The most aggressive mode — aims at maximum unmixing, so pixels tend to be assigned to a single component. Best when chemistries are expected to live in **different pixels**. |
+| `selective_score` | A heuristic spatial score based on the projection of the image onto the target spectrum, down-weighted where competing spectra score higher. Softer than `nnls` — does not force one winner per pixel. Prefer it when **mixing across pixels is physically expected**. |
 | `h_weighted` | A legacy channel-weighted image heuristic. Less common in practice. |
 | `average` | Uses the mean image across all channels. A simple uniform-energy fallback. |
 | `empty` | A near-zero homogeneous map. Lets NNMF build the spatial structure entirely from scratch for that component. |

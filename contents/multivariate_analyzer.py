@@ -276,6 +276,20 @@ class MultivariateAnalyzer(object):
         """
         data_f32 = np.asarray(data, dtype=np.float32)
 
+        # Multiplicative-update NMF cannot escape exact zeros in the init: the
+        # W *= ... and H *= ... rules multiply any zero entry by zero forever.
+        # Lift custom inits to >= eps right at the solver boundary so zeros in
+        # the analyzer's stored seed_W / seed_H stay valid input, but never
+        # reach MU as exact zeros. CD does not have this issue and is left
+        # untouched. The torch backend re-clamps internally; the lift here is
+        # what protects the sklearn-MU custom-init path.
+        if self.nnmf_solver == 'mu':
+            eps = getattr(self, "nnmf_epsilon", 1e-8)
+            if w_init is not None:
+                w_init = np.maximum(np.asarray(w_init, dtype=np.float32), eps)
+            if h_init is not None:
+                h_init = np.maximum(np.asarray(h_init, dtype=np.float32), eps)
+
         torch_device = self._resolve_torch_nmf_device() if self.nnmf_solver == 'mu' else None
         if self.nnmf_solver == 'mu' and torch_device is not None:
             # Use the torch MU path when available; otherwise continue with sklearn below.
@@ -324,6 +338,23 @@ class MultivariateAnalyzer(object):
             "params": nnmf_model.get_params(),
         }, data_f32)
         return fixed_W, fixed_H, info
+
+    @staticmethod
+    def _column_seeded_mask(matrix: np.ndarray) -> np.ndarray:
+        """Boolean per-column: True iff the column is a valid NMF seed,
+        i.e. every entry is >= 0 and at least one entry is strictly > 0.
+        Zeros inside a populated column are fine; any negative entry
+        disqualifies that column."""
+        arr = np.asarray(matrix)
+        nonnegative = np.all(arr >= 0, axis=0)
+        has_signal = np.any(arr > 0, axis=0)
+        return nonnegative & has_signal
+
+    @staticmethod
+    def _all_columns_seeded(matrix: np.ndarray | None) -> bool:
+        if matrix is None:
+            return False
+        return bool(np.all(MultivariateAnalyzer._column_seeded_mask(matrix)))
 
     @staticmethod
     def _has_seed_signal(spectrum: np.ndarray | None, eps: float = 1e-8) -> bool:
@@ -395,7 +426,7 @@ class MultivariateAnalyzer(object):
         arr = np.maximum(arr, 0.0)
         if not np.any(arr > eps):
             return None
-        return np.maximum(arr, eps)
+        return arr
 
     def has_complete_H_seed_set(self, spectra: np.ndarray | None = None, eps: float = 1e-8) -> bool:
         target = self.seed_H if spectra is None else np.asarray(spectra)
@@ -473,7 +504,7 @@ class MultivariateAnalyzer(object):
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
         working_data = np.maximum(working_data, 0.0)
 
-        abundance = np.full((working_data.shape[0], basis.shape[1]), eps, dtype=np.float32)
+        abundance = np.zeros((working_data.shape[0], basis.shape[1]), dtype=np.float32)
         active_pixels = np.where(np.any(working_data > eps, axis=1))[0]
         logger.info(
             'Running SciPy NNLS abundance solve on %s active pixels with %s seed spectra.',
@@ -488,7 +519,7 @@ class MultivariateAnalyzer(object):
                 coeffs, _ = nnls(basis, working_data[pixel_index], maxiter=self.nnls_max_iter)
             except TypeError:
                 coeffs, _ = nnls(basis, working_data[pixel_index])
-            coeffs = np.maximum(coeffs, eps)
+            coeffs = np.maximum(coeffs, 0.0)
             abundance[pixel_index] = coeffs
             residual = working_data[pixel_index] - (basis @ coeffs)
             residual_sq += float(np.dot(residual, residual))
@@ -542,8 +573,8 @@ class MultivariateAnalyzer(object):
             working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
             working_data = np.maximum(working_data, 0.0)
             denom = float(np.dot(basis[:, 0], basis[:, 0])) + eps
-            abundance = np.full((working_data.shape[0], 1), eps, dtype=np.float32)
-            abundance[:, 0] = np.maximum((working_data @ basis[:, 0]) / denom, eps).astype(np.float32)
+            abundance = np.zeros((working_data.shape[0], 1), dtype=np.float32)
+            abundance[:, 0] = np.maximum((working_data @ basis[:, 0]) / denom, 0.0).astype(np.float32)
             residual = working_data - abundance[:, [0]] @ basis[:, [0]].T
             info = {
                 "algorithm": "closed_form_nnls",
@@ -571,7 +602,7 @@ class MultivariateAnalyzer(object):
                 )
                 info = self._finalize_fit_info(info, image_data)
                 info["backend"] = "torch-cuda"
-                return np.maximum(abundance, eps).astype(np.float32, copy=False), info
+                return np.maximum(abundance, 0.0).astype(np.float32, copy=False), info
             except Exception as exc:
                 logger.warning('PyTorch CUDA NNLS solver failed; falling back to SciPy NNLS. Error: %s', exc)
 
@@ -877,8 +908,9 @@ class MultivariateAnalyzer(object):
         if W.shape[0] != self.data_2d.shape[0]:
             raise ShapeError(self.data_2d.shape[0], W.shape[0])
         self.seed_W = W
-        # check for zeros in the seed matrix, if so the matrix is not prepared
-        self._W_prepared =  np.all(self.seed_W)
+        # A column is "prepared" once it carries any signal; exact zeros inside an
+        # otherwise populated column are legal for NMF (constraint is >= 0).
+        self._W_prepared = self._all_columns_seeded(self.seed_W)
         logger.info(f'Set W seed matrix, prepared={self._W_prepared}')
 
     def create_background_component_from_reference(
@@ -1147,7 +1179,7 @@ class MultivariateAnalyzer(object):
             seed = np.average(res_frames, axis=1, weights=weights)
             self.seed_W[:, i] = self._scale_w_seed_to_unity(seed, eps=eps)
 
-        if np.all(self.seed_W):
+        if self._all_columns_seeded(self.seed_W):
             self._W_prepared = True
 
         if debug_mode:
@@ -1208,8 +1240,8 @@ class MultivariateAnalyzer(object):
     ):
         """
         Estimate the W seed matrix from the H seed matrix.
-        If overwrite is False, only components that are not yet fully set up
-        (i.e. contain at least one zero) are estimated.
+        If overwrite is False, only components whose column is entirely zero
+        (i.e. not yet seeded) are estimated.
         """
         eps = getattr(self, "nnmf_epsilon", 1e-8)
         if self.seed_H is None:
@@ -1224,8 +1256,9 @@ class MultivariateAnalyzer(object):
         if overwrite:
             seed_indices = np.arange(self._n_components)
         else:
-            # columns that are NOT fully non-zero -> at least one zero element
-            seed_indices = np.where(~np.all(self.seed_W, axis=0))[0]
+            # columns that are not yet valid NMF seeds (all-zero, all-negative,
+            # or containing any negative entry)
+            seed_indices = np.where(~self._column_seeded_mask(self.seed_W))[0]
 
         skip_components = set(skip_components or [])
         if skip_components:
@@ -1255,19 +1288,22 @@ class MultivariateAnalyzer(object):
 
             self.seed_W[:, i] = W_col
 
-        # global check: all entries of W must be non-zero to be "prepared"
-        if np.all(self.seed_W):
-            logger.info('All entries of W are non-zero -> W is prepared.')
+        # global check: every component column must carry at least one non-zero entry
+        if self._all_columns_seeded(self.seed_W):
+            logger.info('All W components carry a seed -> W is prepared.')
             self._W_prepared = True
         else:
-            logger.warning('Some W entries are still zero; NNMF precondition not yet fulfilled.')
+            logger.warning('Some W components are still entirely zero; NNMF precondition not yet fulfilled.')
 
     def _init_unseeded_component(self, comp_idx: int, bgd: bool = False, dtype=np.uint16):
         """
         Fallback initialization for components that have no H seed at all.
         Creates:
-          - a smooth random H (all entries >= eps)
-          - a W based on averaged image intensities (all entries >= eps)
+          - a smooth random H
+          - a W based on averaged image intensities
+        Both are lifted to >= eps because they feed multiplicative-update NMF,
+        which cannot escape exact zeros at initialization. The lift is an MU
+        startup safeguard, not an NMF constraint (NMF only requires >= 0).
         """
         eps = getattr(self, "nnmf_epsilon", 1e-8)
         logger.warning(f'Component {comp_idx} has no H seed; initializing with smooth random H and averaged W.')
@@ -1280,7 +1316,7 @@ class MultivariateAnalyzer(object):
         kernel = np.ones(5, dtype=float) / 5.0
         h = np.convolve(h, kernel, mode="same")
 
-        # make strictly positive and normalize to mean image intensity scale
+        # Lift to eps so MU has room to update this row (zero-stuck-zero safeguard).
         mean_intensity = np.mean(self.data_2d, axis=None)
         h = np.maximum(h, eps)
         h /= h.max() * mean_intensity
@@ -1303,7 +1339,11 @@ class MultivariateAnalyzer(object):
                                bgd: bool = False,
                                normalize_w_seed: bool = True) -> np.ndarray:
         """
-        Estimate a *strictly positive* W seed for one component given its H seed.
+        Estimate a non-negative W seed for one component given its H seed.
+
+        The seed is lifted to >= eps before being handed back, because it feeds
+        multiplicative-update NMF and exact zeros cannot be revived by MU once
+        an iteration multiplies them away. NMF itself only requires W >= 0.
 
         The method is selected by ``self.w_seed_mode``:
         - ``nnls``: non-negative least-squares abundance map from all available H seeds
@@ -1421,8 +1461,8 @@ class MultivariateAnalyzer(object):
         if overwrite:
             frames = np.arange(self._n_components)
         else:
-            # find components that are not yet set up
-            frames = np.where(~np.all(self.seed_W, axis=0))[0]
+            # find components that are not yet valid NMF seeds
+            frames = np.where(~self._column_seeded_mask(self.seed_W))[0]
 
         for frame in frames:
             self._maybe_yield_to_ui()
@@ -1454,13 +1494,13 @@ class MultivariateAnalyzer(object):
                 # TODO more sophisticated seed estimation
                 self.estimate_W_seed_matrix_from_H()
                 # here also the seed for H is checked in the same step and filled if necessary
-            if self.seed_W is None or not np.all(self.seed_W):
+            if not self._all_columns_seeded(self.seed_W):
                 logger.error('NNMF aborted: No seed W matrix available or not completely filled')
                 return False
         else:
             logger.warning('Skipping seed estimation for NNMF; seeds are assumed to be set')
-            if not self.seed_W.all() and self.seed_H.all():
-                logger.error('NNMF aborted: No seed W matrix available or not completely filled')
+            if not (self._all_columns_seeded(self.seed_W) and self._all_columns_seeded(self.seed_H)):
+                logger.error('NNMF aborted: seed W or H matrix is not completely filled')
                 return False
 
         logger.info(f'{datetime.now()}: Starting NNMF with custom seeds')

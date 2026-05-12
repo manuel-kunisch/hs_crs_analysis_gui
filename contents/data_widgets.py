@@ -1692,14 +1692,12 @@ class DataHandler(QtWidgets.QWidget):
             image = image.astype(dtype)
             logger.info('Image normalized')
 
-        # check if image contains zeros or nans that are invalid for further processing
-        if np.isnan(image).any() or np.isinf(image).any() or np.any(image == 0):
+        # Only NaN/Inf are unsafe for downstream math; exact zeros are valid
+        # input for NMF/NNLS (constraint is >= 0, not > 0) and are preserved.
+        if np.isnan(image).any() or np.isinf(image).any():
             logger.warning('Loaded image contains NaN or Inf values, which may cause issues in further processing.')
             image = np.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
-            image = image.astype(np.float32) # ensure float type for epsilon replacement, float32 is well enough
-            image[image==0] = sys.float_info.epsilon    # replace zeros with small value to avoid issues in log scaling etc.
-            logger.warning('NaN and Inf values replaced with 0.0, zeros replaced with small epsilon value.')
-            logger.warning(f"Image dtype after replacement: {image.dtype}")
+            logger.warning('NaN and Inf values replaced with 0.0.')
 
         try:
             self._source_image, n_frames = self._interpret_loaded_image(image)

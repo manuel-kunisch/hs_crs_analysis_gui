@@ -55,11 +55,13 @@ For seeded NNMF, generated W maps are normalized component by component to unit 
 
 | Mode | When to use |
 |---|---|
-| `nnls` | Default. Gives a direct non-negative least-squares estimate of the spatial distribution. Best starting point for most datasets. |
-| `selective_score` | Useful when NNLS mixes similar components. Weights the spatial estimate by how uniquely the target spectrum explains the signal compared with competing spectra. |
+| `nnls` | Default. The most aggressive option — fits every pixel against all seeded spectra at once and pushes toward maximum unmixing, giving near-binary abundance maps. Best when components are expected to occupy **different pixels** (spatially separable chemistries). |
+| `selective_score` | The softer alternative. Favors the target spectrum but only down-weights competition instead of forcing one winner per pixel. Prefer this when **mixing across pixels is physically expected** (e.g. co-localized lipids/protein, fluorophore mixtures inside one voxel) — `nnls` tends to over-separate in that regime. |
 | `h_weighted` | Legacy channel-weighted heuristic. Rarely needed, but can help when NNLS is unstable. |
 | `average` | Uses the mean image. A neutral starting point that lets NNMF build all spatial structure from scratch. |
 | `empty` | Near-zero homogeneous map. Use this when a component should be discovered entirely from the data without a spatial prior. |
+
+A quick rule of thumb: components live in different pixels → `nnls`; components share pixels by design → `selective_score`; if unsure, try `nnls` first and look at the W maps — if they come out implausibly clean and disjoint compared to what you'd expect from the sample, switch to `selective_score`. This only affects the *seed*; seeded NNMF can still recover mixed pixels because `W` and `H` are both updated during the fit. See [Picking nnls vs selective_score](../reference/nnmf_nnls_modes.md#picking-nnls-vs-selective_score) for the longer reasoning.
 
 For the special case above where an `H` seed is missing, the residual spectrum is first derived from a fit against the already available `H` seeds. The residual-derived spectrum fills the missing spectral seed; after that, the selected W-seed mode builds the spatial map for that component.
 

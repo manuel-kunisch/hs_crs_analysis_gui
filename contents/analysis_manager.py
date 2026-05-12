@@ -166,7 +166,9 @@ class AnalysisManager(QtCore.QObject):
         gaussian *= amp
 
         if eliminate_zeros:
-            # add float info eps to avoid errors with zeros for NNMF
+            # Lift exact zeros to machine eps. This is purely an init-time
+            # safeguard for multiplicative-update NMF, where rows that start at
+            # zero stay zero forever. NMF itself only requires entries >= 0.
             gaussian[gaussian == 0] += np.finfo(float).eps
         return gaussian
 
@@ -964,7 +966,7 @@ class AnalysisManager(QtCore.QObject):
                     for comp, fixed_W in fixed_seed_W.items():
                         if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                             self.mv_analyzer.seed_W[:, comp] = fixed_W
-                    self.mv_analyzer._W_prepared = np.all(self.mv_analyzer.seed_W)
+                    self.mv_analyzer._W_prepared = self.mv_analyzer._all_columns_seeded(self.mv_analyzer.seed_W)
                     self.mv_analyzer.NNMF(skip_seed_fining=True)
                 else:
                     self.mv_analyzer.randomNNMF()
@@ -985,6 +987,7 @@ class AnalysisManager(QtCore.QObject):
                 if self._cancel_analysis_if_requested(
                         f"{self._analysis_series_label.lower()} {slice_index + 1}/{series.shape[0]} startup"
                 ):
+                    # user pressed stop
                     return
 
                 slice_data = np.array(series[slice_index], copy=True)
@@ -1087,7 +1090,7 @@ class AnalysisManager(QtCore.QObject):
                     for comp, fixed_W in fixed_seed_W.items():
                         if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                             self.mv_analyzer.seed_W[:, comp] = fixed_W
-                    self.mv_analyzer._W_prepared = np.all(self.mv_analyzer.seed_W)
+                    self.mv_analyzer._W_prepared = self.mv_analyzer._all_columns_seeded(self.mv_analyzer.seed_W)
                     self.mv_analyzer.NNMF(skip_seed_fining=True)
                 else:
                     self.mv_analyzer.randomNNMF()
@@ -1122,7 +1125,7 @@ class AnalysisManager(QtCore.QObject):
                 self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
                 self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
                 self.mv_analyzer.seed_W = None if display_seed_W is None else np.array(display_seed_W, copy=True)
-                self.mv_analyzer._W_prepared = bool(self.mv_analyzer.seed_W is not None and np.all(self.mv_analyzer.seed_W))
+                self.mv_analyzer._W_prepared = self.mv_analyzer._all_columns_seeded(self.mv_analyzer.seed_W)
 
     def _prepare_fixed_h_seed_template(self, show_seeds: bool = True, fill_missing_h: bool = True):
         """
@@ -1234,7 +1237,7 @@ class AnalysisManager(QtCore.QObject):
         for comp, fixed_W in fixed_seed_W.items():
             if 0 <= comp < self.mv_analyzer.seed_W.shape[1] and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                 self.mv_analyzer.seed_W[:, comp] = fixed_W
-        self.mv_analyzer._W_prepared = bool(np.all(self.mv_analyzer.seed_W))
+        self.mv_analyzer._W_prepared = self.mv_analyzer._all_columns_seeded(self.mv_analyzer.seed_W)
         self._log_last_nnls_summary()
         return {
             "H": np.array(self.mv_analyzer.seed_H, copy=True),

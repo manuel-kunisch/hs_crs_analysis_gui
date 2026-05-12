@@ -27,7 +27,7 @@ This checklist is an extra page for avoiding common mistakes before running or p
 - Check Gaussian seed rows.
 - Check fixed W/background seeds.
 - Preview seeds before running NNMF or fixed-H NNLS.
-- For fixed-H NNLS, confirm that every component has an H seed.
+- For fixed-H NNLS, confirm that every component has a valid final H seed. If any seed was residual-filled, inspect it before trusting the result.
 
 ## After Analysis
 

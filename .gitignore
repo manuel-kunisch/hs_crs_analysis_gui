@@ -2,3 +2,7 @@
 __pycache__/
 *.py[cod]
 /docs/examples/synthetic_quickstart_data/
+/.venv-build/
+/.venv-build-pytorch/
+/build/
+/dist/

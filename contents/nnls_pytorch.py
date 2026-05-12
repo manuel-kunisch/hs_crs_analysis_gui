@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -44,6 +44,7 @@ def solve_batched_nnls_projected_gradient(
         eps: float = 1e-8,
         chunk_size: int = 32768,
         use_acceleration: bool = True,
+        progress_callback: Optional[Callable[[], None]] = None,
 ) -> tuple[np.ndarray, dict]:
     """
     Solve the fixed-H NNMF subproblem for W with a batched PyTorch NNLS solver.
@@ -110,6 +111,11 @@ def solve_batched_nnls_projected_gradient(
     )
 
     for start in range(0, n_pixels, chunk_size):
+        if progress_callback is not None:
+            try:
+                progress_callback()
+            except Exception:
+                logger.debug("NNLS progress callback failed.", exc_info=True)
         stop = min(start + chunk_size, n_pixels)
         x_chunk = torch.as_tensor(x_np[start:stop], device=dev)
         c = x_chunk @ basis_t
@@ -121,6 +127,11 @@ def solve_batched_nnls_projected_gradient(
 
         iterations_used = max_iter
         for iteration in range(max_iter):
+            if progress_callback is not None and iteration % 10 == 0:
+                try:
+                    progress_callback()
+                except Exception:
+                    logger.debug("NNLS progress callback failed.", exc_info=True)
             grad = y @ gram - c
             a_next = torch.clamp(y - step * grad, min=0.0)
 

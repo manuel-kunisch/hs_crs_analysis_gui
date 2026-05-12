@@ -108,4 +108,4 @@ If the image wavenumbers are changed later, imported external spectra are re-pre
 6. Run fixed-H NNLS or seeded NNMF.
 7. Save the preset.
 
-For fixed-H NNLS, every component must have a valid H seed.
+For fixed-H NNLS, every component needs a valid final H seed. Missing components can be filled from the residual of the already seeded components, but external or ROI-derived spectra are preferable when exact fixed references are needed.

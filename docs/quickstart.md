@@ -1,6 +1,11 @@
 # Quickstart
 
-This page walks through a minimal end-to-end analysis in roughly 10 minutes. It assumes the software is already installed. If not, see [Installation](installation.md).
+This page walks through a minimal end-to-end analysis in roughly 10 minutes. It assumes the GUI can already start.
+
+There are two supported ways to get to that point:
+
+- Windows users who do not want Python can use the [standalone Windows .exe](standalone_windows.md), including the CUDA package for compatible NVIDIA GPUs.
+- Users who want to run from source or manage their own environment can use the [full Python installation](installation.md).
 
 ## What you need
 
@@ -25,7 +30,14 @@ If you do not have real data yet, the [Synthetic quickstart example](examples/sy
 
 ## Step 1: Start the GUI
 
-From an activated environment:
+With the standalone Windows `.exe`, extract the whole portable zip and double-click the app:
+
+- `HS_CRS_Analysis_GUI.exe` for the normal CPU package, or
+- `HS_CRS_Analysis_GUI_PyTorch.exe` for the PyTorch package.
+
+Keep the `.exe` next to its `_internal` folder.
+
+With a full Python installation, start from an activated environment:
 
 ```bash
 python main.py

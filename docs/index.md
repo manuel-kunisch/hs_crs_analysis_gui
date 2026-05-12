@@ -9,7 +9,8 @@ This documentation is designed to guide users through the installation, usage, a
 
 ## Start Here
 
-- [Installation](installation.md)
+- [Standalone Windows .exe](standalone_windows.md)
+- [Full Python installation](installation.md)
 - [Quickstart](quickstart.md)
 - [Concepts](concepts.md)
 - [Troubleshooting](troubleshooting.md)

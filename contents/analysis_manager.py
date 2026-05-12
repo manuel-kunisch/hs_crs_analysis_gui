@@ -1,5 +1,7 @@
 import logging
 import sys
+import time
+import traceback
 from datetime import datetime
 from typing import Tuple, Callable
 
@@ -35,6 +37,7 @@ debug = False
 class AnalysisWorker(QtCore.QObject):
     progress = QtCore.pyqtSignal(int)
     finished = QtCore.pyqtSignal(str)
+    failed = QtCore.pyqtSignal(str)
 
     def __init__(self, run_callable: Callable[[], None], method_getter: Callable[[], str]):
         super().__init__()
@@ -42,8 +45,14 @@ class AnalysisWorker(QtCore.QObject):
         self._method_getter = method_getter
 
     def run(self):
-        self._run_callable()
-        self.finished.emit(self._method_getter())
+        try:
+            self._run_callable()
+        except Exception:
+            error_text = traceback.format_exc()
+            logger.exception("Analysis worker failed.")
+            self.failed.emit(error_text)
+        finally:
+            self.finished.emit(self._method_getter())
 
 """
 # Threading option 2: use thread pool in case of multiple threads
@@ -85,6 +94,7 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_result_spectra: np.ndarray | None = None
         self._analysis_result_images: np.ndarray | None = None
         self._analysis_fit_info: dict | list[dict | None] | None = None
+        self._last_analysis_error: str | None = None
 
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
         # Main widget instantiated in the init_ui method
@@ -104,6 +114,8 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_cancel_requested = False
         self._analysis_was_cancelled = False
         self._analysis_running = False
+        self._seed_building = False
+        self._last_seed_event_pump = 0.0
         self._analyze_run_icon: QtGui.QIcon | None = None
         self._analyze_stop_icon: QtGui.QIcon | None = None
         self._nnmf_option_widgets: list[QtWidgets.QWidget] = []
@@ -120,6 +132,7 @@ class AnalysisManager(QtCore.QObject):
         self.thread_analysis.started.connect(self.worker.run)
         self.worker.finished.connect(self.thread_analysis.quit)
         self.worker.progress.connect(self._update_analysis_progress)
+        self.worker.failed.connect(self._on_analysis_failed)
         # Connect the finished function to the worker
         self.worker.finished.connect(lambda: self.analysis_completed(self.mv_analyzer.analysis_method))
         self.thread_analysis.finished.connect(self._on_analysis_thread_finished)
@@ -753,6 +766,20 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_cancel_requested = False
         self._set_analyze_button_idle_state()
 
+    def _on_analysis_failed(self, error_text: str):
+        self._last_analysis_error = error_text
+        self._analysis_result_spectra = None
+        self._analysis_result_images = None
+        self._analysis_fit_info = None
+        logger.error("Analysis failed:\n%s", error_text)
+        if self.analysis_widget is not None:
+            QtWidgets.QMessageBox.critical(
+                self.analysis_widget,
+                "Analysis failed",
+                "The analysis stopped because of an error.\n\n"
+                "The full traceback was written to the log.",
+            )
+
     def analyze_data(self):
         """
         Function to start the correct analysis method based on the selected radio button.
@@ -770,6 +797,7 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_result_spectra = None
         self._analysis_result_images = None
         self._analysis_fit_info = None
+        self._last_analysis_error = None
         if self._analysis_series_4d is not None:
             self._begin_analysis_progress(int(self._analysis_series_4d.shape[0]))
         else:
@@ -784,6 +812,9 @@ class AnalysisManager(QtCore.QObject):
                         "Fixed-H NNLS mode requires custom H seeds. Enable 'Custom initialization (NNMF)' first.",
                     )
                     return
+                if not self._confirm_component_seed_audit(fixed_h_mode=True):
+                    self._finish_analysis_progress()
+                    return
                 fill_missing_h = self._analysis_series_4d is not None
                 self._prepare_fixed_h_seed_template(show_seeds=True, fill_missing_h=fill_missing_h)
                 if not fill_missing_h and not self.mv_analyzer.has_complete_H_seed_set():
@@ -796,41 +827,9 @@ class AnalysisManager(QtCore.QObject):
                     )
                     return
             elif self.mv_analyzer.custom_nnmf_init:
-                unseeded, overranged = self._audit_component_seeds()
-                if unseeded or overranged:
-                    n = self.mv_analyzer.get_n_components()
-                    # Suggested n = highest component number that has any seed defined
-                    all_defined = [c for c in range(1, n + 1) if c not in unseeded] + overranged
-                    suggested_n = max(all_defined) if all_defined else 1
-                    body_parts = []
-                    if overranged:
-                        names = "\n".join(f"  • Component {c}" for c in overranged)
-                        body_parts.append(
-                            f"Seeds defined above the current component count ({n}) "
-                            f"— these will be silently ignored:\n{names}"
-                        )
-                    if unseeded:
-                        names = "\n".join(f"  • Component {c}" for c in unseeded)
-                        body_parts.append(
-                            f"Components within the current count that have no seed "
-                            f"— these will be initialized randomly:\n{names}"
-                        )
-                    msg = QtWidgets.QMessageBox(self.analysis_widget)
-                    msg.setWindowTitle("Component / seed mismatch")
-                    msg.setIcon(QtWidgets.QMessageBox.Warning)
-                    msg.setText("\n\n".join(body_parts))
-                    adjust_btn = msg.addButton(
-                        f"Adjust to {suggested_n} components", QtWidgets.QMessageBox.AcceptRole
-                    )
-                    msg.addButton("Continue anyway", QtWidgets.QMessageBox.DestructiveRole)
-                    msg.addButton(QtWidgets.QMessageBox.Cancel)
-                    msg.exec_()
-                    clicked = msg.clickedButton()
-                    if msg.buttonRole(clicked) == QtWidgets.QMessageBox.RejectRole:
-                        self._finish_analysis_progress()
-                        return
-                    if clicked is adjust_btn:
-                        self.num_components_spinbox.setValue(suggested_n)
+                if not self._confirm_component_seed_audit(fixed_h_mode=False):
+                    self._finish_analysis_progress()
+                    return
                 if self._use_fast_multislice_nnmf():
                     self.make_all_seeds_from_inputs(show_seeds=True)
                 elif self._analysis_series_4d is not None:
@@ -840,6 +839,8 @@ class AnalysisManager(QtCore.QObject):
                     self.make_all_seeds_from_inputs(show_seeds=True)
                 else:
                     self.make_all_seeds_from_inputs(show_seeds=True)
+        if self._analysis_series_4d is not None:
+            self._begin_analysis_progress(int(self._analysis_series_4d.shape[0]))
         self._analysis_running = True
         self._set_analyze_button_running_state()
         self.thread_analysis.start()
@@ -897,7 +898,7 @@ class AnalysisManager(QtCore.QObject):
             self._analysis_result_images = self.mv_analyzer.fixed_W_2D
             self._analysis_fit_info = None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
 
-    def _run_multislice_analysis(self):
+    def _run_multislice_analysis(self, *, store_reference_result: bool = False):
         series = self._analysis_series_4d
         if series is None or series.ndim != 4:
             raise RuntimeError("No 4D analysis series is configured.")
@@ -971,12 +972,14 @@ class AnalysisManager(QtCore.QObject):
                 if self._cancel_analysis_if_requested(f"reference {self._analysis_series_label.lower()}"):
                     return
 
-                self._apply_fixed_W_overrides_to_results(fixed_seed_W)
+                if store_reference_result:
+                    self._apply_fixed_W_overrides_to_results(fixed_seed_W)
                 reference_result = {
                     "H": np.array(self.mv_analyzer.fixed_H[:n_components], copy=True),
-                    "W": np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True),
                 }
-                reference_fit_info = None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
+                if store_reference_result:
+                    reference_result["W"] = np.array(self.mv_analyzer.fixed_W_2D[:n_components], copy=True)
+                    reference_fit_info = None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
 
             for slice_index in range(series.shape[0]):
                 if self._cancel_analysis_if_requested(
@@ -987,7 +990,13 @@ class AnalysisManager(QtCore.QObject):
                 slice_data = np.array(series[slice_index], copy=True)
                 logger.info("Running %s on %s %s/%s", analysis_method, self._analysis_series_label.lower(), slice_index + 1, series.shape[0])
 
-                if fast_mode and slice_index == reference_slice_index and reference_result is not None:
+                if (
+                        fast_mode
+                        and store_reference_result
+                        and slice_index == reference_slice_index
+                        and reference_result is not None
+                ):
+                    # unused path per default kwarg: stores fixed H result immediately and does not rerun nnmf
                     spectra_per_slice.append(np.array(reference_result["H"], copy=True))
                     images_per_slice.append(np.array(reference_result["W"], copy=True))
                     if fit_info_per_slice is not None:
@@ -1121,6 +1130,22 @@ class AnalysisManager(QtCore.QObject):
         This deliberately skips the full W construction because fixed-H modes rebuild or
         solve W separately afterwards.
         """
+        progress_started = not self._seed_building
+        previous_callback = getattr(self.mv_analyzer, "responsiveness_callback", None)
+        self.mv_analyzer.set_responsiveness_callback(self._pump_seed_build_events)
+        if progress_started:
+            self._begin_seed_building_progress()
+        try:
+            self._prepare_fixed_h_seed_template_impl(
+                show_seeds=show_seeds,
+                fill_missing_h=fill_missing_h,
+            )
+        finally:
+            self.mv_analyzer.set_responsiveness_callback(previous_callback)
+            if progress_started:
+                self._finish_seed_building_progress()
+
+    def _prepare_fixed_h_seed_template_impl(self, show_seeds: bool = True, fill_missing_h: bool = True):
         self._ensure_nnls_seed_mode_selected()
         self._fixed_seed_W = {}
         self._fixed_seed_W_counts = {}
@@ -1198,7 +1223,11 @@ class AnalysisManager(QtCore.QObject):
         self.mv_analyzer.seed_W = None
         self.mv_analyzer._W_prepared = False
         # calculate the abundance maps
-        self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
+        self._rebuild_W_seeds_from_H(
+            overwrite_existing=self._overwrite_existing_W_from_H,
+            normalize_w_seed=False,
+        )
+        # if not all spectra were set, fill them up now from residual
         self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
         if self.mv_analyzer.seed_W is None:
             self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()), dtype=np.float64)
@@ -1396,6 +1425,19 @@ class AnalysisManager(QtCore.QObject):
         -------
 
         """
+        progress_started = not self._seed_building
+        previous_callback = getattr(self.mv_analyzer, "responsiveness_callback", None)
+        self.mv_analyzer.set_responsiveness_callback(self._pump_seed_build_events)
+        if progress_started:
+            self._begin_seed_building_progress()
+        try:
+            self._make_all_seeds_from_inputs_impl(show_seeds=show_seeds)
+        finally:
+            self.mv_analyzer.set_responsiveness_callback(previous_callback)
+            if progress_started:
+                self._finish_seed_building_progress()
+
+    def _make_all_seeds_from_inputs_impl(self, show_seeds=True):
         self._fixed_seed_W = {}  # reset fixed W seeds
         self._fixed_seed_W_counts = {}
 
@@ -1437,10 +1479,11 @@ class AnalysisManager(QtCore.QObject):
 
         self.show_seed_window(seed_W_3d, seed_H_final, seed_pixels)
 
-    def _rebuild_W_seeds_from_H(self, overwrite_existing: bool = True):
+    def _rebuild_W_seeds_from_H(self, overwrite_existing: bool = True, normalize_w_seed: bool = True):
         self.mv_analyzer.estimate_W_seed_matrix_from_H(
             overwrite=overwrite_existing,
-            skip_components=self._fixed_seed_W.keys()
+            skip_components=self._fixed_seed_W.keys(),
+            normalize_w_seed=normalize_w_seed,
         )
 
     def show_seed_window(self, seed_W_3d, seed_H, seed_pixels):
@@ -1511,6 +1554,56 @@ class AnalysisManager(QtCore.QObject):
         overranged = sorted(c for c in defined if c > n)
         return unseeded, overranged
 
+    def _confirm_component_seed_audit(self, *, fixed_h_mode: bool = False) -> bool:
+        """Warn when selected components do not match ROI/resonance definitions."""
+        unseeded, overranged = self._audit_component_seeds()
+        if not unseeded and not overranged:
+            return True
+
+        n = self.mv_analyzer.get_n_components()
+        all_defined = [c for c in range(1, n + 1) if c not in unseeded] + overranged
+        suggested_n = max(all_defined) if all_defined else 1
+        body_parts = []
+
+        if overranged:
+            names = "\n".join(f"  - Component {c}" for c in overranged)
+            body_parts.append(
+                f"Seeds defined above the current component count ({n}) "
+                f"will be silently ignored:\n{names}"
+            )
+
+        if unseeded:
+            names = "\n".join(f"  - Component {c}" for c in unseeded)
+            if fixed_h_mode:
+                body_parts.append(
+                    "Components within the current count have no ROI/resonance H seed:\n"
+                    f"{names}\n\n"
+                    "Fixed-H NNLS needs a usable H spectrum for every component and will fill it from the residual data."
+                )
+            else:
+                body_parts.append(
+                    "Components within the current count have no seed and will be "
+                    f"initialized automatically:\n{names}"
+                )
+
+        msg = QtWidgets.QMessageBox(self.analysis_widget)
+        msg.setWindowTitle("Component / seed mismatch")
+        msg.setIcon(QtWidgets.QMessageBox.Warning)
+        msg.setText("\n\n".join(body_parts))
+        adjust_btn = msg.addButton(
+            f"Adjust to {suggested_n} components", QtWidgets.QMessageBox.AcceptRole
+        )
+        msg.addButton("Continue anyway", QtWidgets.QMessageBox.DestructiveRole)
+        msg.addButton(QtWidgets.QMessageBox.Cancel)
+        msg.exec_()
+
+        clicked = msg.clickedButton()
+        if clicked is None or msg.buttonRole(clicked) == QtWidgets.QMessageBox.RejectRole:
+            return False
+        if clicked is adjust_btn:
+            self.num_components_spinbox.setValue(suggested_n)
+        return True
+
     def reload_H_seeds_from_rois(self) -> None:
         seeds_list = self.roi_manager.get_roi_mean_curves()
         # TODO: Pass the seeds to the analyzer
@@ -1568,6 +1661,9 @@ class AnalysisManager(QtCore.QObject):
 
 
     def analysis_completed(self, analysis_method):
+        if self._last_analysis_error:
+            logger.warning(f"{datetime.now()}: {analysis_method} failed")
+            return
         if self._analysis_was_cancelled:
             logger.info(f"{datetime.now()}: {analysis_method} cancelled by user")
             return
@@ -1590,6 +1686,7 @@ class AnalysisManager(QtCore.QObject):
         if self.analysis_progress_widget is None or self.analysis_progress_bar is None or self.analysis_progress_label is None:
             return
         total_slices = max(1, int(total_slices))
+        self.analysis_progress_widget.setVisible(True)
         self.analysis_progress_label.setText(f"Slice progress 0/{total_slices}")
         self.analysis_progress_bar.setRange(0, 100)
         self.analysis_progress_bar.setValue(0)
@@ -1606,12 +1703,44 @@ class AnalysisManager(QtCore.QObject):
         self.analysis_progress_label.setText(f"Slice progress {completed}/{total_slices}")
         self.analysis_progress_bar.setValue(percent)
 
+    def _begin_seed_building_progress(self):
+        self._seed_building = True
+        self._last_seed_event_pump = 0.0
+        if self.analysis_progress_widget is not None and self.analysis_progress_bar is not None and self.analysis_progress_label is not None:
+            self.analysis_progress_widget.setVisible(True)
+            self.analysis_progress_label.setText("Building seeds")
+            self.analysis_progress_bar.setRange(0, 0)
+            self.analysis_progress_widget.setEnabled(True)
+        if getattr(self, "analyze_button", None) is not None and not self._analysis_running:
+            self.analyze_button.setText("Building seeds...")
+            self.analyze_button.setEnabled(False)
+        self._pump_seed_build_events(force=True)
+
+    def _finish_seed_building_progress(self):
+        self._seed_building = False
+        if not self._analysis_running:
+            self._set_analyze_button_idle_state()
+            self._finish_analysis_progress()
+        self._pump_seed_build_events(force=True)
+
+    def _pump_seed_build_events(self, force: bool = False):
+        app = QtWidgets.QApplication.instance()
+        if app is None or QtCore.QThread.currentThread() is not app.thread():
+            return
+        now = time.monotonic()
+        if not force and now - self._last_seed_event_pump < 0.05:
+            return
+        self._last_seed_event_pump = now
+        app.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents, 20)
+
     def _finish_analysis_progress(self):
         if self.analysis_progress_widget is None or self.analysis_progress_bar is None or self.analysis_progress_label is None:
             return
+        self.analysis_progress_bar.setRange(0, 100)
         self.analysis_progress_bar.setValue(0)
         self.analysis_progress_label.setText("Slice progress")
         self.analysis_progress_widget.setEnabled(False)
+        self.analysis_progress_widget.setVisible(False)
 
     def _sync_analysis_mode_controls(self):
         use_nnmf = bool(self.nnmf_radio.isChecked())
@@ -1937,17 +2066,27 @@ class AnalysisManager(QtCore.QObject):
 
     def show_W_seeds(self):
         """Open a temporary viewer for inspecting the current W maps."""
-        self._fixed_seed_W = {}
-        self._fixed_seed_W_counts = {}
-        self.reload_H_seeds_from_rois()
-        _, _, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True, debug_mode=False)
-        self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
-        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
-        # open a new floating composite_image with the W seeds in a pyqtgraph image view
-        W_seed_3d = self.mv_analyzer.seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
-                                                    self.mv_analyzer.raw_data_3d.shape[2], -1)
-        self.seed_W_view = self.make_W_seed_view(W_seed_3d, seed_pixels=seed_pixels)
-        self.seed_W_view.show()
+        progress_started = not self._seed_building
+        previous_callback = getattr(self.mv_analyzer, "responsiveness_callback", None)
+        self.mv_analyzer.set_responsiveness_callback(self._pump_seed_build_events)
+        if progress_started:
+            self._begin_seed_building_progress()
+        try:
+            self._fixed_seed_W = {}
+            self._fixed_seed_W_counts = {}
+            self.reload_H_seeds_from_rois()
+            _, _, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True, debug_mode=False)
+            self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
+            self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
+            # open a new floating composite_image with the W seeds in a pyqtgraph image view
+            W_seed_3d = self.mv_analyzer.seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
+                                                        self.mv_analyzer.raw_data_3d.shape[2], -1)
+            self.seed_W_view = self.make_W_seed_view(W_seed_3d, seed_pixels=seed_pixels)
+            self.seed_W_view.show()
+        finally:
+            self.mv_analyzer.set_responsiveness_callback(previous_callback)
+            if progress_started:
+                self._finish_seed_building_progress()
 
     def make_W_seed_view(self, W_seed_3d, seed_pixels: dict = None, plot_all_seeds: bool = False):
         seed_W_view = ImageViewYX()
@@ -2208,6 +2347,7 @@ class AnalysisManager(QtCore.QObject):
 
         # iterate over all components and create the W seeds
         for i in range(self.mv_analyzer.get_n_components()):
+            self._pump_seed_build_events()
             # check if any spectral info exists for this component
             info_dict_list = self.get_spectral_infos(i)
             if not info_dict_list:
@@ -2236,7 +2376,8 @@ class AnalysisManager(QtCore.QObject):
 
             if res_indices.size > 0:
                 seed = np.average(data[..., res_indices], axis=1, weights=weights)
-                seed_W[..., i] = seed
+                seed_W[..., i] = self.mv_analyzer._scale_w_seed_to_unity(seed)
+            self._pump_seed_build_events()
 
         self.mv_analyzer.set_W_seed_matrix(seed_W)
 
@@ -2254,6 +2395,7 @@ class AnalysisManager(QtCore.QObject):
 
             # --- 3. Fill H Seeds based on determined source ---
             for i in range(n_components):
+                self._pump_seed_build_events()
                 # Priority 1: Existing ROI
                 if self.roi_manager.is_component_defined(i):
                     decision_str = 'Existing user ROI'
@@ -2311,6 +2453,7 @@ class AnalysisManager(QtCore.QObject):
                     self.mv_analyzer.set_H_seed(i, seed_H[i, :])
                 else:
                     logger.info(f"No valid seed source found for component H[{i}]; it will need to be randomly initialized later.")
+                self._pump_seed_build_events()
 
         if debug_mode:
             self.show_seed_window(seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
@@ -2544,6 +2687,7 @@ class AnalysisManager(QtCore.QObject):
         seed_pixels_for_component: dict[int, tuple[np.ndarray, np.ndarray]] = {}
 
         for i in components_to_process:
+            self._pump_seed_build_events()
             # Skip if explicitly checking for components without ROI and this one has one,
             # unless find_for_all is True.
             if not find_for_all and self.roi_manager.is_component_defined(i):
@@ -2684,6 +2828,7 @@ class AnalysisManager(QtCore.QObject):
                     )
             else:
                 logger.warning(f"No seed pixels found for component {i} with current settings.")
+            self._pump_seed_build_events()
 
         return seed_pixels_for_component
 

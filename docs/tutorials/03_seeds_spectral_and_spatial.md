@@ -17,7 +17,21 @@ For spectra loaded from files, the imported spectrum is re-sampled to the curren
 
 For seeded NNMF and NNLS-based seed generation, these spectra are kept on their physical amplitude scale. The GUI does not normalize each seed spectrum independently before building the spectral model. This keeps the relation between `W` and `H` consistent with the underlying factorization idea \(X \approx WH\).
 
-If a component is missing an `H` seed entirely, the GUI now tries a special fallback before using the older random smooth spectrum. It first fits the already-seeded components to the data, forms a positive residual, averages a small set of strong residual spectra, and uses that residual-derived shape as the missing `H` seed. That fallback spectrum is then rescaled to match the existing `H` seed basis as closely as possible, so it starts on a comparable amplitude scale instead of on the smaller residual-data scale. If no stable residual candidate can be built, the legacy random smooth fallback is still used.
+### Missing H seeds and residual fallback
+
+If a component is missing an `H` seed entirely, the GUI first tries to build one from the data residual before using the older random smooth fallback.
+
+The residual fallback works as follows:
+
+1. The GUI collects the usable `H` seeds that already exist for other components.
+2. It chooses the working image data for the missing component. Background components use raw data. Other components use processed/background-subtracted data when **Use subtracted data** is enabled for that component, and raw data when it is disabled.
+3. It fits the existing `H` basis to every pixel with non-negative least squares.
+4. It subtracts that fitted contribution from the image data and keeps only the positive residual.
+5. It ranks residual pixels by unexplained signal strength. With the **Score** seed-pixel metric, the ranking also favors spectra that are novel relative to the existing seed basis.
+6. It takes a small set of the strongest residual spectra, normalizes each candidate spectrum by its own maximum, averages them, smooths the average, and clamps it to positive values.
+7. It rescales the new residual-derived `H` seed to the amplitude scale of the existing `H` seed basis where possible. This keeps the new seed comparable to ROI, file, or imported spectra instead of leaving it on a much smaller residual-only scale.
+
+If no stable residual candidate can be built, the legacy random smooth fallback is still used. In fixed-H NNLS setup this means a missing component can still be filled before the `W` maps are solved. The seed-audit warning may appear because the component was missing at the start; choosing **Continue anyway** lets the residual fallback try to fill it, but the resulting seed should still be previewed and checked.
 
 In the ROI table, these appear as normal ROI rows or dummy ROI rows. A dummy ROI does not need to correspond to a drawn spatial region; it can carry a spectrum or a fixed W map.
 
@@ -35,7 +49,9 @@ The GUI can estimate W maps from H seeds using different modes:
 - average image fallback,
 - homogeneous empty map.
 
-The modes do not all have the same meaning. The NNLS abundance map is a direct coefficient estimate from the seeded spectra. The selective score map is a heuristic spatial guess based on spectral projection and competition. For that score-map mode, the GUI leaves `H` unchanged and rescales the resulting `W` seed map afterward to unit maximum. The other seed modes keep their natural numeric scale.
+The modes do not all have the same meaning. The NNLS abundance map is a direct coefficient estimate from the seeded spectra. The selective score map is a heuristic spatial guess based on spectral projection and competition. H-weighted and average modes are image-derived fallbacks.
+
+For seeded NNMF, generated W maps are normalized component by component to unit maximum before they are used as initialization. This is intentional. NNMF has a per-component scale ambiguity: multiplying one W column by a constant and dividing the matching H row by the same constant leaves \(X \approx W H\) unchanged. During seeded NNMF, both W and H are updated, so the solver can adapt the matching H row to the normalized W seed scale while fitting the data. Since ROI-derived H seeds usually carry the spectral/count scale, normalized W seeds mainly encode spatial abundance shape and are comparable between components.
 
 | Mode | When to use |
 |---|---|
@@ -45,9 +61,11 @@ The modes do not all have the same meaning. The NNLS abundance map is a direct c
 | `average` | Uses the mean image. A neutral starting point that lets NNMF build all spatial structure from scratch. |
 | `empty` | Near-zero homogeneous map. Use this when a component should be discovered entirely from the data without a spatial prior. |
 
-For the special case above where an `H` seed is missing, the residual spectrum is first derived from a fit against the already available `H` seeds. In the default case, strong residual pixels are ranked by residual strength. If the active `W`-seed mode is `selective_score`, those residual pixels are instead ranked by a novelty-weighted score that prefers strong unexplained signal over signal already well described by the existing seed basis.
+For the special case above where an `H` seed is missing, the residual spectrum is first derived from a fit against the already available `H` seeds. The residual-derived spectrum fills the missing spectral seed; after that, the selected W-seed mode builds the spatial map for that component.
 
 Fixed W maps can also be attached to dummy ROIs. These fixed W seeds are useful for background components or for importing spatial maps from previous results.
+
+Do not confuse normalized W seeds with fixed-H NNLS result maps. The per-component scale ambiguity is useful for NNMF initialization because both W and H can still change. In fixed-H NNLS, H is locked and W is the actual fitted coefficient map. Rescaling W alone would change \(W H\) and the reconstruction error, so those coefficients should keep the scale needed to reconstruct the measured data from the fixed spectra; visualization/export scaling is a separate step.
 
 ## Seed Initialization Controls
 
@@ -59,6 +77,14 @@ The **Seed Initialization** controls in the **Analysis** panel decide how seed i
 | **H seed pixel metric** | How residual fallback pixels are ranked when a component is missing an H seed. | **Max Intensity** for ordinary use; **Score** when looking for spectrally novel residuals. |
 | **Overwrite existing W with H-based map** | Whether H-based W estimation replaces existing W seeds or only fills missing W columns. | Enabled for a clean seeded run; disabled when you imported or generated fixed W maps that should stay dominant. |
 | **Test seeds** | Builds the current seed matrices and opens the seed preview window without running the final analysis. | Use before long NNMF or 4D runs. |
+
+### Overwriting W maps from H
+
+When **Overwrite existing W with H-based map** is enabled, any W image that was gathered from the spectral information table is treated as temporary for components that already have a usable `H` seed. The final `W` seed is rebuilt from the `H` seed and the active **W map from H** mode, for example with an NNLS abundance fit.
+
+This means the spectral-info image itself is completely unused as the final `W` seed for that component. If a component already has a valid `H` seed and overwrite is enabled, spectral-info settings such as resonance position, width, amplitude, and seed-pixel count generally do not shape the final `W` map. The important exception is the **Use subtracted data** setting, which can still decide whether the H-based map and residual seed estimation use processed/background-subtracted data or raw data.
+
+If you want the W image gathered from spectral information to remain the spatial seed, disable **Overwrite existing W with H-based map** or attach the map as a fixed W seed. If no valid `H` seed exists yet, spectral information can still help create or fill the missing spectral seed before the H-based map is built.
 
 ## ROI-Derived Seeds
 

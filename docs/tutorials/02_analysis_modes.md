@@ -9,7 +9,7 @@ This page explains which mode to choose in the GUI and what kind of result to ex
 | PCA | none | — | — | First look, artifact check |
 | Random NNMF | none | yes | yes | Unguided non-negative exploration |
 | Seeded NNMF | H and/or W | yes | yes | Main guided workflow |
-| Fixed-H NNLS | H required | **no** | yes | Stable cross-slice comparison |
+| Fixed-H NNLS | H basis | **no** | yes | Stable cross-slice comparison |
 
 The modes form a progression: each one uses more prior knowledge and enforces it more strictly.
 
@@ -22,7 +22,7 @@ The GUI exposes `PCA` and `NNMF` as the main method buttons. The practical NNMF 
 | PCA | Select **PCA**, then **Run Analysis**. | Loaded image only. |
 | Random NNMF | Select **NNMF**, disable **Custom initialization**, leave **Fixed-H NNLS mode** disabled, then **Run Analysis**. | Loaded image and component count. |
 | Seeded NNMF | Select **NNMF**, enable **Custom initialization**, leave **Fixed-H NNLS mode** disabled, then **Run Analysis**. | At least useful H and/or W seeds from ROIs, spectra, Gaussian models, or imported results. |
-| Fixed-H NNLS | Select **NNMF**, enable **Custom initialization** and **Fixed-H NNLS mode**, then **Run Analysis**. | Every component must have an H seed. |
+| Fixed-H NNLS | Select **NNMF**, enable **Custom initialization** and **Fixed-H NNLS mode**, then **Run Analysis**. | A valid final H basis. Missing components can be residual-filled, but should be previewed carefully. |
 | 4D hybrid NNMF/NNLS | For 4D data, select **NNMF**, enable **Custom initialization**, enable **4D: NNMF ref slice, NNLS others**, then **Run Analysis**. | Seeds for the reference slice; the fitted H is reused across other slices. |
 
 > Screenshot placeholder: Analysis panel with **PCA**, **NNMF**, **Custom initialization**, **Fixed-H NNLS mode**, **W map from H**, backend, solver, iteration limits, component count, and **Run Analysis** labeled.
@@ -61,7 +61,9 @@ When only spectral seeds are given, the GUI estimates spatial starting maps auto
 
 ## Fixed-H NNLS
 
-Fixed-H NNLS is the strictest mode. The spectra are locked to the provided seeds and cannot change. Only the spatial abundance maps are fitted, independently for each pixel.
+Fixed-H NNLS is the strictest mode. The spectra are locked to the final H seed basis and cannot change. Only the spatial abundance maps are fitted, independently for each pixel.
+
+Missing H seeds can be filled from the residual of the already seeded components, but those residual-filled spectra are fallback guesses and should be checked before trusting the fixed-H result.
 
 This makes results directly comparable across z slices, time points, or fields of view because the spectral basis is the same everywhere. The trade-off is that the mode is only as good as the supplied spectra — if a seed spectrum is wrong, the map will be mathematically consistent but scientifically misleading. Results can also look grainier than NNMF maps. Because the exact H is forced as the spectral basis, every pixel must be explained using only those fixed spectra — there is no freedom to let the basis shift slightly to better fit local variations. That strictness is the point of the mode, but it means spatial noise is not absorbed by small spectral adjustments the way it can be in NNMF. Grainier maps are not a sign of a worse fit; they are a direct consequence of holding H fixed.
 If the images look too grainy, consider switching to seeded NNMF mode.

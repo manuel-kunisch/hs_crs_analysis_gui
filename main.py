@@ -4,10 +4,15 @@ import os
 import sys
 
 import numpy as np
+
+# On Windows, importing PyQt before torch can make torch's c10.dll fail to
+# initialize. Preload the optional torch modules before any Qt imports so the
+# PyTorch NNMF/NNLS backends remain available in source and frozen builds.
+from contents import nnls_pytorch, torch_nmf
 import pyqtgraph as pg
 from PyQt5 import QtCore, Qt  # Import the necessary modules
 from PyQt5 import QtWidgets
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QIcon
 from pyqtgraph.dockarea.Dock import Dock
 from pyqtgraph.dockarea.DockArea import DockArea
 
@@ -20,6 +25,98 @@ from contents.spectral_axis import normalize_spectral_unit, spectral_axis_label
 
 logger = logging.getLogger('Main')
 logger.setLevel(logging.INFO)
+
+
+def resource_path(relative_path: str) -> str:
+    """Resolve files both from source and from a PyInstaller bundle."""
+    base_path = getattr(sys, "_MEIPASS", os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
+
+
+def _run_backend_self_test(output_path: str | None = None) -> int:
+    """Hidden maintainer check for packaged PyTorch backend availability."""
+    import traceback
+
+    result = {
+        "torch_available": False,
+        "cuda_available": False,
+        "torch_version": None,
+        "torch_cuda_version": None,
+        "cuda_device_count": 0,
+        "cuda_devices": [],
+        "torch_import_error": None,
+        "nnls_torch_import_error": None,
+        "nmf_backend": None,
+        "nnls_backend": None,
+        "ok": False,
+        "error": None,
+    }
+    try:
+        from contents import nnls_pytorch, torch_nmf
+        from contents.multivariate_analyzer import MultivariateAnalyzer
+
+        result["torch_available"] = bool(torch_nmf.torch_available())
+        result["torch_import_error"] = (
+            None if torch_nmf.import_error() is None else repr(torch_nmf.import_error())
+        )
+        result["nnls_torch_import_error"] = (
+            None if nnls_pytorch.import_error() is None else repr(nnls_pytorch.import_error())
+        )
+        if torch_nmf.torch_available():
+            torch = torch_nmf.torch
+            result["torch_version"] = getattr(torch, "__version__", None)
+            result["torch_cuda_version"] = getattr(torch.version, "cuda", None)
+            result["cuda_available"] = bool(torch.cuda.is_available())
+            result["cuda_device_count"] = int(torch.cuda.device_count())
+            result["cuda_devices"] = [
+                torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())
+            ]
+
+        data = np.array(
+            [
+                [[2.0, 0.2], [1.8, 0.1]],
+                [[0.1, 1.9], [0.2, 2.1]],
+                [[1.0, 1.0], [0.9, 1.1]],
+            ],
+            dtype=np.float32,
+        )
+        analyzer = MultivariateAnalyzer(data, 2, np.arange(data.shape[0]), method="NNMF")
+        analyzer.set_nnmf_solver("mu")
+        analyzer.set_nnmf_backend_preference("gpu")
+        analyzer.seed_H = np.array([[2.0, 0.1, 1.0], [0.1, 2.0, 1.0]], dtype=np.float32)
+        analyzer.seed_H_background_flag = np.zeros(2, dtype=bool)
+        analyzer.seed_W = np.full((analyzer.data_2d.shape[0], 2), 0.5, dtype=np.float32)
+        analyzer._W_prepared = True
+        analyzer.NNMF(skip_seed_fining=True)
+        result["nmf_backend"] = analyzer.last_nnmf_info.get("backend") if analyzer.last_nnmf_info else None
+
+        nnls_info = analyzer.solve_fixed_H_nnls(
+            H_matrix=analyzer.seed_H,
+            use_processed_data=False,
+            source_key="backend-self-test",
+        )
+        result["nnls_backend"] = nnls_info.get("backend")
+
+        result["ok"] = bool(
+            result["torch_available"]
+            and result["nmf_backend"]
+            and str(result["nmf_backend"]).startswith("torch-")
+            and result["nnls_backend"] in {"torch-cuda", "closed-form"}
+        )
+    except Exception as exc:
+        result["error"] = {
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+    encoded = json.dumps(result, indent=2)
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as fh:
+            fh.write(encoded)
+    else:
+        print(encoded)
+    return 0 if result["ok"] else 1
+
 
 #image_file = imread(
 #    '/Users/mkunisch/Nextcloud/Manuel_BA/HS_CARS_Lung_cells_day_2_Vukosaljevic_et_al/2017_03_23_Lungcells_Day2_60mWBoth_2xZoom_16ms_Pos2_HS_CARS_ch-1_C.tif')
@@ -637,10 +734,17 @@ class MainApplication(QtWidgets.QMainWindow):
             self.analysis_manager.seed_window.close()
 
 if __name__ == '__main__':
-    import faulthandler, signal
-    faulthandler.enable(all_threads=True)
+    if "--backend-self-test" in sys.argv:
+        arg_index = sys.argv.index("--backend-self-test")
+        output = sys.argv[arg_index + 1] if len(sys.argv) > arg_index + 1 else None
+        sys.exit(_run_backend_self_test(output))
+
+    import faulthandler
+    if sys.stderr is not None:
+        faulthandler.enable(all_threads=True)
     from contents.darkmode import set_darkmode
     app = QtWidgets.QApplication(sys.argv)  # Create a QApplication instance that runs in a dedicated thread.
+    app.setWindowIcon(QIcon(resource_path("contents/HS-MOSAIC-logo.ico")))
     # Issue: Unlike on MacOS, darkmode is not automatically set with Windows 
     set_darkmode(app)
     main_app = MainApplication()

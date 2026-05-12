@@ -1,10 +1,21 @@
-# Installation
+# Full Python Installation
 
-This page covers all installation paths for HS MV Analysis.
+This page covers the full Python-based installation of HS MV Analysis.
+
+Use this route when you want to run from source, modify the project, use Linux/macOS, or manage the Python environment yourself.
+
+If you only want to run the GUI on Windows and do not want to install Python, use the [Standalone Windows .exe](standalone_windows.md) instead. The standalone `.exe` packages already contain Python and the required dependencies.
+
+## Choose Your Install Route
+
+| Route | Best for | Python install needed? | Page |
+|---|---|---:|---|
+| Standalone Windows `.exe` | Windows users who only want to run the GUI, including optional NVIDIA/CUDA packages | No | [Standalone Windows .exe](standalone_windows.md) |
+| Full Python installation | Developers, source-code users, Linux/macOS users, custom environments | Yes | This page |
 
 ## Prerequisites
 
-Before installation, you need:
+For the full Python installation, you need:
 
 - Python **3.11 or newer**
 - either **Conda** (recommended) or plain **pip/venv**

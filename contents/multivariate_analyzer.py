@@ -62,7 +62,20 @@ class MultivariateAnalyzer(object):
         self._nnls_abundance_cache = {}
         self.last_nnls_info: dict | None = None
         self.last_nnmf_info: dict | None = None
+        self.responsiveness_callback = None
         self.update_image_data(data, n_components, wavenumbers)
+
+    def set_responsiveness_callback(self, callback):
+        self.responsiveness_callback = callback
+
+    def _maybe_yield_to_ui(self):
+        callback = self.responsiveness_callback
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            logger.debug("Responsiveness callback failed.", exc_info=True)
 
     def update_spectral_info(self, spectral_info: list[dict[str, float | int]]):
         self.spectral_info = spectral_info
@@ -468,7 +481,9 @@ class MultivariateAnalyzer(object):
             basis.shape[1],
         )
         residual_sq = 0.0
-        for pixel_index in active_pixels:
+        for loop_index, pixel_index in enumerate(active_pixels):
+            if loop_index % 32 == 0:
+                self._maybe_yield_to_ui()
             try:
                 coeffs, _ = nnls(basis, working_data[pixel_index], maxiter=self.nnls_max_iter)
             except TypeError:
@@ -488,6 +503,7 @@ class MultivariateAnalyzer(object):
             "max_iter": int(self.nnls_max_iter),
             "final_error": float(residual_sq ** 0.5),
         }
+        self._maybe_yield_to_ui()
         return abundance, self._finalize_fit_info(info, working_data)
 
     def _build_nnls_abundance_matrix(
@@ -551,6 +567,7 @@ class MultivariateAnalyzer(object):
                     tol=self.torch_nnls_tol,
                     eps=eps,
                     chunk_size=self.torch_nnls_chunk_size,
+                    progress_callback=self._maybe_yield_to_ui,
                 )
                 info = self._finalize_fit_info(info, image_data)
                 info["backend"] = "torch-cuda"
@@ -644,12 +661,14 @@ class MultivariateAnalyzer(object):
             prepared_target: np.ndarray,
             eps: float,
             source_key: str,
+            normalize_w_seed: bool = True,
     ) -> np.ndarray:
         basis, component_to_basis = self._get_seed_basis(eps=eps)
         if component_index not in component_to_basis:
             logger.info('NNLS abundance map for component %s falls back to target projection (target basis missing).',
                         component_index)
-            return np.maximum(self._project_target_strength(image_data, prepared_target), eps)
+            w_map = np.maximum(self._project_target_strength(image_data, prepared_target), eps)
+            return self._scale_w_seed_to_unity(w_map, eps=eps) if normalize_w_seed else w_map
 
         target_basis_index = component_to_basis[component_index]
         abundance = self._get_cached_nnls_abundance_matrix(
@@ -659,7 +678,8 @@ class MultivariateAnalyzer(object):
             eps,
             source_key,
         )
-        return np.maximum(abundance[:, target_basis_index], eps)
+        w_map = np.maximum(abundance[:, target_basis_index], eps)
+        return self._scale_w_seed_to_unity(w_map, eps=eps) if normalize_w_seed else w_map
 
     def solve_fixed_H_nnls(
             self,
@@ -1045,10 +1065,13 @@ class MultivariateAnalyzer(object):
             self.estimate_W_seed_matrix_from_H(overwrite=False)
         if fill_H_seed and not self._W_prepared:
             logger.warning('W seeds still not prepared. Creating missing H seeds before W fallback.')
+            self._maybe_yield_to_ui()
             self.set_up_missing_H_seeds()
+            self._maybe_yield_to_ui()
             self.estimate_W_seed_matrix_from_H(overwrite=False)
         if not self._W_prepared:
             logger.warning('W seeds still not prepared, using average intensity for remaining components')
+            self._maybe_yield_to_ui()
             self.set_up_random_W_seed(overwrite=False)
         return self._W_prepared
         # W seed estimation should be done by now, time for H
@@ -1073,6 +1096,7 @@ class MultivariateAnalyzer(object):
 
         # iterate over all components and create the H seeds
         for cmp in remaining_components:
+            self._maybe_yield_to_ui()
             logger.info(f'Creating H seed for component {cmp}')
             if self.seed_H_background_flag[cmp]:
                 logger.info(f'Component {cmp} is marked as background, using raw data for H seed estimation')
@@ -1085,6 +1109,7 @@ class MultivariateAnalyzer(object):
     def make_W_seeds_from_spectral_info(self, reset_old_seed=True, debug_mode=True):
         """ testing function if the spectal info is correctly interpreted """
         shape_W = (self.data_2d.shape[0], self._n_components)
+        eps = getattr(self, "nnmf_epsilon", 1e-8)
         if reset_old_seed or self.seed_W is None:
             self.seed_W = np.zeros(shape_W)
 
@@ -1120,7 +1145,7 @@ class MultivariateAnalyzer(object):
 
             res_frames = data[..., frames]
             seed = np.average(res_frames, axis=1, weights=weights)
-            self.seed_W[:, i] = seed
+            self.seed_W[:, i] = self._scale_w_seed_to_unity(seed, eps=eps)
 
         if np.all(self.seed_W):
             self._W_prepared = True
@@ -1174,7 +1199,13 @@ class MultivariateAnalyzer(object):
         # logger.info(f'Selecting indices {resonance_indices}, Info: {spectral_info}')
         return np.sort(resonance_indices)  # Return indices in ascending order of original wavenumbers
 
-    def estimate_W_seed_matrix_from_H(self, spectral_info=None, overwrite=False, skip_components=None):
+    def estimate_W_seed_matrix_from_H(
+            self,
+            spectral_info=None,
+            overwrite=False,
+            skip_components=None,
+            normalize_w_seed: bool = True,
+    ):
         """
         Estimate the W seed matrix from the H seed matrix.
         If overwrite is False, only components that are not yet fully set up
@@ -1203,6 +1234,7 @@ class MultivariateAnalyzer(object):
         logger.info('W components to (re)seed from H using %s: %s', self.w_seed_mode, seed_indices)
 
         for i in seed_indices:
+            self._maybe_yield_to_ui()
             H = self.seed_H[i]
 
             # --- case 1: H is completely zero -> use fallback init for both H and W ---
@@ -1217,7 +1249,8 @@ class MultivariateAnalyzer(object):
                 i,
                 H,
                 spectral_info=spectral_info,
-                bgd=self.seed_H_background_flag[i]
+                bgd=self.seed_H_background_flag[i],
+                normalize_w_seed=normalize_w_seed,
             )
 
             self.seed_W[:, i] = W_col
@@ -1261,13 +1294,14 @@ class MultivariateAnalyzer(object):
             image_data = self.resonance_data_2d
 
         W_col = np.mean(image_data, axis=1)
-        W_col = np.maximum(W_col, eps)  # ensure strictly positive
+        W_col = self._scale_w_seed_to_unity(W_col, eps=eps)
         self.seed_W[:, comp_idx] = W_col
 
     def estimate_W_seed_with_H(self, component_index: int,
                                H: np.ndarray,
                                spectral_info: np.ndarray | None = None,
-                               bgd: bool = False) -> np.ndarray:
+                               bgd: bool = False,
+                               normalize_w_seed: bool = True) -> np.ndarray:
         """
         Estimate a *strictly positive* W seed for one component given its H seed.
 
@@ -1290,7 +1324,7 @@ class MultivariateAnalyzer(object):
         if prepared_target is None:
             logger.warning('Component %s has no usable H seed shape. Falling back to averaged image.', component_index)
             W_image = np.mean(self.data_2d, axis=1)
-            return np.maximum(W_image, eps)
+            return self._scale_w_seed_to_unity(W_image, eps=eps)
 
         image_data, source_key = self._get_image_data_and_source_key(component_index, bgd=bgd)
 
@@ -1300,7 +1334,14 @@ class MultivariateAnalyzer(object):
         # 1) NEW SELECTIVE MODES
         # ------------------------------------------------------------------
         if self.w_seed_mode == 'nnls':
-            return self._estimate_nnls_abundance_map(image_data, component_index, prepared_target, eps, source_key)
+            return self._estimate_nnls_abundance_map(
+                image_data,
+                component_index,
+                prepared_target,
+                eps,
+                source_key,
+                normalize_w_seed=normalize_w_seed,
+            )
 
         if self.w_seed_mode == 'selective_score':
             score_map = self._estimate_selective_score_map(image_data, component_index, prepared_target, eps)
@@ -1317,22 +1358,22 @@ class MultivariateAnalyzer(object):
                 weights = np.maximum(weights, 0.0)
                 max_weight = np.max(weights)
                 if max_weight <= eps:
-                    return np.maximum(np.mean(image_data, axis=1), eps)
+                    return self._scale_w_seed_to_unity(np.mean(image_data, axis=1), eps=eps)
                 weights /= max_weight
                 weights = np.exp(weights) - 1.0  # exponential scaling
                 logger.debug('Using exponential H weights for W seed estimation with shape %s.', weights.shape)
-                return np.maximum(np.average(image_data, axis=1, weights=weights), eps)
+                return self._scale_w_seed_to_unity(np.average(image_data, axis=1, weights=weights), eps=eps)
 
         if self.avg_W_seed:
             logger.info('avg_W_seed=True: filling W with averaged image (clamped to eps).')
             W_image = np.mean(image_data, axis=1)
-            return np.maximum(W_image, eps)
+            return self._scale_w_seed_to_unity(W_image, eps=eps)
 
         if self.full_W_seed:
             logger.info('full_W_seed=True: using full W seed mode (constant, >= eps).')
             avg_int = np.mean(image_data, axis=None)
             W_image = np.full(n_pixels, max(float(avg_int), eps), dtype=np.float64)
-            return W_image
+            return self._scale_w_seed_to_unity(W_image, eps=eps)
 
         # ------------------------------------------------------------------
         # 3) Fallback: maximum-intensity slice at peak of H (clamped to eps)
@@ -1340,7 +1381,7 @@ class MultivariateAnalyzer(object):
         logger.warning('No W seed mode selected, using maximum-intensity slice at H peak (clamped to eps).')
         peak_idx = int(np.argmax(H))
         W_image = self.data_2d[:, peak_idx]
-        return np.maximum(W_image, eps)
+        return self._scale_w_seed_to_unity(W_image, eps=eps)
 
     @staticmethod
     def normalization_constant(img, dtype = '16bit') -> float:
@@ -1375,6 +1416,7 @@ class MultivariateAnalyzer(object):
             fill_data = np.full(self.data_2d.shape[0], avg_int, dtype=np.float64)
         else:
             fill_data = np.maximum(np.mean(self.data_2d, axis=1), eps)
+        fill_data = self._scale_w_seed_to_unity(fill_data, eps=eps)
 
         if overwrite:
             frames = np.arange(self._n_components)
@@ -1383,6 +1425,7 @@ class MultivariateAnalyzer(object):
             frames = np.where(~np.all(self.seed_W, axis=0))[0]
 
         for frame in frames:
+            self._maybe_yield_to_ui()
             self.seed_W[:, frame] = fill_data
 
         self._W_prepared = True

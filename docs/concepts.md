@@ -67,6 +67,8 @@ In the GUI:
 - In seeded workflows, H is initialized from ROI spectra, loaded reference files, or Gaussian models.
 - In fixed-H NNLS, H stays fixed and only W is solved.
 
+The factorization has a component-wise scale ambiguity: for one component, multiplying its W map by a constant and dividing its H spectrum by the same constant leaves \(W H\) unchanged. In seeded NNMF this is acceptable because both W and H are updated during fitting; if a generated W seed starts on a normalized scale, the optimizer can adjust the matching H row to the scale needed by the data. The GUI therefore treats generated W maps mainly as spatial abundance shapes and normalizes them to a comparable unit maximum, while the H seeds keep the spectral/count scale. This makes different generated W seeds easier to compare and prevents raw image-count scale from dominating the initialization.
+
 ## ROI-Derived H Seeds
 
 ROIs (regions of interest) are rectangular regions drawn on the image. The mean pixel spectrum inside an ROI is used as an initial guess for the corresponding component spectrum.
@@ -102,6 +104,8 @@ When only an H seed exists, the GUI has to estimate an initial W map before star
 
 These modes only affect the *initialization*. In seeded NNMF, the optimizer then updates both W and H freely from the starting point.
 
+Generated W seeds are normalized component by component for seeded NNMF initialization. This does not constrain the final NNMF scale, because the optimizer can rescale each W/H component pair during fitting by adjusting both W and the matching H row.
+
 ## Seeded NNMF vs Fixed-H NNLS
 
 The two main user-facing analysis modes differ in one important way:
@@ -111,6 +115,8 @@ The two main user-facing analysis modes differ in one important way:
 **Fixed-H NNLS**: the H matrix is locked to the provided seeds. Only W is fitted. The result maps are the best non-negative abundance coefficients for those fixed spectra.
 
 Use seeded NNMF when you want the algorithm to adapt and refine the spectral estimates. Use fixed-H NNLS when the spectra are already trusted and must stay stable.
+
+This distinction matters for scaling. In fixed-H NNLS, W is the fitted result, not just a starting seed. The usual NNMF scale ambiguity is no longer a free normalization choice: because H is fixed, rescaling W alone changes \(W H\) and therefore changes the reconstruction error. Preserving the same product would require inverse rescaling of H, which fixed-H mode deliberately does not allow. The internal W coefficients are therefore kept on the scale required to reconstruct \(X\) from the fixed H spectra. Display or export can still rescale maps for visualization, but the fixed-H NNLS fit itself should not normalize W to unit maximum.
 
 > Figure placeholder: side-by-side comparison of seeded NNMF and fixed-H NNLS, showing that seeded NNMF can adjust `H` while fixed-H NNLS keeps reference spectra locked.
 

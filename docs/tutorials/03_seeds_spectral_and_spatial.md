@@ -15,7 +15,11 @@ They can come from:
 
 For spectra loaded from files, the imported spectrum is re-sampled to the current image spectral axis before analysis. The seed actually used by NNMF or NNLS is therefore the prepared spectrum on the active image axis, not the raw file sampling.
 
-For seeded NNMF and NNLS-based seed generation, these spectra are kept on their physical amplitude scale. The GUI does not normalize each seed spectrum independently before building the spectral model. This keeps the relation between `W` and `H` consistent with the underlying factorization idea \(X \approx WH\).
+By default, seeded NNMF and NNLS-based seed generation keep these spectra on their physical amplitude scale. The GUI does not normalize each seed spectrum independently before building the spectral model. This keeps the relation between `W` and `H` consistent with the underlying factorization idea \(X \approx WH\).
+
+The optional **Normalize H spectra to unity** checkbox changes this seed-preparation step. After all available and residual-filled `H0` spectra have been collected, each `H0` row is scaled by its own maximum so the peak value is 1. The original absolute spectra and scale factors are kept in the fit metadata, while the normalized spectra are displayed in the ROI plot and passed to W-seed construction and analysis.
+
+This is useful when H seeds come from mixed sources, for example ROI averages, imported spectra, Gaussian models, and seed pixels, because it makes their shapes easier to compare. For seeded NNMF this is usually a valid initialization convention: both `W` and `H` are updated during the fit, so the solver can rescale the component pair. For fixed-H NNLS, the normalized `H` basis is the fixed basis, so fitted `W` coefficients are in units of that normalized spectrum and should be compared with that choice in mind.
 
 ### Missing H seeds and residual fallback
 
@@ -77,16 +81,33 @@ The **Seed Initialization** controls in the **Analysis** panel decide how seed i
 |---|---|---|
 | **W map from H** | How the GUI estimates spatial W maps from available H spectra. | **NNLS abundance map (recommended)** |
 | **H seed pixel metric** | How residual fallback pixels are ranked when a component is missing an H seed. | **Max Intensity** for ordinary use; **Score** when looking for spectrally novel residuals. |
-| **Overwrite existing W with H-based map** | Whether H-based W estimation replaces existing W seeds or only fills missing W columns. | Enabled for a clean seeded run; disabled when you imported or generated fixed W maps that should stay dominant. |
+| **Overwrite existing W with H-based map** | Whether H-based W estimation replaces existing W seeds or only fills missing W columns. In fixed-H NNLS mode this is forced on. | Enabled for a clean seeded run; disabled only in seeded NNMF when you want spectral-info W maps to remain dominant. |
+| **Normalize H spectra to unity** | Scales completed H seed spectra to max=1 before seed display, W-map reconstruction, and analysis. | Useful when seed spectra come from different sources; use deliberately for fixed-H NNLS because it defines the coefficient scale. |
 | **Test seeds** | Builds the current seed matrices and opens the seed preview window without running the final analysis. | Use before long NNMF or 4D runs. |
+
+### Seed-building order
+
+When you press **Test seeds** or start a custom-initialized analysis, the GUI builds the seed matrices in a fixed order. This order matters because later steps can replace earlier W maps.
+
+1. **Reload H seeds from the ROI manager.** Spatial ROIs, imported spectra, Gaussian dummy ROIs, background rows, and imported result spectra define the first `H0` rows. Fixed W maps attached to dummy ROIs are also collected here and are protected from ordinary H-based overwriting.
+2. **Read the spectral-information table.** Resonance rows can create temporary W maps from spectral channels or seed pixels. If a component has no ROI/dummy spectrum, seed pixels found from the spectral information can also create an `H0` spectrum for that component.
+3. **Complete missing H seeds if needed.** If **Normalize H spectra to unity** is enabled, missing `H0` rows are filled before normalization. The GUI first tries the residual-based H fallback, then the older smooth random fallback if no residual seed can be built.
+4. **Optionally normalize H.** If **Normalize H spectra to unity** is enabled, every completed `H0` row is scaled to max=1 and the original row maxima are stored as H scale factors.
+5. **Build W from H.** The selected **W map from H** mode turns the available H basis into W maps. With **NNLS abundance map**, this means fitting each pixel against the current H basis.
+6. **Apply the overwrite rule.** If **Overwrite existing W with H-based map** is enabled, H-based W maps replace the temporary W maps from spectral information. If it is disabled, H-based W maps only fill W columns that are still missing. In fixed-H NNLS mode this overwrite is forced on, because W must be solved from the final fixed H basis.
+7. **Fill any remaining W columns.** If a W column is still missing, the GUI may fill missing H, re-run H-based W estimation, and finally use an image-derived fallback W seed if needed.
+
+For seeded NNMF, the generated W maps are initialization only and are normally normalized to unit maximum. For fixed-H NNLS, the W maps produced from H are the fitted abundance coefficients for the fixed basis and are not normalized internally.
 
 ### Overwriting W maps from H
 
 When **Overwrite existing W with H-based map** is enabled, any W image that was gathered from the spectral information table is treated as temporary for components that already have a usable `H` seed. The final `W` seed is rebuilt from the `H` seed and the active **W map from H** mode, for example with an NNLS abundance fit.
 
-This means the spectral-info image itself is completely unused as the final `W` seed for that component. If a component already has a valid `H` seed and overwrite is enabled, spectral-info settings such as resonance position, width, amplitude, and seed-pixel count generally do not shape the final `W` map. The important exception is the **Use subtracted data** setting, which can still decide whether the H-based map and residual seed estimation use processed/background-subtracted data or raw data.
+This means the spectral-info image itself is completely unused as the final `W` seed for that component. Spectral information can still matter indirectly: it can define the resonance range used to find seed pixels, those seed pixels can create an `H0` spectrum, and that `H0` spectrum is then used to rebuild the final `W` map.
 
-If you want the W image gathered from spectral information to remain the spatial seed, disable **Overwrite existing W with H-based map** or attach the map as a fixed W seed. If no valid `H` seed exists yet, spectral information can still help create or fill the missing spectral seed before the H-based map is built.
+If a component already has a valid `H` seed and overwrite is enabled, spectral-info settings such as resonance position, width, amplitude, and seed-pixel count generally do not shape the final `W` map directly. The important exception is the **Use subtracted data** setting, which can still decide whether the H-based map and residual seed estimation use processed/background-subtracted data or raw data.
+
+If you want the W image gathered from spectral information to remain the spatial seed in seeded NNMF, disable **Overwrite existing W with H-based map** or attach the map as a fixed W seed. In fixed-H NNLS mode the checkbox is forced on, because the W map must be solved from the fixed H basis. If no valid `H` seed exists yet, spectral information can still help create or fill the missing spectral seed before the H-based map is built.
 
 ## ROI-Derived Seeds
 

@@ -1,6 +1,8 @@
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Callable
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -18,6 +20,13 @@ d_type = '16bit'
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class HSeedScaleState:
+    absolute: np.ndarray | None
+    scale_factors: np.ndarray | None
+
+
 class MultivariateAnalyzer(object):
     def __init__(self, data, n_components, wavenumbers, method='NNMF'):
         self.resonance_data_zyx = None
@@ -31,6 +40,8 @@ class MultivariateAnalyzer(object):
         self.wavenumbers = None
         self.seed_W = None
         self.seed_H = None
+        self.seed_H_absolute = None
+        self.seed_H_unity_scale_factors = None
         self.seed_H_background_flag = None
         self.pca_ready = None
         self.PCs = None
@@ -106,6 +117,92 @@ class MultivariateAnalyzer(object):
         info["relative_error"] = float(final_error) / data_norm
         return info
 
+    """
+    Bookkeeping of unity scaling for NNMF/NNLS
+    """
+    @staticmethod
+    def scale_H_rows_to_unity(seed_H: np.ndarray | None, eps: float = 1e-8) -> tuple[np.ndarray | None, np.ndarray | None]:
+        if seed_H is None:
+            return None, None
+        H = np.asarray(seed_H, dtype=np.float64)
+        if H.ndim != 2:
+            return np.array(H, copy=True), None
+
+        H_scaled = np.nan_to_num(H, nan=0.0, posinf=0.0, neginf=0.0)
+        H_scaled = np.maximum(H_scaled, 0.0)
+        scale_factors = np.ones(H_scaled.shape[0], dtype=np.float64)
+        for component_index in range(H_scaled.shape[0]):
+            row_scale = float(np.max(H_scaled[component_index]))
+            if row_scale > eps:
+                H_scaled[component_index] = H_scaled[component_index] / row_scale
+                scale_factors[component_index] = row_scale
+        return H_scaled, scale_factors
+
+    def clear_H_seed_scale_reference(self):
+        """
+        Clears the references to the original absolute scale of the seed H and the unity normalization factors.
+        """
+        self.seed_H_absolute = None
+        self.seed_H_unity_scale_factors = None
+
+    def capture_H_seed_scale_state(self) -> HSeedScaleState:
+        return HSeedScaleState(
+            absolute=None if self.seed_H_absolute is None else np.array(self.seed_H_absolute, copy=True),
+            scale_factors=(
+                None
+                if self.seed_H_unity_scale_factors is None
+                else np.array(self.seed_H_unity_scale_factors, copy=True)
+            ),
+        )
+
+    def restore_H_seed_scale_state(self, state: HSeedScaleState | None):
+        if state is None:
+            self.clear_H_seed_scale_reference()
+            return
+        self.seed_H_absolute = None if state.absolute is None else np.array(state.absolute, copy=True)
+        self.seed_H_unity_scale_factors = (
+            None if state.scale_factors is None else np.array(state.scale_factors, copy=True)
+        )
+
+    def _annotate_H_seed_scale_info(self, info: dict) -> dict:
+        info = dict(info)
+        if self.seed_H_unity_scale_factors is not None:
+            info["h_seed_normalized_to_unity"] = True
+            info["h_seed_unity_scale_factors"] = np.asarray(self.seed_H_unity_scale_factors, dtype=float).tolist()
+        return info
+
+    def apply_H_seed_unity_normalization(self, eps: float = 1e-8) -> np.ndarray | None:
+        if self.seed_H is None:
+            self.clear_H_seed_scale_reference()
+            return None
+
+        existing_absolute = None if self.seed_H_absolute is None else np.asarray(self.seed_H_absolute, dtype=np.float64).copy()
+        existing_scale_factors = (
+            None
+            if self.seed_H_unity_scale_factors is None
+            else np.asarray(self.seed_H_unity_scale_factors, dtype=np.float64).copy()
+        )
+        current_seed_H = np.asarray(self.seed_H, dtype=np.float64).copy()
+        normalized_H, scale_factors = self.scale_H_rows_to_unity(self.seed_H, eps=eps)
+        if normalized_H is None:
+            self.seed_H_unity_scale_factors = None
+            return None
+
+        self.seed_H = normalized_H
+        if (
+                existing_absolute is not None
+                and existing_scale_factors is not None
+                and existing_absolute.shape == normalized_H.shape
+                and existing_scale_factors.shape == scale_factors.shape
+        ):
+            self.seed_H_absolute = existing_absolute
+            self.seed_H_unity_scale_factors = existing_scale_factors
+        else:
+            self.seed_H_absolute = current_seed_H
+            self.seed_H_unity_scale_factors = scale_factors
+        self._clear_nnls_abundance_cache()
+        return self.seed_H_unity_scale_factors
+
     def update_image_data(self, data: np.ndarray, n_components: int, wavenumbers: np.ndarray):
         self.prepared = False
         self.raw_data_3d = data
@@ -123,6 +220,8 @@ class MultivariateAnalyzer(object):
         self.PCs = None
         self.pca_ready = False
         self.seed_H = None
+        self.seed_H_absolute = None
+        self.seed_H_unity_scale_factors = None
         self.seed_H_background_flag = None
         self.seed_W = None
         self._W_prepared = False
@@ -640,7 +739,7 @@ class MultivariateAnalyzer(object):
             return cached
 
         abundance, info = self._build_nnls_abundance_matrix(image_data, basis, eps, source_key)
-        info = dict(info)
+        info = self._annotate_H_seed_scale_info(info)
         info["source"] = source_key
         info["cache_hit"] = False
         self.last_nnls_info = info
@@ -754,7 +853,7 @@ class MultivariateAnalyzer(object):
         self.fixed_W = np.asarray(abundance, dtype=np.float32)
         self.fixed_H = fixed_h
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
-        info = dict(info)
+        info = self._annotate_H_seed_scale_info(info) if H_matrix is None else dict(info)
         info["algorithm"] = "fixed_h_nnls"
         info["source"] = resolved_source_key
         info["use_processed_data"] = use_subtracted
@@ -839,6 +938,7 @@ class MultivariateAnalyzer(object):
 
     def randomNNMF(self) -> None:
         logger.info(f'{self.data_2d.shape =}')
+        self.clear_H_seed_scale_reference()
         self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(self.data_2d, init='random')
         self.last_nnmf_info = dict(fit_info)
         self.last_nnmf_info["mode"] = "random_nnmf"
@@ -854,6 +954,7 @@ class MultivariateAnalyzer(object):
 
     def reset_seeds(self):
         self.seed_H = np.zeros((self._n_components, self.raw_data_3d.shape[0]))
+        self.clear_H_seed_scale_reference()
         self.seed_H_background_flag = np.zeros(self._n_components, dtype=bool)
         self.seed_W = np.zeros((self.data_2d.shape[0], self._n_components))
         self._clear_nnls_abundance_cache()
@@ -870,6 +971,7 @@ class MultivariateAnalyzer(object):
             raise ShapeError(self.raw_data_3d.shape[0], spectrum.shape)
 
         self._W_prepared = False
+        self.clear_H_seed_scale_reference()
         self._clear_nnls_abundance_cache()
 
 
@@ -1087,20 +1189,32 @@ class MultivariateAnalyzer(object):
         self._clear_nnls_abundance_cache()
 
 
-    def set_up_missing_W_seeds(self, skip_spectral_info=False, fill_H_seed: bool = True) -> bool:
+    def set_up_missing_W_seeds(
+            self,
+            skip_spectral_info=False,
+            fill_H_seed: bool = True,
+            normalize_w_seed: bool = True,
+            h_seed_finalizer: Callable[[], None] | None = None,
+    ) -> bool:
+        """
+        Sets up W seeds from spectral info or as fallback from H.
+        Can skip spectral info and in case H seeds come from residual data the H seed is normalized with h_seed_finalizer.
+        """
         # First step: process all spectral info to create the W seeds
         if not skip_spectral_info:
             self.make_W_seeds_from_spectral_info()
         # first try to initialize from H seeds....
         if not self._W_prepared:
             logger.warning('W seeds not prepared. Trying to set up from H')
-            self.estimate_W_seed_matrix_from_H(overwrite=False)
+            self.estimate_W_seed_matrix_from_H(overwrite=False, normalize_w_seed=normalize_w_seed)
         if fill_H_seed and not self._W_prepared:
             logger.warning('W seeds still not prepared. Creating missing H seeds before W fallback.')
             self._maybe_yield_to_ui()
             self.set_up_missing_H_seeds()
+            if h_seed_finalizer is not None:
+                h_seed_finalizer()
             self._maybe_yield_to_ui()
-            self.estimate_W_seed_matrix_from_H(overwrite=False)
+            self.estimate_W_seed_matrix_from_H(overwrite=False, normalize_w_seed=normalize_w_seed)
         if not self._W_prepared:
             logger.warning('W seeds still not prepared, using average intensity for remaining components')
             self._maybe_yield_to_ui()
@@ -1125,6 +1239,8 @@ class MultivariateAnalyzer(object):
             [idx for idx in range(self.seed_H.shape[0]) if not self._has_seed_signal(self.seed_H[idx])]
         )
         logger.info('H components without a usable seed: %s', remaining_components)
+        if remaining_components.size > 0:
+            self.clear_H_seed_scale_reference()
 
         # iterate over all components and create the H seeds
         for cmp in remaining_components:
@@ -1516,7 +1632,7 @@ class MultivariateAnalyzer(object):
             w_init=self.seed_W.astype(np.float32),
             h_init=self.seed_H.astype(np.float32),
         )
-        self.last_nnmf_info = dict(fit_info)
+        self.last_nnmf_info = self._annotate_H_seed_scale_info(fit_info)
         self.last_nnmf_info["mode"] = "seeded_nnmf"
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
@@ -1540,6 +1656,7 @@ class MultivariateAnalyzer(object):
         self.PCs = None
         self.pca_ready = False
         self.seed_H = None
+        self.clear_H_seed_scale_reference()
         self.seed_W = None
         self._W_prepared = False
         self.last_nnls_info = None

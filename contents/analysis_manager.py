@@ -16,7 +16,7 @@ from skimage.filters.rank import minimum
 
 from composite_image import CompositeImageViewWidget
 from contents.custom_pyqt_objects import ImageViewYX
-from contents.multivariate_analyzer import MultivariateAnalyzer
+from contents.multivariate_analyzer import HSeedScaleState, MultivariateAnalyzer
 from contents.roi_manager_pg import ROIManager
 from contents.spectral_axis import (
     is_index_unit,
@@ -101,8 +101,10 @@ class AnalysisManager(QtCore.QObject):
         self.analysis_widget = None
         self.mv_analyzer = MultivariateAnalyzer(data, 3, self.wavenumbers)
         self._overwrite_existing_W_from_H = True
+        self._normalize_H_to_unity = False
         self.w_seed_mode_dropdown: QtWidgets.QComboBox | None = None
         self.overwrite_W_from_H_check: QtWidgets.QCheckBox | None = None
+        self.normalize_H_to_unity_check: QtWidgets.QCheckBox | None = None
         self.seed_pixel_mode_dropdown: QtWidgets.QComboBox | None = None
         self.nnmf_solver_dropdown: QtWidgets.QComboBox | None = None
         self.nnmf_backend_dropdown: QtWidgets.QComboBox | None = None
@@ -466,14 +468,25 @@ class AnalysisManager(QtCore.QObject):
         self.overwrite_W_from_H_check = QtWidgets.QCheckBox("Overwrite existing W with H-based map")
         self.overwrite_W_from_H_check.setChecked(self._overwrite_existing_W_from_H)
         self.overwrite_W_from_H_check.setToolTip(
-            "If enabled, H-based W estimation replaces existing spectral W seeds. "
+            "If enabled, H-based W estimation replaces existing spectral W seeds "
+            "(not the fixed W seeds from results or rolling-ball). "
             "If disabled, it only fills missing W columns."
         )
         self.overwrite_W_from_H_check.toggled.connect(
-            lambda state: setattr(self, "_overwrite_existing_W_from_H", bool(state))
+            self._set_overwrite_W_from_H
         )
         seed_layout.addWidget(self.overwrite_W_from_H_check)
 
+        self.normalize_H_to_unity_check = QtWidgets.QCheckBox("Normalize H spectra to unity")
+        self.normalize_H_to_unity_check.setChecked(self._normalize_H_to_unity)
+        self.normalize_H_to_unity_check.setToolTip(
+            "If enabled, completed H seed spectra are stored in their original scale "
+            "but plotted and used for seed reconstruction/analysis after each spectrum is scaled to max=1."
+        )
+        self.normalize_H_to_unity_check.toggled.connect(self._set_normalize_H_to_unity)
+        seed_layout.addWidget(self.normalize_H_to_unity_check)
+
+        """
         wseed_hint = QtWidgets.QLabel(
             "Uses the current H seed to build the spatial W map. "
             "Fixed W masks from ROIs are kept unchanged."
@@ -482,6 +495,7 @@ class AnalysisManager(QtCore.QObject):
         wseed_hint.setStyleSheet("color: #6b7280;")
         seed_layout.addWidget(wseed_hint)
         seed_layout.addStretch(1)
+        """
 
         self.w_seed_mode_dropdown.setCurrentIndex(0)
         self.mv_analyzer.set_W_seed_mode(self.w_seed_mode_dropdown.itemData(0))
@@ -924,6 +938,7 @@ class AnalysisManager(QtCore.QObject):
         display_seed_H = None if self.mv_analyzer.seed_H is None else np.array(self.mv_analyzer.seed_H, copy=True)
         display_seed_H_bg = None if self.mv_analyzer.seed_H_background_flag is None else np.array(self.mv_analyzer.seed_H_background_flag, copy=True)
         display_seed_W = None if self.mv_analyzer.seed_W is None else np.array(self.mv_analyzer.seed_W, copy=True)
+        display_H_seed_scale_state = self.mv_analyzer.capture_H_seed_scale_state()
         fixed_seed_W = {comp: np.array(seed, copy=True) for comp, seed in self._fixed_seed_W.items()}
 
         spectra_per_slice = []
@@ -954,13 +969,15 @@ class AnalysisManager(QtCore.QObject):
                 if custom_init:
                     self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
                     self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
+                    self.mv_analyzer.restore_H_seed_scale_state(display_H_seed_scale_state)
                     self.mv_analyzer.seed_W = None
                     self.mv_analyzer._W_prepared = False
+                    self._prepare_H_seeds_for_current_scale_mode()
                     self.mv_analyzer.estimate_W_seed_matrix_from_H(
                         overwrite=True,
                         skip_components=fixed_seed_W.keys(),
                     )
-                    self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
+                    self._set_up_missing_W_seeds_for_current_scale_mode(skip_spectral_info=True)
                     if self.mv_analyzer.seed_W is None:
                         self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
                     for comp, fixed_W in fixed_seed_W.items():
@@ -1033,6 +1050,7 @@ class AnalysisManager(QtCore.QObject):
                     seed_result = self._build_fixed_h_seed_result(
                         H_template=display_seed_H,
                         H_background_template=display_seed_H_bg,
+                        H_scale_state_template=display_H_seed_scale_state,
                         fixed_seed_W=fixed_seed_W,
                     )
                     if self._cancel_analysis_if_requested(
@@ -1078,13 +1096,15 @@ class AnalysisManager(QtCore.QObject):
                 if custom_init:
                     self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
                     self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
+                    self.mv_analyzer.restore_H_seed_scale_state(display_H_seed_scale_state)
                     self.mv_analyzer.seed_W = None
                     self.mv_analyzer._W_prepared = False
+                    self._prepare_H_seeds_for_current_scale_mode()
                     self.mv_analyzer.estimate_W_seed_matrix_from_H(
                         overwrite=True,
                         skip_components=fixed_seed_W.keys(),
                     )
-                    self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
+                    self._set_up_missing_W_seeds_for_current_scale_mode(skip_spectral_info=True)
                     if self.mv_analyzer.seed_W is None:
                         self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
                     for comp, fixed_W in fixed_seed_W.items():
@@ -1124,6 +1144,7 @@ class AnalysisManager(QtCore.QObject):
                 self._update_multislice_modified_data(display_data)
                 self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
                 self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
+                self.mv_analyzer.restore_H_seed_scale_state(display_H_seed_scale_state)
                 self.mv_analyzer.seed_W = None if display_seed_W is None else np.array(display_seed_W, copy=True)
                 self.mv_analyzer._W_prepared = self.mv_analyzer._all_columns_seeded(self.mv_analyzer.seed_W)
 
@@ -1162,6 +1183,7 @@ class AnalysisManager(QtCore.QObject):
             self.mv_analyzer.set_up_missing_H_seeds()
 
         if not show_seeds:
+            self._finalize_H_seeds_for_current_scale_mode()
             return
 
         seed_result = self._build_fixed_h_seed_result(
@@ -1194,12 +1216,32 @@ class AnalysisManager(QtCore.QObject):
         fixed_h_mode = self._fixed_h_mode_enabled()
         if fixed_h_mode:
             self._ensure_nnls_seed_mode_selected()
+            self._set_overwrite_W_from_H(True, force_checkbox=True)
         if self.w_seed_mode_dropdown is not None:
             self.w_seed_mode_dropdown.setEnabled(not fixed_h_mode)
+        if self.overwrite_W_from_H_check is not None:
+            self.overwrite_W_from_H_check.setEnabled(not fixed_h_mode)
+            if fixed_h_mode:
+                self.overwrite_W_from_H_check.setToolTip(
+                    "Fixed-H NNLS always rebuilds W maps from the fixed H basis."
+                )
+            else:
+                self.overwrite_W_from_H_check.setToolTip(
+                    "If enabled, H-based W estimation replaces existing spectral W seeds "
+                    "(not the fixed W seeds from results or rolling-ball). "
+                    "If disabled, it only fills missing W columns."
+                )
         if self.fast_multislice_nnmf_check is not None:
             self.fast_multislice_nnmf_check.setEnabled(
                 self.nnmf_radio.isChecked() and not fixed_h_mode and self._analysis_series_4d is not None
             )
+
+    def _set_overwrite_W_from_H(self, state, force_checkbox: bool = False):
+        self._overwrite_existing_W_from_H = bool(state)
+        if force_checkbox and self.overwrite_W_from_H_check is not None:
+            blocker = QtCore.QSignalBlocker(self.overwrite_W_from_H_check)
+            self.overwrite_W_from_H_check.setChecked(self._overwrite_existing_W_from_H)
+            del blocker
 
     def _ensure_nnls_seed_mode_selected(self):
         target_label = "NNLS abundance map"
@@ -1213,28 +1255,76 @@ class AnalysisManager(QtCore.QObject):
                     break
         self.mv_analyzer.set_W_seed_mode(target_label)
 
+    def _finalize_H_seeds_for_current_scale_mode(self):
+        if self._normalize_H_to_unity:
+            scales = self.mv_analyzer.apply_H_seed_unity_normalization()
+            if scales is not None:
+                logger.info("Normalized H seed spectra to unity with original max scale factors: %s", scales)
+            return
+        self.mv_analyzer.clear_H_seed_scale_reference()
+
+    def _prepare_H_seeds_for_current_scale_mode(self):
+        if self._normalize_H_to_unity:
+            if not self.mv_analyzer.has_complete_H_seed_set():
+                logger.info("Completing H seeds before unity normalization.")
+                self.mv_analyzer.set_up_missing_H_seeds()
+            self._finalize_H_seeds_for_current_scale_mode()
+            return
+        self.mv_analyzer.clear_H_seed_scale_reference()
+
+    def _set_up_missing_W_seeds_for_current_scale_mode(
+            self,
+            skip_spectral_info: bool = True,
+            normalize_w_seed: bool = True,
+    ) -> bool:
+        # calculates the W seeds either from spectral info or the actual NNMF abundance map,
+        # per default normalization would scale W maps to unity, which requires less NNMF iterations
+        # if H contrains real spectral scale
+        return self.mv_analyzer.set_up_missing_W_seeds(
+            skip_spectral_info=skip_spectral_info,
+            fill_H_seed=True,
+            normalize_w_seed=normalize_w_seed,
+            h_seed_finalizer=self._finalize_H_seeds_for_current_scale_mode if self._normalize_H_to_unity else None,
+        )
+
+    def _set_normalize_H_to_unity(self, state):
+        self._normalize_H_to_unity = bool(state)
+        if self.roi_manager is not None and hasattr(self.roi_manager, "set_roi_plot_normalize_to_unity"):
+            self.roi_manager.set_roi_plot_normalize_to_unity(self._normalize_H_to_unity)
+
     def _build_fixed_h_seed_result(
             self,
             *,
             H_template: np.ndarray | None,
             H_background_template: np.ndarray | None,
-            fixed_seed_W: dict[int, np.ndarray],
+            H_scale_state_template: HSeedScaleState | None = None,
+            fixed_seed_W: dict[int, np.ndarray] | None = None,
     ) -> dict:
+        """
+        NNLS pathway: builds W maps from H
+        """
         self._ensure_nnls_seed_mode_selected()
         self.mv_analyzer.seed_H = None if H_template is None else np.array(H_template, copy=True)
         self.mv_analyzer.seed_H_background_flag = None if H_background_template is None else np.array(H_background_template, copy=True)
+        self.mv_analyzer.restore_H_seed_scale_state(H_scale_state_template)
         self.mv_analyzer.seed_W = None
         self.mv_analyzer._W_prepared = False
+        self._prepare_H_seeds_for_current_scale_mode()
         # calculate the abundance maps
         self._rebuild_W_seeds_from_H(
-            overwrite_existing=self._overwrite_existing_W_from_H,
+            overwrite_existing=True,
             normalize_w_seed=False,
         )
-        # if not all spectra were set, fill them up now from residual
-        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
+        # Fill remaining W columns. If this creates late residual H rows while
+        # unity normalization is active, the helper normalizes H before the
+        # W estimate for those newly available rows.
+        self._set_up_missing_W_seeds_for_current_scale_mode(
+            skip_spectral_info=True,
+            normalize_w_seed=False,
+        )
         if self.mv_analyzer.seed_W is None:
             self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()), dtype=np.float64)
-        for comp, fixed_W in fixed_seed_W.items():
+        for comp, fixed_W in (fixed_seed_W or {}).items():
             if 0 <= comp < self.mv_analyzer.seed_W.shape[1] and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                 self.mv_analyzer.seed_W[:, comp] = fixed_W
         self.mv_analyzer._W_prepared = self.mv_analyzer._all_columns_seeded(self.mv_analyzer.seed_W)
@@ -1453,6 +1543,8 @@ class AnalysisManager(QtCore.QObject):
         seed_W, seed_H, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True,
                                                                             debug_mode=False)  # create W seeds from spectral info and pass to analyzer
 
+        self._prepare_H_seeds_for_current_scale_mode()
+
         logger.info(
             'Updating W seeds from the current H seeds using %s (overwrite_existing=%s).',
             self.mv_analyzer.w_seed_mode,
@@ -1463,14 +1555,15 @@ class AnalysisManager(QtCore.QObject):
         logger.info('Filling remaining W seeds after H-based initialization.')
         # fill remaining W seeds
         # tries to either fill from given H seeds or from average image data (fallback)
-        self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)  # fill the W seed matrix
+        self._set_up_missing_W_seeds_for_current_scale_mode(skip_spectral_info=True)  # fill the W seed matrix
 
         logger.info(f'{"-"*10}')
         logger.info("Set up remaining H seeds:")
         # W seeds are set
 
         # remainining components that are not given by rois and spectral info are randomly initialized
-        self.mv_analyzer.set_up_missing_H_seeds()
+        if not self._normalize_H_to_unity:
+            self.mv_analyzer.set_up_missing_H_seeds()
 
         if not show_seeds:
             return
@@ -2079,8 +2172,9 @@ class AnalysisManager(QtCore.QObject):
             self._fixed_seed_W_counts = {}
             self.reload_H_seeds_from_rois()
             _, _, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True, debug_mode=False)
+            self._prepare_H_seeds_for_current_scale_mode()
             self._rebuild_W_seeds_from_H(overwrite_existing=self._overwrite_existing_W_from_H)
-            self.mv_analyzer.set_up_missing_W_seeds(skip_spectral_info=True, fill_H_seed=True)
+            self._set_up_missing_W_seeds_for_current_scale_mode(skip_spectral_info=True)
             # open a new floating composite_image with the W seeds in a pyqtgraph image view
             W_seed_3d = self.mv_analyzer.seed_W.reshape(self.mv_analyzer.raw_data_3d.shape[1],
                                                         self.mv_analyzer.raw_data_3d.shape[2], -1)
@@ -2947,6 +3041,7 @@ class AnalysisManager(QtCore.QObject):
         return {
             "w_seed_mode": mode,
             "overwrite_existing_w_from_h": bool(self._overwrite_existing_W_from_H),
+            "normalize_h_to_unity": bool(self._normalize_H_to_unity),
             "seed_pixel_metric": seed_pixel_metric,
             "fixed_h_nnls_mode": bool(self._fixed_h_mode_enabled()),
             "fixed_h_nnls_only": bool(self._use_fixed_h_nnls_only()),
@@ -2988,11 +3083,18 @@ class AnalysisManager(QtCore.QObject):
         self.mv_analyzer.set_W_seed_mode(mode)
 
         overwrite_existing = bool(settings.get("overwrite_existing_w_from_h", False))
-        self._overwrite_existing_W_from_H = overwrite_existing
+        self._set_overwrite_W_from_H(overwrite_existing)
         if self.overwrite_W_from_H_check is not None:
             blocker = QtCore.QSignalBlocker(self.overwrite_W_from_H_check)
             self.overwrite_W_from_H_check.setChecked(overwrite_existing)
             del blocker
+
+        normalize_h_to_unity = bool(settings.get("normalize_h_to_unity", False))
+        if self.normalize_H_to_unity_check is not None:
+            blocker = QtCore.QSignalBlocker(self.normalize_H_to_unity_check)
+            self.normalize_H_to_unity_check.setChecked(normalize_h_to_unity)
+            del blocker
+        self._set_normalize_H_to_unity(normalize_h_to_unity)
 
         seed_pixel_metric = settings.get("seed_pixel_metric")
         if seed_pixel_metric in {"Max Intensity", "Score"}:

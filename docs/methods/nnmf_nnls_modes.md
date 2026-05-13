@@ -42,7 +42,28 @@ This is the canonical NMF model [5, 8, 9]. In the GUI:
 
 `H` carries spectral behavior, `W` carries where that behavior occurs spatially [14].
 
-There is a component-wise scale ambiguity in NNMF [8, 9]: for any positive constant \(a\), replacing one component by \(a W_i\) and \(H_i / a\) leaves that component's contribution unchanged. This is why normalized generated `W` seeds are valid for seeded NNMF: both `W` and `H` remain free during fitting, so the optimizer can adapt the matching `H` row to the normalized `W0` scale. The GUI uses this convention for seeded NNMF initialization — generated `W0` maps are normalized to a comparable unit maximum, while `H0` spectra keep the spectral/count scale from ROIs, files, Gaussian models, or seed pixels.
+There is a component-wise scale ambiguity in NNMF [8, 9]: for any positive constant \(a\), replacing one component by \(a W_i\) and \(H_i / a\) leaves that component's contribution unchanged. This is why normalized generated `W` seeds are valid for seeded NNMF: both `W` and `H` remain free during fitting, so the optimizer can adapt the matching `H` row to the normalized `W0` scale. The GUI uses this convention for seeded NNMF initialization: generated `W0` maps are normalized to a comparable unit maximum, while `H0` spectra keep the spectral/count scale from ROIs, files, Gaussian models, or seed pixels unless **Normalize H spectra to unity** is enabled.
+
+When **Normalize H spectra to unity** is enabled, each completed `H0` row is scaled by its own maximum before W-seed reconstruction and analysis. This can make seed spectra from different sources comparable by shape. For seeded NNMF the scale ambiguity means the fit can still adapt the matching `W/H` scale during optimization. For fixed-H NNLS the selected `H` scale is part of the fixed model, so the fitted `W` coefficients should be interpreted relative to the normalized basis.
+
+### H seed unity scaling in practice
+
+The unity scaling option is applied after the GUI has completed the `H0` seed matrix. This includes spectra from spatial ROIs, imported spectra, Gaussian spectral information, seed pixels, and residual fallback spectra for missing components.
+
+For every component row:
+
+1. invalid values are replaced by zero and negative values are clipped to zero,
+2. the original row maximum is stored as that component's H scale factor,
+3. the row is divided by that maximum so the seed spectrum has max=1.
+
+The normalized `H0` is the matrix used for H-based W-map reconstruction and for the analysis initialization. The original per-component maxima are kept as metadata under `h_seed_unity_scale_factors`. In the result viewer, enable **Show H Scales** to display these stored maxima when they are available.
+
+This bookkeeping matters because the same plotted spectrum can represent different coefficient conventions:
+
+- in seeded NNMF, `W` and `H` are both updated, so the optimizer can move the final scale between them;
+- in fixed-H NNLS, `H` is locked, so the fitted `W` coefficients are relative to the exact fixed `H` scale;
+- in 4D fixed-H analysis, the display-slice seed basis and its scale metadata are reused for every slice so per-slice maps use the same `H` convention;
+- in fast 4D NNMF/NNLS hybrid mode, NNMF first fits a reference-slice `H`; subsequent slices use that fitted reference `H` for NNLS, so the initial seed scale factors are no longer the fixed basis scale after the reference fit.
 
 ## PCA
 
@@ -235,9 +256,11 @@ When overwrite is enabled and a component already has a valid `H0`, the spectral
 
 In that situation, spectral-info parameters such as resonance center, width, amplitude, and seed-pixel count usually do not shape the final W map. The main exception is the **Use subtracted data** flag, which can still choose raw versus processed/background-subtracted data for H-based W estimation and residual H-seed estimation. Spectral information can also still matter when it is used to create a missing H seed before the H-based W map is rebuilt.
 
-Disable overwrite when the W image gathered from spectral information should remain the actual spatial seed.
+Disable overwrite when the W image gathered from spectral information should remain the actual spatial seed for seeded NNMF. In fixed-H NNLS mode, the GUI forces overwrite on because the final `W` map must be rebuilt from the fixed `H0` basis rather than kept from the spectral-information image.
 
 Generated `W0` maps are normalized per component before seeded NNMF starts. This includes NNLS abundance-map seeds and image-derived fallback seeds. The normalization is only an initialization convention: the NNMF solver can still rescale each W/H component pair during fitting because it updates both matrices.
+
+The separate **Normalize H spectra to unity** option applies the same shape-first idea to `H0` spectra. It is most useful when seed spectra come from different sources with incompatible amplitudes. In 4D analysis, the normalized display-slice seed basis is reused for the per-slice W reconstruction or seeded NNMF initialization, so slices are not mixed between absolute and normalized H scales.
 
 ### Why seeded NNMF is often the most practical mode
 

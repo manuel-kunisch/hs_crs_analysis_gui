@@ -95,6 +95,16 @@ Use this plot to check:
 
 > Screenshot placeholder: spectral component plot with fitted H spectra, optional seed overlays, component labels, and color-matched result channels.
 
+### H seed scales
+
+If **Normalize H spectra to unity** was enabled during seed building, the result metadata can store the original per-component H maxima. These values are the scale factors used to turn the original seed spectra into max=1 spectra before W reconstruction and analysis.
+
+Use **Show H Scales** in the result viewer to show these values in the fit summary. The checkbox is enabled only when the current result contains `h_seed_unity_scale_factors` metadata.
+
+For fixed-H NNLS, these scale factors help interpret the coefficient maps: a normalized fixed spectrum gives `W` coefficients relative to a max=1 basis. For seeded NNMF, the factors describe the seed convention, but the final fit can still rescale `W` and `H` during optimization.
+
+For 4D results, the displayed H scale list follows the selected z/time slice. In fast 4D NNMF/NNLS hybrid mode, the later slices use the fitted reference-slice `H` from NNMF, so initial seed scale factors may not be present for those NNLS slices.
+
 ## Saving Spectra
 
 Use **Save H as CSV** to export spectral components. The CSV export uses the current spectral axis or custom labels.

@@ -83,6 +83,7 @@ class ROIManager(QtCore.QObject):
         self._highlighted_table_row = None
         self.raw_data = self.image_view.getImageItem().image
         self.subtracted_data = None
+        self.normalize_roi_plot_to_unity = False
         self.spectrum_loaders = dict()
         self.auto_roi_settings = AutoROISuggestionSettings()
         self.fixed_w_seed_view = None
@@ -1999,8 +2000,8 @@ class ROIManager(QtCore.QObject):
 
         scale_spinbox = QtWidgets.QDoubleSpinBox()
         scale_spinbox.setValue(1)
-        scale_spinbox.setRange(1e-2, 10)
-        scale_spinbox.setSingleStep(.05)
+        scale_spinbox.setRange(1e-2, 1e6)
+        scale_spinbox.setSingleStep(1)
         scale_spinbox.valueChanged.connect(lambda value, widget=scale_spinbox: self._handle_roi_update_widget_changed(widget))
 
         offset_spinbox = QtWidgets.QDoubleSpinBox()
@@ -2424,8 +2425,35 @@ class ROIManager(QtCore.QObject):
         roi_id = str(roi)
         if signal is None:
             signal = self.get_roi_average(roi)
-        self.plot_roi_signal.emit(roi_id, signal, label)
-        self.roi_plotter.plot_roi_average(roi_id, signal, label)
+        display_signal = self.curve_for_roi_plot(signal)
+        self.plot_roi_signal.emit(roi_id, display_signal, label)
+        self.roi_plotter.plot_roi_average(roi_id, display_signal, label)
+
+    @staticmethod
+    def _scale_curve_to_unity(curve: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+        values = np.asarray(curve, dtype=np.float64)
+        if values.size == 0:
+            return np.array(values, copy=True)
+        values = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
+        values = np.maximum(values, 0.0)
+        max_value = float(np.max(values))
+        if max_value > eps:
+            return values / max_value
+        return values
+
+    def curve_for_roi_plot(self, curve: np.ndarray) -> np.ndarray:
+        if not self.normalize_roi_plot_to_unity:
+            return curve
+        return self._scale_curve_to_unity(curve)
+
+    def set_roi_plot_normalize_to_unity(self, enabled: bool):
+        enabled = bool(enabled)
+        if self.normalize_roi_plot_to_unity == enabled:
+            return
+        self.normalize_roi_plot_to_unity = enabled
+        self.roi_plotter.set_normalize_to_unity(enabled)
+        self.replot_all_rois()
+        self.roi_plotter.refresh_all_component_fallbacks()
 
     @staticmethod
     def _get_roi_base_color(roi: pg.ROI) -> QtGui.QColor:
@@ -3383,6 +3411,9 @@ class ROIPlotter(pg.PlotWidget):
         self.component_gaussians: dict[int, dict] = {}
         self.component_gaussian_lines: dict[int, pg.PlotDataItem] = {}
 
+    def set_normalize_to_unity(self, enabled: bool):
+        self.setLabel('left', text='Normalized intensity' if enabled else 'Intensity [a.u.]')
+
     def plot_roi_average(self, roi_id, z_data, label):
         roi_index = self.roi_manager.roi_id_idx.get(roi_id)
         roi_pen = self.roi_manager.rois[roi_index].pen
@@ -3488,11 +3519,12 @@ class ROIPlotter(pg.PlotWidget):
         """
         if self.roi_manager.wavenumbers is None or z_data is None:
             return
+        z_plot = self.roi_manager.curve_for_roi_plot(z_data)
 
         # Update existing line
         if component_number in self.component_gaussian_lines:
             line = self.component_gaussian_lines[component_number]
-            line.setData(self.roi_manager.wavenumbers, z_data)
+            line.setData(self.roi_manager.wavenumbers, z_plot)
             line.setName(label)
             line.setPen(pg.mkPen(self.roi_manager.get_color_rgba(component_number)))
             return
@@ -3500,7 +3532,7 @@ class ROIPlotter(pg.PlotWidget):
         # New line
         color_rgba = self.roi_manager.get_color_rgba(component_number)
         pen = pg.mkPen(color_rgba)
-        line = self.plot(self.roi_manager.wavenumbers, z_data, pen=pen, name=label)
+        line = self.plot(self.roi_manager.wavenumbers, z_plot, pen=pen, name=label)
         self.component_gaussian_lines[component_number] = line
         logger.info(f"Plotted fallback model for component {component_number}")
 

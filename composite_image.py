@@ -249,6 +249,13 @@ class CompositeImageViewWidget(QMainWindow):
         self.show_seeds_check.clicked.connect(lambda state: self.plot_seeds(self.spectral_cmps_seed) if state else self.plot_seeds(np.array([])))
         self.show_seeds_check.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
+        self.show_h_scales_check = QCheckBox("Show H Scales")
+        self.show_h_scales_check.setCheckable(True)
+        self.show_h_scales_check.setEnabled(False)
+        self.show_h_scales_check.setToolTip("Show original H seed scale factors when they are available in the fit metadata.")
+        self.show_h_scales_check.clicked.connect(lambda _state: self._update_fit_info_label())
+        self.show_h_scales_check.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
         for widget in [export_composite_button, save_seeds_button, save_H_as_csv_button, export_spectra_button,
                        reset_levels_button, reset_lut_button, invert_lut_button, save_seed_mode_combobox,
                        promote_seed_button, promote_seed_target_combobox, promote_seed_component_spinbox,
@@ -421,6 +428,7 @@ class CompositeImageViewWidget(QMainWindow):
         spectrum_header_layout.addWidget(spectrum_meta, stretch=1)
         spectrum_header_layout.addWidget(save_H_as_csv_button)
         spectrum_header_layout.addWidget(export_spectra_button)
+        spectrum_header_layout.addWidget(self.show_h_scales_check, alignment=Qt.AlignRight)
         spectrum_header_layout.addWidget(self.show_seeds_check, alignment=Qt.AlignRight)
 
         spectrum_panel = QWidget()
@@ -591,6 +599,50 @@ class CompositeImageViewWidget(QMainWindow):
             return None
         return self.fit_info if isinstance(self.fit_info, dict) else None
 
+    @staticmethod
+    def _h_seed_scale_factors_from_info(info: dict | None) -> np.ndarray | None:
+        if not isinstance(info, dict):
+            return None
+        scale_factors = info.get("h_seed_unity_scale_factors")
+        if scale_factors is None:
+            return None
+        try:
+            scale_factors = np.asarray(scale_factors, dtype=np.float64).ravel()
+        except (TypeError, ValueError):
+            return None
+        if scale_factors.size == 0:
+            return None
+        return scale_factors
+
+    def _sync_h_scale_control(self, has_h_scales: bool):
+        if not hasattr(self, "show_h_scales_check"):
+            return
+        self.show_h_scales_check.setEnabled(bool(has_h_scales))
+        if has_h_scales:
+            self.show_h_scales_check.setToolTip(
+                "Show the original per-component H seed maxima used before unity normalization."
+            )
+        else:
+            self.show_h_scales_check.setToolTip(
+                "No H seed scale factors are stored for the current result."
+            )
+
+    @classmethod
+    def _format_h_seed_scale_lines(cls, scale_factors: np.ndarray) -> list[str]:
+        entries = []
+        for component_index, scale in enumerate(scale_factors):
+            formatted = cls._format_fit_scalar(scale)
+            if formatted is not None:
+                entries.append(f"C{component_index + 1}: {formatted}")
+        if not entries:
+            return []
+
+        lines = ["H seed scales (original max):"]
+        chunk_size = 4
+        for start in range(0, len(entries), chunk_size):
+            lines.append("  " + ", ".join(entries[start:start + chunk_size]))
+        return lines
+
     def _fit_series_relative_stats(self) -> tuple[float, float, float] | None:
         if not isinstance(self.fit_info_series, list):
             return None
@@ -631,6 +683,8 @@ class CompositeImageViewWidget(QMainWindow):
         if not hasattr(self, "fit_summary_label") or not hasattr(self, "fit_summary_widget"):
             return
         info = self._current_fit_info()
+        h_scale_factors = self._h_seed_scale_factors_from_info(info)
+        self._sync_h_scale_control(h_scale_factors is not None)
         if self.result_mode == "PCA":
             self.fit_summary_label.clear()
             self.fit_summary_widget.hide()
@@ -683,6 +737,16 @@ class CompositeImageViewWidget(QMainWindow):
                     f"mean {self._format_fit_scalar(mean_rel)}, "
                     f"range {self._format_fit_scalar(min_rel)} to {self._format_fit_scalar(max_rel)}"
                 )
+
+            if (
+                    h_scale_factors is not None
+                    and hasattr(self, "show_h_scales_check")
+                    and self.show_h_scales_check.isChecked()
+            ):
+                h_scale_lines = self._format_h_seed_scale_lines(h_scale_factors)
+                if h_scale_lines:
+                    lines.append("")
+                    lines.extend(h_scale_lines)
 
         if self.display_w_scale_factor is not None:
             if lines:

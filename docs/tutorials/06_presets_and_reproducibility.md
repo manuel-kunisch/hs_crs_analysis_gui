@@ -20,6 +20,7 @@ It includes:
 - NNMF solver and backend choice,
 - NNMF and NNLS iteration limits,
 - seed initialization settings,
+- the **Normalize H spectra to unity** checkbox state,
 - resonance/spectral settings,
 - stitching settings,
 - ROI manager state,
@@ -58,6 +59,12 @@ A shortened preset looks like this:
   "analysis_method": "Fixed-H NNLS",
   "nnmf_solver": "mu",
   "nnmf_backend": "auto",
+  "seed_init_settings": {
+    "w_seed_mode": "NNLS abundance map",
+    "overwrite_existing_w_from_h": true,
+    "normalize_h_to_unity": true,
+    "seed_pixel_metric": "Max Intensity"
+  },
   "stitch_manager": {
     "pattern": "*.tif",
     "binning": 1,
@@ -76,6 +83,8 @@ A shortened preset looks like this:
 ```
 
 The real preset usually contains more ROI, color, histogram, seed, and solver state. The exact content depends on the current GUI state when the preset is saved.
+
+The `normalize_h_to_unity` entry restores the **Normalize H spectra to unity** checkbox. Save a new preset after changing this checkbox if the run should be reproduced with the same H-seed scaling behavior.
 
 ## ROI And Seed State
 

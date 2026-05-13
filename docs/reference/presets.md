@@ -16,7 +16,7 @@ The main JSON preset is the most complete snapshot of a GUI session. Save it wit
 | Physical units | `fov`, `unit` (nm / um / mm) |
 | Spectral axis | `wavenumber_widget` (source mode, unit, pump/Stokes settings, custom values, custom labels), `wavenumbers` (derived array) |
 | Analysis settings | `num_components`, `analysis_method`, `custom_initialization`, `nnmf_solver` (mu / cd), `nnmf_backend` (Automatic / CPU only / Prefer GPU), `nnmf_max_iter`, `nnls_max_iter` |
-| Seed settings | `w_seed_mode`, `overwrite_w_from_h` |
+| Seed settings | `seed_init_settings` (`w_seed_mode`, `overwrite_existing_w_from_h`, `normalize_h_to_unity`, `seed_pixel_metric`, fixed-H and 4D fast-mode flags, result scaling flag) |
 | Resonance / spectral seeds | `resonance_settings` |
 | Stitching | `stitch_manager` (pattern, binning, overlaps) |
 | ROI manager | `roi_manager` (all ROI rows: geometry, component, color, spectrum, flags) |
@@ -93,6 +93,19 @@ The main preset stores solver and backend choices. These affect how NNMF and NNL
 | `nnls_max_iter` | integer (default 1000) | Maximum NNLS iterations for fixed-H NNLS reconstruction. Used by the PyTorch/CUDA NNLS backend and passed to SciPy NNLS where supported. |
 
 These settings are also shown in the analysis panel and can be changed before each run.
+
+---
+
+## Seed-Initialization Fields
+
+The main preset stores the seed-initialization controls under `seed_init_settings`.
+
+| Field | Values | Meaning |
+|---|---|---|
+| `w_seed_mode` | `NNLS abundance map`, `Selective score map`, `H weights`, `Average image`, `Homogeneous (empty)` | How W maps are estimated from available H spectra. |
+| `overwrite_existing_w_from_h` | `true` / `false` | Whether H-based W reconstruction replaces existing W seeds or only fills missing W columns. |
+| `normalize_h_to_unity` | `true` / `false` | Restores the **Normalize H spectra to unity** checkbox. When enabled, completed H seed spectra are scaled to max=1 before seed display, W reconstruction, and analysis. |
+| `seed_pixel_metric` | `Max Intensity`, `Score` | How residual fallback pixels are ranked when H seeds are missing. |
 
 ---
 

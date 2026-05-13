@@ -537,6 +537,10 @@ class DataWidget(QtWidgets.QWidget):
             # Add the dock to the dock area
             self.dock_area.addDock(self.roi_plot_dock, 'right', self.roi_manager.roi_table_dock)
             self.roi_plot_dock.addWidget(self.roi_avg_plot_wid)
+        self.roi_avg_plot_wid.setLabel(
+            'left',
+            text='Normalized intensity' if getattr(self.roi_manager, "normalize_roi_plot_to_unity", False) else 'Intensity [a.u.]',
+        )
 
         roi_index = self.roi_manager.roi_id_idx.get(roi_id)
         roi_pen = self.roi_manager.rois[roi_index].pen

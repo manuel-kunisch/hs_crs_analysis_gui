@@ -166,6 +166,33 @@ class StitchManager(QtCore.QObject):
         self.mode_combo.setCurrentText(str(self.stitcher.mode))
         params.addRow("Mode", self.mode_combo)
 
+        # --- blending controls ---
+        # Cosine ramp is smoother than the legacy linear ramp at the overlap
+        # midpoint; intensity matching scales each incoming tile so vignetting
+        # / exposure drift no longer leaves a soft brightness step at seams.
+        self.blending_profile_combo = QtWidgets.QComboBox()
+        self.blending_profile_combo.addItems(["Cosine (recommended)", "Linear"])
+        current_profile = str(getattr(self.stitcher, "blending_profile", "cosine")).lower()
+        self.blending_profile_combo.setCurrentIndex(1 if current_profile == "linear" else 0)
+        self.blending_profile_combo.setToolTip(
+            "Weight profile applied across the overlap region.\n"
+            "Cosine (raised-cosine / Hann) is smoother at the midpoint than the linear ramp."
+        )
+        params.addRow("Blending profile", self.blending_profile_combo)
+
+        self.match_intensity_check = QtWidgets.QCheckBox("Match tile intensities")
+        self.match_intensity_check.setChecked(
+            bool(getattr(self.stitcher, "match_tile_intensities", False))
+        )
+        self.match_intensity_check.setToolTip(
+            "Scale each incoming tile so its mean intensity in the overlap region\n"
+            "matches the existing stitched image before blending. Removes soft\n"
+            "brightness steps from vignetting or exposure drift.\n\n"
+            "Disable for quantitative work where absolute tile intensities must be\n"
+            "preserved exactly."
+        )
+        params.addRow("", self.match_intensity_check)
+
         self.scan_combo = QtWidgets.QComboBox()
         self.scan_combo.addItems(["left", "right"])
         self.scan_combo.setCurrentText(str(self.stitcher.scan_x_direction))
@@ -573,6 +600,10 @@ class StitchManager(QtCore.QObject):
         self.stitcher.display_channel = int(self.display_channel_spin.value())
         self.stitcher.plot = bool(self.plot_check.isChecked())
         self.stitcher.vmax = float(self.vmax_spin.value())
+        self.stitcher.blending_profile = (
+            "linear" if self.blending_profile_combo.currentIndex() == 1 else "cosine"
+        )
+        self.stitcher.match_tile_intensities = bool(self.match_intensity_check.isChecked())
 
         print(f"Starting stitching with binning={self.stitcher.binning}, "
               f"overlap_row={self.stitcher.overlap_row}, overlap_col={self.stitcher.overlap_col},"
@@ -580,7 +611,9 @@ class StitchManager(QtCore.QObject):
               f"scan_x_direction={self.stitcher.scan_x_direction}, "
               f"scan_y_direction={self.stitcher.scan_y_direction}, "
               f"input_channel_order={self.stitcher.input_channel_order}, "
-              f"channel_list={self.stitcher.channel_list}, ")
+              f"channel_list={self.stitcher.channel_list}, "
+              f"blending_profile={self.stitcher.blending_profile}, "
+              f"match_tile_intensities={self.stitcher.match_tile_intensities}")
 
         # basic sanity
         if self.stitcher.overlap_row < 0 or self.stitcher.overlap_col < 0:

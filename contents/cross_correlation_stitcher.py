@@ -53,6 +53,15 @@ class CrossCorrelationStitcher:
     scan_y_direction: str = "down"  # or "up"
     binning: int = 2  # binning factor for raw data before stitching
 
+    # Blending controls (see the stitching dialog or stitch_corr docstring).
+    # "cosine" gives a smoother (Hann) overlap ramp than "linear".
+    # match_tile_intensities scales each incoming tile so its mean in the
+    # overlap region matches the existing stitch — removes soft brightness
+    # steps caused by vignetting / exposure drift. Disable for quantitative
+    # work where absolute tile intensities must be preserved exactly.
+    blending_profile: str = "cosine"
+    match_tile_intensities: bool = False
+
     # --- filename parsing (x/y indices from filenames) ---
     filename_regex: str = field(
         default=r".*pos[_-](?P<x>-?\d+)[_-](?P<y>-?\d+).*",
@@ -227,6 +236,8 @@ class CrossCorrelationStitcher:
             ch=self.display_channel,
             vmax_var=self.vmax,
             _plot=self.plot,
+            blending_profile=self.blending_profile,
+            match_tile_intensities=self.match_tile_intensities,
         )
         if self.return_as_int:
             stitch_result = stitch_result.astype(np.uint16)

@@ -30,6 +30,53 @@ def lin_weights(overlap, max_weight=1): # first avg = top image, last avg = bott
     weight_list = weight_list + reversed_weights
     return weight_list
 
+def cosine_weights(overlap, max_weight=1.0):
+    """
+    Raised-cosine (Hann) blend weights. Smoother than the triangular lin_weights:
+    C^1 at the midpoint instead of C^0, no kink. Same return format as lin_weights.
+
+    For overlap N, returns N pairs [w_left, w_right] where
+        w_right(i) = 0.5 * (1 - cos(pi * (i + 1) / (N + 1)))
+        w_left(i)  = 1 - w_right(i)
+    so that w_left + w_right = 1 everywhere; w_left decreases monotonically from
+    near 1 at i=0 to near 0 at i=N-1. `max_weight` is accepted for signature
+    compatibility with lin_weights but not used: the cosine ramp is always symmetric.
+    """
+    N = int(overlap)
+    if N <= 0:
+        return []
+    i = np.arange(N, dtype=np.float64)
+    w_right = 0.5 * (1.0 - np.cos(np.pi * (i + 1.0) / (N + 1.0)))
+    w_left = 1.0 - w_right
+    return [[float(wl), float(wr)] for wl, wr in zip(w_left, w_right)]
+
+def _blend_weights(overlap, profile='cosine'):
+    """Pick the blend weight ramp by name. Falls back to cosine for unknown values."""
+    if profile == 'linear':
+        return lin_weights(overlap)
+    return cosine_weights(overlap)
+
+def _match_intensity_factor(existing_overlap: np.ndarray,
+                            incoming_overlap: np.ndarray,
+                            eps: float = 1e-8) -> np.ndarray:
+    """
+    Per-channel multiplicative factor that brings `incoming_overlap` onto the
+    same mean intensity as `existing_overlap` in their shared region.
+
+    A degenerate channel (mean ~ 0 in either side, NaN, or factor outside
+    [0.1, 10.0]) falls back to 1.0 so we never invent or kill signal.
+    """
+    if existing_overlap.size == 0 or incoming_overlap.size == 0:
+        return np.float32(1.0)
+    reduce_axes = tuple(range(existing_overlap.ndim - 1))
+    e_mean = np.nanmean(existing_overlap, axis=reduce_axes)
+    i_mean = np.nanmean(incoming_overlap, axis=reduce_axes)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        factor = e_mean / np.where(np.abs(i_mean) > eps, i_mean, np.nan)
+    factor = np.where(np.isfinite(factor), factor, 1.0)
+    factor = np.clip(factor, 0.1, 10.0)
+    return factor.astype(np.float32, copy=False)
+
 def cross_image(img1, img2, channels=None):
     """
     Compute cross-correlation image used for shift estimation.
@@ -297,9 +344,26 @@ def adjust_x(im_left, im_right, offset, overlap, _plot=False):
     return im_left, im_right, overlap_im_left, overlap_im_right
 
 
-def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
+def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False,
+                     blending_profile: str = 'cosine',
+                     match_tile_intensities: bool = True):
     x_max = bot_im.shape[1] # initial number of colums (e.g. 512)
     x_max_data = x_max + dummy[0]   # max index where no nans
+
+    # Intensity matching: bring the incoming bottom tile onto the same mean
+    # intensity as the existing stitch in their nominal overlap region BEFORE
+    # we add padding or run the y-alignment. This removes the soft brightness
+    # step that linear/cosine feathering alone cannot hide.
+    if match_tile_intensities:
+        existing_overlap = stitch_im[-overlap:, :, :]
+        incoming_overlap = bot_im[:overlap, :, :]
+        factor = _match_intensity_factor(existing_overlap, incoming_overlap)
+        if np.ndim(factor) == 0:
+            if float(factor) != 1.0:
+                bot_im = (bot_im * float(factor)).astype(bot_im.dtype, copy=False)
+        else:
+            bot_im = (bot_im * factor).astype(bot_im.dtype, copy=False)
+
     bot_im = add_cols(bot_im, dummy)    # matches the image shape such that the calculated offset is correct
                                         # by adding the same dummy again
     # offset[0] is y-direction and offset[1] x-direction
@@ -378,7 +442,7 @@ def correct_y_offset(stitch_im, bot_im, offset, overlap, dummy, _plot=False):
         stitch_left = stitch_right = np.empty((overlap_top.shape[0], 0, overlap_top.shape[-1]))
         new_overhang = [0, 0]
     # do not delete cols, vital for the column stitching step
-    weight_list_x = lin_weights(overlap_top.shape[0])
+    weight_list_x = _blend_weights(overlap_top.shape[0], profile=blending_profile)
     stitch_center = np.full(
         (overlap_top.shape[0], top.shape[1], overlap_top.shape[2]),
         np.nan,
@@ -454,7 +518,9 @@ def adjust_rows(im_l, im_r):
 
 
 def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
-                _plot = False):
+                _plot = False,
+                blending_profile: str = 'cosine',
+                match_tile_intensities: bool = True):
     """
     Function, which attaches two column images based on their dummy signal and
     cross-correlation of the overlapping region.
@@ -560,7 +626,9 @@ def attach_cols(list_l, list_r, overlap, sigma_interval, channel_list = None,
         for all slices stored in 'slice_idx'!
     """  
 
-    new_image = average_columns(new_image, mean_corr, overlap, slice_idx_list, overlap_list)
+    new_image = average_columns(new_image, mean_corr, overlap, slice_idx_list, overlap_list,
+                                blending_profile=blending_profile,
+                                match_tile_intensities=match_tile_intensities)
     return new_image
 
 def find_dummy_indices(list_l, list_r):
@@ -643,7 +711,9 @@ def dummy_correlation(list_l, list_r, overlap, d_list, slice_idx_list, dummy_lis
 
 
 
-def average_columns(image, mean_offset, overlap, y_slice_idx_list, overlap_idx_list, _plot = False):
+def average_columns(image, mean_offset, overlap, y_slice_idx_list, overlap_idx_list, _plot = False,
+                    blending_profile: str = 'cosine',
+                    match_tile_intensities: bool = True):
     """
     Averages the overlapping region of two column images based on the provided mean offset.
 
@@ -677,8 +747,21 @@ def average_columns(image, mean_offset, overlap, y_slice_idx_list, overlap_idx_l
             ax[2].imshow(overlap_r[:,:,ch], vmax=vmax_var, aspect="equal")
             ax[3].imshow(im_r[:,:,ch], vmax=vmax_var, aspect="equal")
             plt.show()
-        
-        weight_list = lin_weights(overlap_l.shape[1])
+
+        # Match the right tile onto the left tile's mean intensity within the
+        # overlap region before blending. Same rationale as in correct_y_offset:
+        # feathering alone cannot hide a brightness step between tiles.
+        if match_tile_intensities:
+            factor = _match_intensity_factor(overlap_l, overlap_r)
+            if np.ndim(factor) == 0:
+                if float(factor) != 1.0:
+                    im_r = (im_r * float(factor)).astype(im_r.dtype, copy=False)
+                    overlap_r = (overlap_r * float(factor)).astype(overlap_r.dtype, copy=False)
+            else:
+                im_r = (im_r * factor).astype(im_r.dtype, copy=False)
+                overlap_r = (overlap_r * factor).astype(overlap_r.dtype, copy=False)
+
+        weight_list = _blend_weights(overlap_l.shape[1], profile=blending_profile)
         stitch_center = np.full((im_l.shape[0], overlap_l.shape[1], im_l.shape[2]), np.nan, dtype=np.float32)
         
         for i in range(0, overlap_l.shape[1]):   # start at the top, place the bottom image on top of it
@@ -778,7 +861,9 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
                 channel_list:list = None, mode: str = 'normal',
                 scan_x_direction: str = 'left',
                 scan_y_direction: str = 'down',
-                ch: int=0, vmax_var: float = 10000, _plot=False) -> np.ndarray:
+                ch: int=0, vmax_var: float = 10000, _plot=False,
+                blending_profile: str = 'cosine',
+                match_tile_intensities: bool = True) -> np.ndarray:
     """
     Stitch and correct the data.
 
@@ -878,7 +963,9 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
                                                                  offset,
                                                                  overlap_row,
                                                                  dummy_added,
-                                                                 _plot=_plot)
+                                                                 _plot=_plot,
+                                                                 blending_profile=blending_profile,
+                                                                 match_tile_intensities=match_tile_intensities)
             dummy_added = np.add(dummy_added, row_overhang)
             for key in connections:
                 connection_indices[key] += connections[key]
@@ -942,7 +1029,9 @@ def stitch_corr(data: dict, lookup_x: list, lookup_y: list, overlap_row: int,
             r_dict = x_stitch_list[i]
 
         col_stitch = attach_cols(l_dict, r_dict, overlap_col,
-                                 sigma_interval, channel_list=channel_list)
+                                 sigma_interval, channel_list=channel_list,
+                                 blending_profile=blending_profile,
+                                 match_tile_intensities=match_tile_intensities)
 
         # keep only the new composite in list_entry
         list_entry['img'] = col_stitch

@@ -72,6 +72,11 @@ def _match_intensity_factor(existing_overlap: np.ndarray,
     e_mean = np.nanmean(existing_overlap, axis=reduce_axes)
     i_mean = np.nanmean(incoming_overlap, axis=reduce_axes)
     with np.errstate(divide='ignore', invalid='ignore'):
+        # Per-channel scale factor that brings incoming.mean onto existing.mean.
+        # The np.where sentinel turns near-zero incoming means into NaN so the
+        # division returns NaN (not inf); those NaN channels are replaced by
+        # 1.0 on the next line so a silent channel never rescales the tile.
+        # errstate just silences the resulting numpy warnings.
         factor = e_mean / np.where(np.abs(i_mean) > eps, i_mean, np.nan)
     factor = np.where(np.isfinite(factor), factor, 1.0)
     factor = np.clip(factor, 0.1, 10.0)

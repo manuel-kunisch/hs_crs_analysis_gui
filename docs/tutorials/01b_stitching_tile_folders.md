@@ -196,6 +196,18 @@ What happens if they are wrong:
 - too large overlap: excessive blending and spatial compression,
 - too much binning: faster stitching but weaker correlation precision and less sharp seams.
 
+### How precise does the overlap value need to be?
+
+The right strategy depends on whether you know the true overlap accurately:
+
+- **Overlap unknown or approximate (e.g. only the nominal stage value is available).** Use **correlation** and enter an overlap that is somewhat *larger* than your best guess (e.g. +20–40 raw pixels). The cross-correlation search is robust enough to find the true shift within an oversized search region, and the extra margin protects you against under-shoot. Erring high in correlation mode is safer than erring low.
+- **Overlap known precisely (e.g. from a calibrated stage or measured directly on a reference tile).** Enter the **exact** overlap. With correlation enabled, an oversized overlap then dilutes the score with regions that do not actually correlate, which can pull the estimated shift onto a noise peak. With correlation disabled (pure grid placement), the value sets the blend region directly, so accuracy matters even more.
+
+Rule of thumb:
+
+- *unknown*: overestimate slightly, let correlation refine.
+- *known*: enter the exact value, do not pad.
+
 ## Scan direction
 
 Scan direction controls how the parsed x/y indices are mapped into the displayed mosaic.
@@ -286,7 +298,56 @@ How to choose `Sigma interval`:
 - larger values trust more measured offsets,
 - if correlation seems unstable, try `sigma mean` first before changing the overlap values.
 
-If correlation makes the mosaic worse, disable it and use grid placement with linear blending.
+If correlation makes the mosaic worse, disable it and use grid placement with the current blending settings.
+
+
+## Blending
+
+Two controls in the stitch dialog decide how the overlapping pixels of adjacent tiles are combined into the final stitched image:
+
+- **Blending profile** (dropdown): `Cosine (recommended)` or `Linear`.
+- **Match tile intensities** (checkbox): on/off, default off.
+
+### Blending profile
+
+![Linear and cosine blending profiles](../assets/images/01b_blending_profiles.png)
+
+The weight ramp applied across the overlap region:
+
+- `Cosine` (default): a raised-cosine (Hann) curve. The two weights vary smoothly from ~1/~0 at the seam edges to 0.5/0.5 at the centre and the ramp is C¹ at the midpoint, so the human eye does not pick up the kink that a triangular ramp would leave.
+- `Linear`: the legacy triangular tent. Kept available for comparison and backwards compatibility with older results.
+
+In both cases the two weights sum to 1 at every overlap column, so the stitch is a true convex combination of the two tiles.
+
+### Match tile intensities
+
+Each incoming tile can be scaled, per channel, so that its mean intensity inside the overlap region matches the mean of the already stitched image in the same region. This step happens *before* the weighted blend.
+
+When this helps:
+
+- visible soft brightness steps at seams caused by vignetting,
+- exposure or laser-power drift between tiles,
+- tile-to-tile gain differences in the detector.
+
+When to leave it off (the default):
+
+- quantitative work where the absolute tile intensities must be preserved exactly,
+- already flat-field corrected tiles where mean intensities are guaranteed to match,
+- single-tile diagnostics, where the rescaling would be a no-op anyway.
+
+Implementation notes:
+
+- The factor is per channel, NaN-safe, and clipped to `[0.1, 10.0]`. A degenerate channel (mean ~ 0 on either side, or any non-finite intermediate) falls back to a factor of 1.0, so the step never invents or kills signal.
+- Only the incoming tile is rescaled; the running stitch is never modified by this step. This keeps the result reproducible regardless of the tile order, up to the natural pairwise drift of the rescaling chain.
+
+### How to choose
+
+| Symptom | Try |
+|---|---|
+| Sharp kink visible at the seam centre | Cosine profile |
+| Soft brightness step across the seam | Match tile intensities |
+| Both | Cosine + Match tile intensities |
+| Need absolute intensity preservation | Cosine + leave matching off |
 
 ## Saving and reusing stitch settings
 
@@ -301,6 +362,8 @@ The stitching tab has its own JSON preset. This stores:
 - Channels to correlate.
 - Filename regex.
 - IGNORECASE setting.
+- Blending profile (cosine / linear).
+- Match tile intensities (on / off).
 
 Use stitching presets when the microscope filename pattern and tile geometry are stable across datasets.
 
@@ -326,10 +389,12 @@ If the grid is mirrored:
 
 If seams are visible:
 
-- Check overlap values.
+- Check overlap values (overestimate slightly when using correlation, set the exact value when the overlap is known).
 - Check binning.
 - Try correlation.
 - Restrict correlation to structural channels.
+- Switch the Blending profile to `Cosine` if it is still on `Linear`.
+- Enable `Match tile intensities` if the seam looks like a soft brightness step (typical for vignetting or exposure drift). Leave it off for quantitative work.
 - Inspect whether rolling-ball correction or normalization should be applied consistently.
 
 If spectral channels look wrong:

@@ -488,6 +488,10 @@ class StitchManager(QtCore.QObject):
             "vmax": float(self.vmax_spin.value()),
             "filename_regex": self.regex_edit.text(),
             "ignorecase": bool(self.ignorecase_check.isChecked()),
+            "blending_profile": (
+                "linear" if self.blending_profile_combo.currentIndex() == 1 else "cosine"
+            ),
+            "match_tile_intensities": bool(self.match_intensity_check.isChecked()),
         }
 
     def export_state(self) -> dict:
@@ -509,6 +513,9 @@ class StitchManager(QtCore.QObject):
         self.vmax_spin.setValue(float(d.get("vmax", 2500.0)))
         self.regex_edit.setText(d.get("filename_regex", self.stitcher.filename_regex))
         self.ignorecase_check.setChecked(bool(d.get("ignorecase", True)))
+        profile = str(d.get("blending_profile", "cosine")).lower()
+        self.blending_profile_combo.setCurrentIndex(1 if profile == "linear" else 0)
+        self.match_intensity_check.setChecked(bool(d.get("match_tile_intensities", False)))
         self._apply_regex_from_ui()
         self._update_overlap_labels()
 
@@ -931,3 +938,24 @@ class RegexHelperDialog(QtWidgets.QDialog):
         self.ignorecase = self.ignorecase_check.isChecked()
         self.accept()
 
+
+
+if __name__ == '__main__':
+    # plot the 2 different weights next to each other in a 2,1 subplot
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 2, sharey=True)
+    # linear weights
+    from cross_correlate import _blend_weights
+    lin_w = _blend_weights(100, profile="linear")
+    ax[0].plot(lin_w, label="linear")
+    # cosine weights
+    cos_w = _blend_weights(100,  profile="cosine")
+    ax[1].plot(cos_w, label="cosine")
+    ax[1].set_xlabel("overlap pixel")
+    ax[0].set_xlabel("overlap pixel")
+    ax[0].set_ylabel("weight")
+    
+    ax[0].set_title("Linear blending weights")
+    ax[1].set_title("Cosine blending weights")  
+
+    plt.show()

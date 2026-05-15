@@ -1096,6 +1096,7 @@ class AnalysisManager(QtCore.QObject):
                 if custom_init:
                     self.mv_analyzer.seed_H = None if display_seed_H is None else np.array(display_seed_H, copy=True)
                     self.mv_analyzer.seed_H_background_flag = None if display_seed_H_bg is None else np.array(display_seed_H_bg, copy=True)
+                    # restore metadata
                     self.mv_analyzer.restore_H_seed_scale_state(display_H_seed_scale_state)
                     self.mv_analyzer.seed_W = None
                     self.mv_analyzer._W_prepared = False
@@ -1277,6 +1278,10 @@ class AnalysisManager(QtCore.QObject):
             skip_spectral_info: bool = True,
             normalize_w_seed: bool = True,
     ) -> bool:
+        """
+        Calculates W seed and always fills up the complementary H. Per default using residual data for H
+        and afterwards fill the W seed with the selected W map from H mode
+        """
         # calculates the W seeds either from spectral info or the actual NNMF abundance map,
         # per default normalization would scale W maps to unity, which requires less NNMF iterations
         # if H contrains real spectral scale
@@ -1306,9 +1311,11 @@ class AnalysisManager(QtCore.QObject):
         self._ensure_nnls_seed_mode_selected()
         self.mv_analyzer.seed_H = None if H_template is None else np.array(H_template, copy=True)
         self.mv_analyzer.seed_H_background_flag = None if H_background_template is None else np.array(H_background_template, copy=True)
+        # bookkeeping in mv analyzer
         self.mv_analyzer.restore_H_seed_scale_state(H_scale_state_template)
         self.mv_analyzer.seed_W = None
         self.mv_analyzer._W_prepared = False
+        # unity scaling if enabled
         self._prepare_H_seeds_for_current_scale_mode()
         # calculate the abundance maps
         self._rebuild_W_seeds_from_H(
@@ -1540,9 +1547,11 @@ class AnalysisManager(QtCore.QObject):
 
 
         logger.info("Processing user inputs for W seeds and H from ROIs")
+        # creates W from spectral info (placeholder only if overwrite W from H is active) and yields seed pixels
+        # for non-defined H rows
         seed_W, seed_H, seed_pixels = self._make_W_seeds_from_spectral_info(make_H_seeds=True,
                                                                             debug_mode=False)  # create W seeds from spectral info and pass to analyzer
-
+        # apply unit scaling if enabled
         self._prepare_H_seeds_for_current_scale_mode()
 
         logger.info(
@@ -1563,6 +1572,10 @@ class AnalysisManager(QtCore.QObject):
 
         # remainining components that are not given by rois and spectral info are randomly initialized
         if not self._normalize_H_to_unity:
+            # Final H catch-all only when normalize is OFF: in the normalize-ON
+            # path, H is already complete (filled in step 3 before normalization,
+            # or via the h_seed_finalizer in step 5 for residual data). Re-running set_up_missing_H_seeds
+            # here would clear the H scale-state metadata via set_H_seed.
             self.mv_analyzer.set_up_missing_H_seeds()
 
         if not show_seeds:
@@ -2417,14 +2430,6 @@ class AnalysisManager(QtCore.QObject):
         information is disregarded and the input image will always be treated as fixed seed.
 
         Important! This function cannot be moved to the MV analyzer, as it depends on the GUI elements for spectral info and ROIs.
-
-        Parameters
-        ----------
-        make_H_seeds
-        debug_mode
-
-        Returns
-        -------
 
         """
         logger.info(f"Processing spectral info to create W {"and H" if make_H_seeds else ""} seeds")

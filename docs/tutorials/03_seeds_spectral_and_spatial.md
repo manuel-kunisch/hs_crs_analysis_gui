@@ -2,6 +2,8 @@
 
 Seeds are the main way to guide the analysis. The GUI supports both spectral seeds and spatial seeds.
 
+![Seed estimation pipeline](../assets/images/03_seed_building_flow.svg)
+
 ## H Seeds: Spectral Information
 
 `H` seeds describe what the component spectra should look like.

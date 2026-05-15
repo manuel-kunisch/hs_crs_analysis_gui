@@ -156,6 +156,9 @@ class MultivariateAnalyzer(object):
         )
 
     def restore_H_seed_scale_state(self, state: HSeedScaleState | None):
+        """
+
+        """
         if state is None:
             self.clear_H_seed_scale_reference()
             return
@@ -1162,8 +1165,10 @@ class MultivariateAnalyzer(object):
 
         return max(float(np.mean(self.data_2d, axis=None)), eps)
 
-    def set_up_random_H_seed(self, i):
-        # Prefer a data-driven residual spectrum and keep the legacy random fallback.
+    def set_up_residual_or_random_H_seed(self, i):
+        """
+        Tries to estimate the residual or random seed
+        """
         if self.seed_H is None:
             self.seed_H = np.zeros((self._n_components, self.raw_data_3d.shape[0]))
 
@@ -1210,10 +1215,13 @@ class MultivariateAnalyzer(object):
         if fill_H_seed and not self._W_prepared:
             logger.warning('W seeds still not prepared. Creating missing H seeds before W fallback.')
             self._maybe_yield_to_ui()
+            # find H seed from residual data
             self.set_up_missing_H_seeds()
+            # apply scaling if necessary
             if h_seed_finalizer is not None:
                 h_seed_finalizer()
             self._maybe_yield_to_ui()
+            # estimate new W seed from this H
             self.estimate_W_seed_matrix_from_H(overwrite=False, normalize_w_seed=normalize_w_seed)
         if not self._W_prepared:
             logger.warning('W seeds still not prepared, using average intensity for remaining components')
@@ -1228,7 +1236,7 @@ class MultivariateAnalyzer(object):
 
         # step 1 and 2 have to be done by the analysis manager or the user manually, i.e. the H seeds are filled manually
 
-        # 3) if no seed pixels are found, use the average intensity of the data
+        # 3) if no seed pixels are found, use the residual data or random fallback
         # check if H already exists and which components still must be filled
         if self.seed_H is None:
             self.seed_H = np.zeros((self._n_components, self.data_2d.shape[1]))
@@ -1247,11 +1255,12 @@ class MultivariateAnalyzer(object):
             self._maybe_yield_to_ui()
             logger.info(f'Creating H seed for component {cmp}')
             if self.seed_H_background_flag[cmp]:
+                # background components are not initialitzed from NNLS residual data
                 logger.info(f'Component {cmp} is marked as background, using raw data for H seed estimation')
                 self.seed_H[cmp] = np.mean(self.data_2d, axis=0)
                 self._clear_nnls_abundance_cache()
                 continue
-            self.set_up_random_H_seed(cmp)
+            self.set_up_residual_or_random_H_seed(cmp)
         return True
 
     def make_W_seeds_from_spectral_info(self, reset_old_seed=True, debug_mode=True):

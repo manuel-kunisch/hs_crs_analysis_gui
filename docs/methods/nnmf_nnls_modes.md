@@ -209,7 +209,7 @@ If only a spectral seed is available, the GUI estimates `W0` from the data and t
 
 - `nnls`: coefficient maps from a non-negative least-squares fit,
 - `selective_score`: a heuristic map based on target projection and competition against other seeded spectra,
-- `h_weighted`: a legacy channel-weighted image heuristic,
+- `h_weighted`: a legacy channel-weighted image heuristic, weights each channel with exponentially scaled `H0`
 - `average`: average image fallback,
 - `empty`: almost neutral homogeneous fallback.
 
@@ -219,6 +219,9 @@ The important separation is:
 - once a usable `H` exists, the final `W` seed for that component is built with the selected W-seed mode.
 
 So the basis finding and the W-map construction are related, but they are not the same step.
+
+
+See the [seed estimation pipeline diagram](../methods/nnmf_nnls_modes.md#seeded-nnmf) for an at-a-glance overview.
 
 #### Picking `nnls` vs `selective_score`
 

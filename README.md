@@ -4,7 +4,13 @@
 
 Built for coherent Raman scattering (CRS, CARS, SRS) and related hyperspectral imaging workflows, but applicable to any spectral image stack that needs non-negative unmixing.
 
+![Demonstration of a typical hyperspectral stack stepping through its spectral channels — synthetic quickstart data shipped with the GUI](docs/assets/gifs/quick_synthetic_data_demo.gif)
+
+*Above: a typical hyperspectral stack as it appears in HS-MOSAIC — one grayscale frame per spectral channel, with the channel slider scrolling through the cube.*
+
 ![Same dataset, four modes side by side — PCA, random NNMF, seeded NNMF, fixed-H NNLS — on the synthetic quickstart data shipped with the GUI](docs/assets/images/02_modes_comparison.png)
+
+*Above: the same synthetic dataset analyzed with each of the four available modes. PCA misses peaks, random NMF mixes components, seeded NMF and fixed-H NNLS recover the underlying blob spectra.*
 
 > [!IMPORTANT]
 > The TODO markers in this README (project description, citation, license, acknowledgements) still need to be filled in before publication.

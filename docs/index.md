@@ -4,6 +4,9 @@ Welcome to the documentation for HS-MOSAIC, a desktop GUI for hyperspectral micr
 This documentation is designed to guide users through the installation, usage, and troubleshooting of the software, as well as provide detailed tutorials and reference materials.
 
 ![GUI Overview](assets/images/gui_overview.png)
+
+
+Quick Demo of the main workflow:
 ![Demo](assets/gifs/quick_beads_demo.gif)
 
 ## Start Here

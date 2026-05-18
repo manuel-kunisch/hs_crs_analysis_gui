@@ -73,8 +73,8 @@ class RollingBallConfig:
     mode: str = "reference"
 
     # used to compute fit-input background field (large blur), for fitting
-    estimation_blur_sigma_x_px: float = 80.0
-    estimation_blur_sigma_y_px: float = 80.0
+    estimation_blur_sigma_x_px: float = 150.0
+    estimation_blur_sigma_y_px: float = 150.0
     downsample: int = 2
     eps: float = 1e-6
 
@@ -615,6 +615,7 @@ class CorrectionPreviewDialog(QtWidgets.QDialog):
         self.glw = pg.GraphicsLayoutWidget()
         self.vb = self.glw.addViewBox(row=0, col=0)
         self.vb.setAspectLocked(True)
+        self.vb.invertY(True)  # TIFF/NumPy image coordinates: y=0 at the top, y increases downward.
 
         self.img_item = pg.ImageItem(axisOrder="row-major")
         self.vb.addItem(self.img_item)

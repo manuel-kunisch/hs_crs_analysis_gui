@@ -1,6 +1,6 @@
-site_name: HS MV Analysis
+site_name: HS-MOSAIC
 site_description: GUI for seeded multivariate analysis of hyperspectral and multispectral microscopy data
-repo_name: hs-mv-analysis
+repo_name: hs-mosaic
 
 theme:
   name: readthedocs
@@ -39,8 +39,9 @@ nav:
           - GPU acceleration: tutorials/02a_gpu_acceleration.md
       - 03 Seeds:
           - Seeds, spectra, and W maps: tutorials/03_seeds_spectral_and_spatial.md
-          - ROI Manager in detail: tutorials/03b_roi_manager.md
           - Loading custom seed spectra: tutorials/03a_loading_custom_seed_spectra.md
+          - ROI Manager in detail: tutorials/03b_roi_manager.md
+          - Auto-suggested ROIs: tutorials/03c_suggest_rois.md
       - 04 Physical units and rolling-ball correction: tutorials/04_physical_units_and_rolling_ball.md
       - 05 Results and export: tutorials/05_results_and_export.md
       - 06 Presets and reproducibility: tutorials/06_presets_and_reproducibility.md

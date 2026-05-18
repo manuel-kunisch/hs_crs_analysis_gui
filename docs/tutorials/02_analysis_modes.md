@@ -13,6 +13,13 @@ This page explains which mode to choose in the GUI and what kind of result to ex
 
 The modes form a progression: each one uses more prior knowledge and enforces it more strictly.
 
+![Mode comparison on the synthetic quickstart dataset](../assets/images/02_modes_comparison.png)
+
+*Same dataset, four modes, side by side. **PCA** fails to recover all the blob peaks; **random NNMF** shows severe spectral mixing between components; **seeded (custom) NNMF** and **fixed-H NNLS** produce virtually identical results — here the ground-truth blob spectra were used as seeds, which is the best-case scenario for both. Cyan component 5 represents the background and is hidden in every panel so the separated blobs stay visible. Reproducible with the synthetic data shipped with the GUI at `docs/examples/synthetic_quickstart_data/synthetic_hs_stack.tif`; see the [synthetic quickstart](../examples/synthetic_quickstart.md) for the full recipe.*
+
+![4D NNMF and NNLS workflow](../assets/images/02_analysis_modes_4d_nnmf_nnls_workflow.png)
+The png above illustrates the principle of the different NNMF modes. PCA is omitted.
+
 ## How the GUI Controls Map to Modes
 
 The GUI exposes `PCA` and `NNMF` as the main method buttons. The practical NNMF variants are selected with checkboxes and seed settings:
@@ -86,17 +93,15 @@ For most datasets, the practical sequence is:
 
 The analysis panel exposes several settings that affect how NNMF and NNLS run internally. They are all saved in the preset.
 
-**NNMF solver** — two update rules are available: *Multiplicative Update (mu)*, the default, is reliable and enforces non-negativity at every step; *Coordinate Descent (cd)* can be faster on some datasets but is less commonly needed. Note that MU cannot escape an exact zero in the init (it multiplies every update), so MU custom inits are lifted to a small `eps` internally just before the solve. CD does not need this and is left unchanged. See [Non-negativity, exact zeros, and the MU init eps lift](../methods/nnmf_nnls_modes.md#non-negativity-exact-zeros-and-the-mu-init-eps-lift) in the reference for the full explanation.
-
-**Backend** — the GUI options are *Automatic*, *CPU only*, and *Prefer GPU*. With the multiplicative-update solver, *Automatic* uses the PyTorch/CUDA backend when CUDA is available and falls back to scikit-learn; *CPU only* uses the scikit-learn CPU backend; *Prefer GPU* requests PyTorch/CUDA and falls back to CPU if CUDA is unavailable. Coordinate Descent always uses the scikit-learn CPU backend. See [GPU acceleration](02a_gpu_acceleration.md).
-
-**Iteration limits** — *NNMF max iterations* and *NNLS max iterations* both default to 1000. Increase them if the fit summary shows the solver has not converged; decrease them to speed up exploratory runs. See [Convergence criteria](../methods/nnmf_nnls_modes.md#convergence-criteria) for the exact stopping rules used by each backend (the PyTorch MU criterion samples the residual every 10 iterations, which is worth knowing if you compare results against another implementation).
-
-**Custom initialization** — forces NNMF to use the seeded W and H matrices without any rescaling beforehand. Enable this when the seeds are already on the right amplitude scale and you do not want the initializer to modify them.
-
-**Scale results to 16-bit** — applies a single global scale factor so the maximum W value across all components equals 65535. Useful for display and histogram control; does not affect the underlying fit. See [Results and export](05_results_and_export.md#result-data-types-and-w-scaling).
-
-**Fast multislice NNMF** *(4D data only)* — runs full seeded NNMF on one reference slice and applies fixed-H NNLS to all remaining slices. Faster than running NNMF on every slice and keeps the spectral basis consistent across the series. Disable it if per-slice spectral adaptation is important.
+| Setting | What it controls | Default | Practical effect |
+|---|---|---|---|
+| **NNMF solver** | Update rule for the NMF fit: *Multiplicative Update (mu)* or *Coordinate Descent (cd)*. | `mu` | `mu` is reliable and enforces non-negativity at every step. `cd` can be faster on some datasets but is less commonly needed. MU custom inits are lifted to a small `eps` internally just before the solve to avoid zero-stuck-zero; CD does not need this. See [MU init eps lift](../methods/nnmf_nnls_modes.md#non-negativity-exact-zeros-and-the-mu-init-eps-lift). |
+| **Backend** | Where the NMF MU solver runs: *Automatic*, *CPU only*, or *Prefer GPU*. | Automatic | *Automatic* uses the PyTorch/CUDA backend when CUDA is available and falls back to scikit-learn. *CPU only* forces scikit-learn. *Prefer GPU* requests PyTorch/CUDA and falls back to CPU if CUDA is missing. Coordinate Descent always uses the scikit-learn CPU backend. See [GPU acceleration](02a_gpu_acceleration.md). |
+| **NNMF max iterations** | Maximum iteration count for the NMF solver. | 1000 | Raise if the fit summary shows the solver did not converge; lower to speed up exploratory runs. |
+| **NNLS max iterations** | Maximum iteration count for the NNLS solver (used by fixed-H NNLS and W-seed estimation). | 1000 | Same logic as above. See [Convergence criteria](../methods/nnmf_nnls_modes.md#convergence-criteria) — the PyTorch MU criterion samples the residual every 10 iterations, worth knowing when comparing against other implementations. |
+| **Custom initialization** | Forces NNMF to use the seeded W and H matrices without any rescaling beforehand. | Off | Enable when seeds are already on the right amplitude scale and you do not want the initializer to modify them. Required for the Seeded NNMF and Fixed-H NNLS practical modes. |
+| **Scale results to 16-bit** | Applies a single global scale factor so the maximum W value across all components equals 65535. | Off | Useful for display and histogram control only — does not affect the underlying fit. See [Results and export](05_results_and_export.md#result-data-types-and-w-scaling). |
+| **Fast multislice NNMF** *(4D data only)* | Runs full seeded NNMF on the reference slice and fixed-H NNLS on every other slice. | Off | Faster than running full NNMF per slice and keeps the spectral basis consistent across the series. Disable if per-slice spectral adaptation is important. |
 
 ## What to read next
 

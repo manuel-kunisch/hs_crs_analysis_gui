@@ -146,7 +146,7 @@ NMF with the Frobenius cost is non-convex jointly in `W` and `H` [8, 9]; only lo
 
 ### Interpretation in this project
 
-Random NNMF is useful when no reliable prior spectra exist yet. It is usually more physically intuitive than PCA because the result is additive and non-negative, but it is still not guaranteed to find the chemically preferred decomposition.
+Random NNMF is useful when no reliable prior spectra exist yet. It is usually easier to interpret than PCA — additive non-negative components rather than signed orthogonal directions — but it is still not guaranteed to find the chemically preferred decomposition.
 
 In practice it works best as:
 
@@ -184,7 +184,7 @@ $$
 X \approx W_0 H_0 \quad \longrightarrow \quad X \approx W^* H^*
 $$
 
-Because the cost surface has many local minima [8, 9], the choice of `W0` and `H0` directly determines which one the solver converges to. That is the whole reason seeding helps on hard data.
+Because the cost surface has many local minima [8, 9], the choice of `W0` and `H0` determines which local minimum the solver reaches. That is the reason seeding matters on hard data: it picks the basin of attraction.
 
 ### What can become a seed
 

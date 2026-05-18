@@ -2,8 +2,6 @@
 
 Seeds are the main way to guide the analysis. The GUI supports both spectral seeds and spatial seeds.
 
-![Seed estimation pipeline](../assets/images/03_seed_building_flow.svg)
-
 ## H Seeds: Spectral Information
 
 `H` seeds describe what the component spectra should look like.
@@ -33,7 +31,7 @@ The residual fallback works as follows:
 2. It chooses the working image data for the missing component. Background components use raw data. Other components use processed/background-subtracted data when **Use subtracted data** is enabled for that component, and raw data when it is disabled.
 3. It fits the existing `H` basis to every pixel with non-negative least squares.
 4. It subtracts that fitted contribution from the image data and keeps only the positive residual.
-5. It ranks residual pixels by unexplained signal strength. With the **Score** seed-pixel metric, the ranking also favors spectra that are novel relative to the existing seed basis.
+5. It ranks the residual pixels (the *seed pixels*: a small set of image pixels whose remaining, unexplained spectrum is taken as the candidate for the new component) by unexplained signal strength. With the **Score** seed-pixel metric, the ranking also favors spectra that are novel relative to the existing seed basis.
 6. It takes a small set of the strongest residual spectra, normalizes each candidate spectrum by its own maximum, averages them, smooths the average, and clamps it to positive values.
 7. It rescales the new residual-derived `H` seed to the amplitude scale of the existing `H` seed basis where possible. This keeps the new seed comparable to ROI, file, or imported spectra instead of leaving it on a much smaller residual-only scale.
 
@@ -45,35 +43,25 @@ In the ROI table, these appear as normal ROI rows or dummy ROI rows. A dummy ROI
 
 ## W Seeds: Spatial Information
 
-`W` seeds describe where a component is expected to be present spatially.
-
-The GUI can estimate W maps from H seeds using different modes:
-
-- NNLS abundance map,
-- selective score map,
-- H-weighted average,
-- average image fallback,
-- homogeneous empty map.
-
-The modes do not all have the same meaning. The NNLS abundance map is a direct coefficient estimate from the seeded spectra. The selective score map is a heuristic spatial guess based on spectral projection and competition. H-weighted and average modes are image-derived fallbacks.
-
-For seeded NNMF, generated W maps are normalized component by component to unit maximum before they are used as initialization. This is intentional. NNMF has a per-component scale ambiguity: multiplying one W column by a constant and dividing the matching H row by the same constant leaves \(X \approx W H\) unchanged. During seeded NNMF, both W and H are updated, so the solver can adapt the matching H row to the normalized W seed scale while fitting the data. Since ROI-derived H seeds usually carry the spectral/count scale, normalized W seeds mainly encode spatial abundance shape and are comparable between components.
+`W` seeds describe **where** a component is expected to be present spatially. When only spectral seeds are available, the GUI estimates a W map for each component from the current H basis using a chosen *W-seed mode*:
 
 | Mode | When to use |
 |---|---|
-| `nnls` | Default. The most aggressive option — fits every pixel against all seeded spectra at once and pushes toward maximum unmixing, giving near-binary abundance maps. Best when components are expected to occupy **different pixels** (spatially separable chemistries). |
-| `selective_score` | The softer alternative. Favors the target spectrum but only down-weights competition instead of forcing one winner per pixel. Prefer this when **mixing across pixels is physically expected** (e.g. co-localized lipids/protein, fluorophore mixtures inside one voxel) — `nnls` tends to over-separate in that regime. |
-| `h_weighted` | Legacy channel-weighted heuristic. Rarely needed, but can help when NNLS is unstable. |
-| `average` | Uses the mean image. A neutral starting point that lets NNMF build all spatial structure from scratch. |
+| `nnls` | Default. Solves a non-negative least-squares fit against all seeded H spectra at once. Pushes toward **maximum unmixing**, giving near-binary abundance maps. Best when components are expected to occupy **different pixels** (spatially separable chemistries). |
+| `selective_score` | Softer alternative. Favors the target spectrum but only down-weights competition instead of forcing one winner per pixel. Prefer this when **mixing across pixels is physically expected** (e.g. co-localized lipids/protein, fluorophore mixtures inside one voxel) — `nnls` tends to over-separate in that regime. |
+| `h_weighted` | Legacy channel-weighted heuristic (exponential H-weighting). Rarely needed; useful only when NNLS is unstable. |
+| `average` | Uses the mean image. Neutral image-derived fallback. |
 | `empty` | Near-zero homogeneous map. Use this when a component should be discovered entirely from the data without a spatial prior. |
 
-A quick rule of thumb: components live in different pixels → `nnls`; components share pixels by design → `selective_score`; if unsure, try `nnls` first and look at the W maps — if they come out implausibly clean and disjoint compared to what you'd expect from the sample, switch to `selective_score`. This only affects the *seed*; seeded NNMF can still recover mixed pixels because `W` and `H` are both updated during the fit. See [Picking nnls vs selective_score](../methods/nnmf_nnls_modes.md#picking-nnls-vs-selective_score) for the longer reasoning.
+**Rule of thumb:** components live in different pixels → `nnls`; components share pixels by design → `selective_score`. If unsure, try `nnls` first and look at the W maps — if they come out implausibly clean and disjoint compared to what you would expect from the sample, switch to `selective_score`. This only affects the *seed*; seeded NNMF can still recover mixed pixels because both `W` and `H` are updated during the fit. See [Picking nnls vs selective_score](../methods/nnmf_nnls_modes.md#picking-nnls-vs-selective_score) for the longer reasoning.
 
-For the special case above where an `H` seed is missing, the residual spectrum is first derived from a fit against the already available `H` seeds. The residual-derived spectrum fills the missing spectral seed; after that, the selected W-seed mode builds the spatial map for that component.
+If an `H` seed is missing for a component, the residual fallback (described above) builds an `H0` first, and then the selected W-seed mode produces the spatial map from that `H0`. Fixed W maps can also be attached to dummy ROIs — useful for background components or for importing spatial maps from previous results.
 
-Fixed W maps can also be attached to dummy ROIs. These fixed W seeds are useful for background components or for importing spatial maps from previous results.
+### W normalization conventions
 
-Do not confuse normalized W seeds with fixed-H NNLS result maps. The per-component scale ambiguity is useful for NNMF initialization because both W and H can still change. In fixed-H NNLS, H is locked and W is the actual fitted coefficient map. Rescaling W alone would change \(W H\) and the reconstruction error, so those coefficients should keep the scale needed to reconstruct the measured data from the fixed spectra; visualization/export scaling is a separate step.
+For **seeded NNMF**, the generated W maps are normalized component-by-component to unit maximum before being used as initialization. NNMF has a per-component scale ambiguity (multiplying one W column by a constant and dividing the matching H row by the same constant leaves \(X \approx W H\) unchanged), so the solver is free to undo this convention while fitting. The point of the normalization is just to keep raw image-count differences from dominating the initial W maps.
+
+For **fixed-H NNLS**, W is the actual fitted coefficient map, not an initialization. Rescaling W alone would change \(W H\) and the reconstruction error, so W is kept on the scale required to reconstruct the data from the fixed H basis. Display and export can still rescale maps for visualization separately.
 
 ## Seed Initialization Controls
 
@@ -89,27 +77,20 @@ The **Seed Initialization** controls in the **Analysis** panel decide how seed i
 
 ### Seed-building order
 
+![Seed estimation pipeline — flow of H and W seeds for a single slice, wrapped by the per-slice 4D loop](../assets/images/03_seed_building_flow.png)
+
+
 When you press **Test seeds** or start a custom-initialized analysis, the GUI builds the seed matrices in a fixed order. This order matters because later steps can replace earlier W maps.
 
 1. **Reload H seeds from the ROI manager.** Spatial ROIs, imported spectra, Gaussian dummy ROIs, background rows, and imported result spectra define the first `H0` rows. Fixed W maps attached to dummy ROIs are also collected here and are protected from ordinary H-based overwriting.
 2. **Read the spectral-information table.** Resonance rows can create temporary W maps from spectral channels or seed pixels. If a component has no ROI/dummy spectrum, seed pixels found from the spectral information can also create an `H0` spectrum for that component.
 3. **Complete missing H seeds if needed.** If **Normalize H spectra to unity** is enabled, missing `H0` rows are filled before normalization. The GUI first tries the residual-based H fallback, then the older smooth random fallback if no residual seed can be built.
 4. **Optionally normalize H.** If **Normalize H spectra to unity** is enabled, every completed `H0` row is scaled to max=1 and the original row maxima are stored as H scale factors.
-5. **Build W from H.** The selected **W map from H** mode turns the available H basis into W maps. With **NNLS abundance map**, this means fitting each pixel against the current H basis.
-6. **Apply the overwrite rule.** If **Overwrite existing W with H-based map** is enabled, H-based W maps replace the temporary W maps from spectral information. If it is disabled, H-based W maps only fill W columns that are still missing. In fixed-H NNLS mode this overwrite is forced on, because W must be solved from the final fixed H basis.
-7. **Fill any remaining W columns.** If a W column is still missing, the GUI may fill missing H, re-run H-based W estimation, and finally use an image-derived fallback W seed if needed.
+5. **Build W from H** using the chosen W-seed mode (see the [W-seed modes table](#w-seeds-spatial-information) above).
+6. **Apply the overwrite rule.** If **Overwrite existing W with H-based map** is enabled, the H-based W maps replace any provisional W from step 2 for every component. If it is disabled, only W columns that are still empty get filled. Fixed-H NNLS forces this on.
+7. **Fill any remaining W columns.** If a column is still empty, the GUI may complete a missing H row via the residual fallback, re-run W-from-H for that component, and finally fall back to an image-derived W seed (mean image) if everything else failed.
 
-For seeded NNMF, the generated W maps are initialization only and are normally normalized to unit maximum. For fixed-H NNLS, the W maps produced from H are the fitted abundance coefficients for the fixed basis and are not normalized internally.
-
-### Overwriting W maps from H
-
-When **Overwrite existing W with H-based map** is enabled, any W image that was gathered from the spectral information table is treated as temporary for components that already have a usable `H` seed. The final `W` seed is rebuilt from the `H` seed and the active **W map from H** mode, for example with an NNLS abundance fit.
-
-This means the spectral-info image itself is completely unused as the final `W` seed for that component. Spectral information can still matter indirectly: it can define the resonance range used to find seed pixels, those seed pixels can create an `H0` spectrum, and that `H0` spectrum is then used to rebuild the final `W` map.
-
-If a component already has a valid `H` seed and overwrite is enabled, spectral-info settings such as resonance position, width, amplitude, and seed-pixel count generally do not shape the final `W` map directly. The important exception is the **Use subtracted data** setting, which can still decide whether the H-based map and residual seed estimation use processed/background-subtracted data or raw data.
-
-If you want the W image gathered from spectral information to remain the spatial seed in seeded NNMF, disable **Overwrite existing W with H-based map** or attach the map as a fixed W seed. In fixed-H NNLS mode the checkbox is forced on, because the W map must be solved from the fixed H basis. If no valid `H` seed exists yet, spectral information can still help create or fill the missing spectral seed before the H-based map is built.
+> **What "Overwrite OFF" means in practice.** With Overwrite off, components that have a spectral-info row keep the **provisional W from step 2** (a uniform-weighted average across the resonance frames, no H involvement). Components without a spectral-info row still get a W built from H. So "Overwrite off" is the way to make the spectral-info image the final spatial seed for the corresponding component. Fixed-H NNLS never allows this — the W must be the NNLS abundance fit against the locked H basis.
 
 ## ROI-Derived Seeds
 
@@ -127,153 +108,9 @@ The Gaussian model creates a dummy ROI row for the relevant component. The row b
 
 ## Auto-Suggested ROIs
 
-The ROI suggestion tool searches for bright or structured image regions that can be useful seed candidates.
+The **Suggest ROIs** tool scans the image for bright or structured regions and turns them into candidate seed ROIs. The output is just a set of ROIs in the ROI Manager — they then feed into the normal seed flow described on this page.
 
-The method runs in two stages. First it builds a 2D response map by collapsing the spectral stack and enhancing local bright structures. Then it groups the spatial candidates by spectral similarity so distinct component types get separate ROIs instead of being collapsed into one.
-
-![Suggest ROIs dialog](../assets/images/03_suggest_rois_dialog.png)
-
-The dialog scans the current image stack without requiring resonance positions or reference spectra.
-
-### Settings reference
-
-| Setting | What it controls | Default | Practical effect |
-|---|---|---|---|
-| **Projection** | How the spectral stack is collapsed into one 2D response image. | Average image | See projection modes below. |
-| **Processed data** | Whether the processed/background-subtracted stack is used when available. | Off | Enable if subtraction reveals the structures you want better than the raw stack. Disabled when no processed data are available. |
-| **Local background sigma** | Size of the blurred background estimate subtracted from the projection. | 8 px | Increase to suppress broad illumination gradients. Lower if real broad structures are suppressed. |
-| **Spatial binning** | Downsampling before peak finding. | 1× | Higher binning is faster and more robust against pixel noise, but can miss very small structures. |
-| **Peak smoothing** | Gaussian smoothing applied to the response map before candidate detection. | σ = 1 | Increase to suppress noisy speckles. Decrease to keep sharp or small structures. |
-| **Peak threshold** | Required brightness relative to the response map. | 0.65 | Lower finds more and weaker regions. Higher keeps only the strongest candidates. |
-| **Min group area** | Smallest connected bright region accepted as a candidate (pixels in binned projection). | 3 px² | Increase to reject detector noise or isolated hot pixels. |
-| **Min ROI diagonal** | Minimum size of the final ROI box in pixels. | 0 px | Use to discard very small artefact ROIs. `0 px` disables this filter. |
-| **Max suggested groups** | Maximum number of distinct spectral groups to create in one run. Also sets the cluster count for hierarchical grouping. | 3 | Set slightly higher than the number of expected components to give the algorithm room to find all of them. |
-| **Max ROIs per group** | Maximum number of spatial ROIs kept per spectral group. | 1 | Increase when multiple examples of the same component are useful for averaging. |
-| **Merge duplicates** | Whether regions with very similar mean spectra are merged into one component group. | On | Keep enabled so the suggester does not fill the table with copies of the same spectral class. |
-| **Similarity threshold** | Spectral similarity cutoff used **only in greedy grouping mode**. Has no effect when hierarchical grouping is on. | 0.82 | Higher merges fewer regions. Lower merges more aggressively. Only tune this when hierarchical grouping is disabled. |
-| **Gradient fingerprint** | Augments the spectral fingerprint with the spectral derivative before similarity is computed. | On | Helps separate components that share a dominant peak but differ in slope, shoulder, or tail. See explanation below. |
-| **Hierarchical grouping** | Uses Ward hierarchical clustering to force exactly *k* groups from the candidate pool instead of merging greedily by threshold. | On | More reliable when components are spectrally similar. Greedy mode (off) can be used when the number of distinct components is uncertain. |
-| **Replace previous auto ROI suggestions** | Removes only earlier auto-suggested ROIs before creating new suggestions. | On | Keep enabled while tuning settings. Disable to accumulate batches without removing earlier suggestions. |
-
-### Gradient fingerprint — how it works and why it matters
-
-When two spectra are compared, the default measure is **cosine similarity on raw intensity**: it asks how much the two intensity traces point in the same direction. This works well for spectra that look fundamentally different. But for closely related variants — such as a lipid and a slightly modified lipid — both spectra might share a large, dominant peak at the same position. The raw intensity comparison sees that shared peak and reports 85–95% similarity, even though the two components differ meaningfully in the slope leading up to the peak, the steepness of the descent, or the presence of a small shoulder.
-
-The gradient fingerprint adds a second channel of information by also comparing **how the spectrum changes across channels** — its first derivative. Intuitively:
-
-- Two spectra with the same dominant peak but different rising edges will have very different derivatives near that peak.
-- A shoulder that is invisible as a bump in intensity becomes a clear local maximum in the derivative trace.
-- A broad flat peak and a sharper narrower peak can look almost identical in intensity but have very different curvature profiles.
-
-Concretely, the algorithm computes the derivative trace, normalises both the intensity part and the derivative part independently (so neither dominates), and concatenates them into one combined fingerprint vector that is twice as long as the original spectrum. All similarity comparisons and clustering distances are then computed on this combined vector.
-
-**The result:** two components that differ only in spectral shape details — not in peak position — become more distinguishable. In tests on synthetic bead data with five closely related lipid/protein variants (pairwise cosine similarities of 0.85–0.95 on raw intensity), enabling the gradient fingerprint improved separation from 2 to 3–4 detected components out of 5.
-
-**When to turn it off:**
-- Spectra that are extremely smooth or consist of a single featureless broad peak have almost no derivative structure. The gradient channel adds only noise in that case.
-- Very noisy spectra (low SNR) where the derivative amplifies noise faster than it reveals real shape differences. In that case, increase **Peak smoothing** first.
-
-**Interaction with the similarity threshold:** the gradient fingerprint changes what the fingerprint vector *is*, but the threshold and clustering operate on that fingerprint regardless. In **hierarchical mode** (default) the threshold is not used at all — the Ward clustering works from pairwise distances on the gradient-augmented fingerprints. In **greedy mode**, the threshold is compared against cosine similarity on the gradient-augmented fingerprints, so a gradient fingerprint effectively makes the threshold stricter: two spectra that were 88% similar on raw intensity might be only 80% similar once the gradient differences are included.
-
-### Projection modes
-
-**Balanced stack scan** (recommended starting point)
-Each spectral channel is independently normalized before being combined into the projection. This prevents one dominant resonance from overwhelming weaker ones, so all components get a fair chance to appear in the response map.
-
-**Multi-band scan**
-The stack is split into several spectral bands and each band is projected independently. Candidates from all bands are then merged while suppressing spatial duplicates.
-
-Use this when your data spans a wide spectral range and contains many distinct resonances that are spread across separate regions of that range — for example, a CARS stack that covers both the fingerprint region (1000–1800 cm⁻¹) and the CH-stretch region (2800–3100 cm⁻¹) at the same time. In that case a single projection — even a balanced one — still collapses the whole spectrum into one image, and components that are only bright in one narrow band can get buried by activity from other bands. Multi-band scan gives each spectral region its own independent projection pass, so components isolated to one region have a fair chance of being detected.
-
-If your stack is narrower and all components share roughly the same spectral region, Balanced stack scan is sufficient and faster. Multi-band scan is slower and only pays off when resonances are genuinely distributed across multiple distinct spectral windows. Set **Exact groups (k)** to the total expected number of components across all bands combined.
-
-**Average image**
-Simple mean of all channels. Faster. Biased toward structures that are bright across many channels. Good when all features are prominent and the stack has high SNR.
-
-**Maximum projection**
-Keeps the brightest value across all channels at each pixel. Useful for locating any structure that is bright in at least one channel, but tends to over-detect in noisy stacks.
-
-**Current frame**
-Uses only the currently displayed channel. Use for single-channel inspection or to seed a component known to be visible at one specific resonance.
-
-### Choosing settings for your data
-
-**Start with Average image and defaults.** For most datasets this is sufficient — channels are typically in a comparable intensity range and the average gives a clean spatial contrast map. Switch to Balanced stack scan only if one channel dominates so strongly that weaker components disappear in the average.
-
-**If components are missed:**
-- Increase **Max suggested groups** by 1–2 above the expected number of components.
-- Lower **Peak threshold** (try 0.25–0.35) to accept weaker candidates.
-- Reduce **Peak smoothing** (try σ = 1) if features are small or sharp.
-- Switch to **Multi-band scan** if missed components are known to be in a different spectral region than the detected ones.
-
-**If too many spurious suggestions appear:**
-- Increase **Peak threshold** (try 0.50–0.60).
-- Increase **Min group area** (try 8–20 px²) to reject small noise artefacts.
-- Increase **Spatial binning** (try 2× or 4×) for very noisy data.
-
-**For spectrally similar components (e.g., closely related cell types, lipid subtypes):**
-Keep **Gradient fingerprint** on. The gradient encodes slope and shoulder information that pure intensity cosine similarity cannot distinguish. Keep **Hierarchical grouping** on so that forced-k clustering separates the candidates instead of collapsing them by threshold.
-
-> **Hierarchical grouping: all suggested ROIs look the same?**
-> Hierarchical clustering forces exactly k groups from whatever spatial candidates the first stage found. If all k groups end up representing the same component type, the candidate pool itself is too uniform — the dominant structure was simply detected k times in different spots. The fix is upstream: lower **Peak threshold** (try 0.25–0.35) so the spatial scan also picks up weaker, less prominent structures that may belong to other components. If those weaker structures are small or sharp, also reduce **Peak smoothing** (try σ = 1) so they are not blurred out before detection. With a more diverse candidate pool, the clustering has something real to separate.
-
-**For noisy data (low SNR, shot-noise dominated):**
-Use **Peak smoothing** σ = 2 (default) or higher. A higher **Spatial binning** also helps. Increase **Local background sigma** if illumination is uneven.
-
-**For clean data with sharp, well-separated features:**
-**Peak smoothing** σ = 1 often works better. The default σ = 2 may blur small features or merge nearby peaks.
-
-**The similarity threshold matters most in greedy mode.** With **Hierarchical grouping** on (default), the algorithm forces exactly k clusters regardless of pairwise similarity, so the threshold has less influence. If you switch to greedy mode, lower the threshold (0.75–0.80) for closely related spectra and raise it (0.88–0.92) for clearly distinct ones.
-
-**Fundamental limitation:** components whose spectra differ by less than ≈5–10% cosine distance (e.g., one spectrum is a near-linear combination of another) cannot be reliably separated by any spectral grouping method. In that case, draw ROIs manually in regions where one component is visually dominant.
-
-After suggestions are created, treat them like normal ROIs: move or resize them if needed, rename the rows, assign colors, check the ROI average spectra, and remove suggestions that are not useful seeds.
-
-![Running Suggest ROIs on HS SRS microbead data with Ward hierarchical clustering](../assets/gifs/03_suggest_rois_beads.gif)
-
-### How the algorithm works internally
-
-This section is for advanced users who want to understand what happens under the hood and why certain settings have the effect they do.
-
-#### Stage 1 — Response map
-
-The spectral stack (channels × height × width) is collapsed into one 2D response image depending on the chosen projection mode. In **Balanced stack scan** mode each channel is independently contrast-normalized before combining, and channels are averaged with weights proportional to their spatial variance — channels that carry more spatial structure contribute more. This prevents a single dominant resonance from drowning out weaker ones.
-
-A blurred copy of the projection (radius controlled by **Local background sigma**) is then subtracted to suppress broad illumination gradients. The result is divided by the local standard deviation to normalize for local contrast variation. The final map therefore reflects relative local brightness rather than absolute intensity — a dim structure in a quiet region of the image can score just as highly as a bright structure in a bright region.
-
-#### Stage 2 — Candidate extraction from the response map
-
-**Coarsen and smooth.** The normalized map is downsampled by **Spatial binning** and then Gaussian-blurred by **Peak smoothing**. This suppresses pixel noise before any detection decisions are made and defines the spatial scale at which objects are expected.
-
-**Local maxima.** A maximum filter marks every pixel that is the brightest in its local neighborhood. These become candidate peak locations.
-
-**Multi-threshold sweep.** Rather than applying one fixed threshold, the algorithm sweeps across 8 levels from the user's **Peak threshold** down to roughly 8% of the map maximum. At each level a percentile floor also drops (from the 75th to the 15th percentile of positive values) to prevent the floor from suppressing detections in low-signal images. This sweep is why the algorithm can find both a dominant bright structure and a weaker structure that is 3–5× dimmer in the same run — the dominant structure is captured at the high threshold and the weaker one is picked up at a lower level.
-
-**Connected-component labeling.** At each threshold level the thresholded map is segmented into connected blobs. Each blob is a candidate object. Blobs smaller than **Min group area** are discarded.
-
-**Peak-to-box refinement.** Inside each blob the local maxima are ranked by brightness. For each peak a secondary threshold is applied at 72% of that peak's own value, carving out the tight bright core around it. The bounding box of that core becomes the proposed ROI box, padded outward by a few pixels.
-
-**IoU deduplication.** Before accepting a box it is compared against all previously accepted boxes. If it overlaps an existing box by ≥ 60% (within the same blob) or ≥ 45% (across the whole sweep) it is discarded. This prevents the same structure being proposed repeatedly at different threshold levels.
-
-**Scale back.** Boxes are scaled from the coarsened coordinate system back to the original image pixels, with padding added.
-
-The output of this stage is a pool of spatial candidates ranked by peak brightness, capped at `Exact groups × Max ROIs per group × pool factor`.
-
-#### Stage 3 — Spectral grouping
-
-Each candidate ROI's mean spectrum is extracted and converted into a spectral fingerprint. With **Gradient fingerprint** on, the fingerprint is the concatenation of the unit-normalised spectrum and its unit-normalised first derivative, making shape differences (shoulders, slopes, tails) visible alongside peak positions.
-
-**Hierarchical grouping** (default) applies Ward linkage clustering on the pairwise cosine distances between fingerprints and cuts the resulting tree at exactly k clusters, where k = **Exact groups**. This forces separation even between candidates that are spectrally similar, which greedy threshold merging would collapse into one group.
-
-**Greedy grouping** (hierarchical off) instead walks the ranked candidate list and merges each new candidate into the most similar existing group if the cosine similarity exceeds the **Similarity threshold**, otherwise starting a new group.
-
-#### Where the algorithm works well and where it does not
-
-The spatial stage is reliable for isolated compact objects — beads, nuclei, cells, labelled structures — where different component types occupy different spatial positions in the image.
-
-It cannot separate spatially overlapping components. If two materials are mixed within the same pixel region the spatial stage sees one blob, and only the spectral grouping stage can try to resolve the difference. If those two materials are also spectrally very similar (cosine similarity ≥ 0.90), no grouping method can reliably distinguish them automatically — manual ROI placement in regions where one material dominates is the only reliable path.
-
-Very large structures that fill most of the image may be suppressed by the local background subtraction step. And if the dominant structure is so bright that the threshold sweep fills its entire candidate quota before reaching lower thresholds, weaker structures will not appear in the pool at all — lower the **Peak threshold** or increase **Exact groups** to give the sweep more room.
+See [Auto-suggested ROIs](03c_suggest_rois.md) for the dialog reference, projection modes, the gradient fingerprint, hierarchical vs greedy grouping, and the internal algorithm walkthrough.
 
 ## Display In The ROI Table
 
@@ -293,6 +130,16 @@ Rows with fixed W seeds can show their W map without plotting a fake H spectrum.
 
 ## Background Components and Background Subtraction
 
+The GUI offers three distinct mechanisms for handling sample background, and they are easy to confuse because the same word "background" appears in all three. They can be combined, but each addresses a different problem.
+
+| Mechanism | Where | What it does | When to use |
+|---|---|---|---|
+| **Background flag** on an ROI | ROI Manager | Marks one component as the background channel inside the NNMF/NNLS model. The component is fitted alongside the others but treated as the unwanted contribution. | When background has identifiable spatial structure that you want the unmixing to assign explicitly, so it does not bleed into weak chemical components. |
+| **Subtract flag** on an ROI | ROI Manager | The mean spectrum of the flagged ROI is subtracted, pixel-wise, from the raw stack. The result is shown in the **Processed** view in the image viewer. The raw image stays untouched. | When you want a flat, background-corrected stack as the input to seed estimation or analysis (a preprocessing step). |
+| **Use subtracted data** flag (per component) | Resonance / spectral-info table | For one component, controls whether seed estimation reads from the **raw** stack or the **Processed** (subtracted) view. | When most components fit better on the subtracted data, but one — typically the background itself — must still see the raw signal. |
+
+Concretely: a background component (`Background` flag) lives inside the unmixed result; a subtracted spectrum (`Subtract` flag) is removed *before* analysis sees it; the **Use subtracted data** flag decides which of those two views each individual component looks at when its seed is built.
+
 ### Background as a model component
 
 The ROI Manager supports marking one or more rows as background components. To do this, enable the **Background** flag in the ROI table for that row. A component marked as background is included in the NNMF/NNLS model but is treated as the background contribution rather than a signal of interest.
@@ -300,7 +147,7 @@ The ROI Manager supports marking one or more rows as background components. To d
 This is different from preprocessing: a background component keeps the background signal inside the factorization model and explicitly assigns spatial variation to it, rather than removing it before analysis.
 
 Use this as a fallback for difficult backgrounds, especially when you need an explicit background map during unmixing because otherwise it blends into weak components.
-This can help to reduce the contribution of background signifcantly in other components with specific signal information.
+This can substantially reduce background contamination in the other components, which is particularly helpful when the false-colour composite is dominated by background rather than by the chemical signal of interest.
 
 A background W map can also be generated from the analysis panel using a projection image (mean, max, or min). This creates a dummy ROI carrying a fixed W seed derived from the projection. This is useful when the background is hard to draw manually but still has a recognizable smooth spatial pattern.
 

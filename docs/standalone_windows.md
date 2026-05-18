@@ -1,6 +1,6 @@
 # Standalone Windows .exe
 
-This page is the Windows install guide for users who want to run HS MV Analysis without installing Python.
+This page is the Windows install guide for users who want to run HS-MOSAIC without installing Python.
 
 The standalone packages are portable zip files. Each zip contains the application, Python, and the required Python packages. Users do not need Conda, pip, venv, PyTorch, or a project checkout.
 

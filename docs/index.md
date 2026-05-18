@@ -1,11 +1,10 @@
-# HS MV Analysis Documentation
+# HS-MOSAIC Documentation
 
-Welcome to the documentation for HS MV Analysis, a software tool for analyzing hyperspectral microscopy data using multivariate analysis techniques.
+Welcome to the documentation for HS-MOSAIC, a desktop GUI for hyperspectral microscopy multivariate analysis.
 This documentation is designed to guide users through the installation, usage, and troubleshooting of the software, as well as provide detailed tutorials and reference materials.
 
-> Screenshot placeholder: annotated full GUI overview with the data loader, image viewer, spectral-axis widget, ROI Manager, analysis panel, and result/export areas labeled.
-
-> GIF placeholder: first-use overview from launching the GUI to loading a stack, adding a seed, running analysis, and opening the result viewer.
+![GUI Overview](assets/images/gui_overview.png)
+![Demo](assets/gifs/quick_beads_demo.gif)
 
 ## Start Here
 
@@ -50,9 +49,13 @@ It is not essential to understand this for using the app, but it can be helpful 
 
 ### 03 Seeds
 
+Seeds are how you steer NNMF and fixed-H NNLS toward physically meaningful results. They can come from ROIs drawn on the image, reference spectra loaded from files, Gaussian resonance models, or the automatic suggester —
+the pages below cover each source and how they combine into the H and W matrices the solver receives.
+
 - [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)
-- [ROI Manager in detail](tutorials/03b_roi_manager.md)
 - [Loading custom seed spectra](tutorials/03a_loading_custom_seed_spectra.md)
+- [ROI Manager in detail](tutorials/03b_roi_manager.md)
+- [Auto-suggested ROIs](tutorials/03c_suggest_rois.md)
 
 ### Remaining workflow
 

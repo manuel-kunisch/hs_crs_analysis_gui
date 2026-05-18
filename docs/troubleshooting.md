@@ -39,6 +39,10 @@ Possible causes:
 
 ## TIFF loading problems
 
+![Gallery of common error and warning dialogs raised during TIFF loading and analysis](assets/images/error_dialogs_gallery.png)
+
+*Use the gallery to pattern-match the dialog you are seeing, then jump to the matching subsection below.*
+
 ### Wrong number of dimensions
 
 Symptom: a message like `Expected 3D or 4D stack`.

@@ -5,7 +5,7 @@ A formal citation entry will be added here once the software has a DOI, preprint
 ## Software
 
 ```
-HS MV Analysis
+HS-MOSAIC
 https://github.com/manuel-kunisch/hs_crs_analysis_gui
 ```
 
@@ -18,9 +18,9 @@ If you use this software in published work, please include:
 ## BibTeX placeholder
 
 ```bibtex
-@software{hs_mv_analysis,
+@software{hs_mosaic,
   author    = {Kunisch, Manuel},
-  title     = {{HS MV Analysis}: A GUI for hyperspectral multivariate analysis},
+  title     = {{HS-MOSAIC}: A GUI for hyperspectral multivariate analysis},
   url       = {https://github.com/manuel-kunisch/hs_crs_analysis_gui},
   year      = {2025},
   note      = {Version X.Y.Z. Replace with actual version and DOI when available.}

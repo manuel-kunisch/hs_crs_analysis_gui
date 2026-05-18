@@ -40,7 +40,7 @@ class CrossCorrelationStitcher:
     # --- stitching parameters (bind directly to widgets) ---
     overlap_row: int = 90
     overlap_col: int = 90
-    sigma_interval: float = 1.0
+    sigma_interval: float = 1.5
     input_channel_order = "zyx"
     output_channel_order = "zyx"
     return_as_int: bool = True
@@ -52,13 +52,6 @@ class CrossCorrelationStitcher:
     scan_x_direction: str = "left"  # or "right"
     scan_y_direction: str = "down"  # or "up"
     binning: int = 2  # binning factor for raw data before stitching
-
-    # Blending controls (see the stitching dialog or stitch_corr docstring).
-    # "cosine" gives a smoother (Hann) overlap ramp than "linear".
-    # match_tile_intensities scales each incoming tile so its mean in the
-    # overlap region matches the existing stitch — removes soft brightness
-    # steps caused by vignetting / exposure drift. Disable for quantitative
-    # work where absolute tile intensities must be preserved exactly.
     blending_profile: str = "cosine"
     match_tile_intensities: bool = False
 

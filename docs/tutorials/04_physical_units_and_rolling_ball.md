@@ -44,70 +44,45 @@ The correction can be configured in two main ways:
 - **Reference/manual model**: use `reference` mode. The model can be fitted from a reference TIFF, but it can also be edited manually without loading a reference image. This is useful when you want to tune `dx`, `dy`, `sigma_x`, `sigma_y`, `strength`, and `floor` from the preview.
 - **Per-image estimation**: use `blur` or `gaussfit`. These modes estimate a smooth correction field from each image separately.
 
-> **Stitching compatibility:** for stitching, use `reference` mode. The same stored/manual correction model is applied to every tile individually before stitching. If you change illumination-correction settings after a stitch has already been generated, rerun the stitch so the updated correction is applied to the tiles.
+### Reference TIFF workflow on one tile
 
-## What the illumination-correction settings mean
+![Rolling-ball single-tile reference fit](../assets/gifs/04_rolling_ball_single_tile_reference_fit.gif)
 
-### Enable illumination correction
+This example uses the same three-channel multispectral liver tile data as the [stitching tutorial](01b_stitching_tile_folders.md). A single tile is loaded first and the CARS channel is inspected, where the broad rolling-ball illumination profile is visible as a smooth intensity falloff across the field of view.
 
-This is the master on/off switch. Leave it off unless you clearly see smooth shading, vignetting, or broad multiplicative illumination variation.
+The same tile is then loaded as the **Reference TIFF** in the rolling-ball correction tab. The reference image is blurred and downsampled only to estimate the broad illumination envelope; this prevents cellular or tissue structure from being treated as part of the correction model. The fitted model is then applied to the image, and the corrected CARS channel becomes much flatter intensity-wise.
 
-### Mode
+> **Stitching compatibility:** If you change illumination-correction settings after a stitch has already been generated, rerun the stitch so the updated correction is applied to the tiles.
 
-- `reference`: uses one stored model for all images. The model can come from a reference TIFF or from manual/synthetic settings. This is the recommended mode for stitching and for consistent preprocessing across a dataset.
-- `blur`: estimates a smooth correction field separately for each image by heavy smoothing. Use this when no stable reference image exists and the illumination pattern changes from image to image.
-- `gaussfit`: estimates a per-image smooth field and then fits a Gaussian-like model. Use this when a simple blur is not stable enough but you still do not want to build a dedicated reference first.
+### Applying the correction before stitching
 
-### Normalize to
+![Rolling-ball correction applied during stitching](../assets/gifs/04_rolling_ball_stitching_tile_correction.gif)
 
-- `center`: keeps the correction normalized to the image center. Good when the center is the natural reference region.
-- `median`: more robust when the center is not representative.
-- `mean`: useful when you want global average intensity to stay as stable as possible.
+In the stitched liver example, the rolling-ball correction is applied to each tile before the tiles are combined. This is different from **Match tile intensities** in the stitching tab: the rolling-ball model corrects the smooth illumination field inside every tile, while intensity matching only rescales neighbouring tiles in their overlap regions.
 
-### Max gain clamp
+![Tuned rolling-ball stitched liver result](../assets/images/04_rolling_ball_stitched_liver_result.png)
 
-This limits how strongly dark regions may be amplified by the correction. Increase it only when under-corrected edges remain visible. If noisy image corners become too bright, reduce it.
+The final stitched result depends on tuning the model center and intensity drop-off. In practice this means adjusting `dx`, `dy`, `sigma_x`, `sigma_y`, `strength`, and `floor` until the preview field matches the measured shading pattern without overcorrecting real sample structure. The PNG shows the stitched liver data after this tuning step.
 
-### Fit-input smoothing
+## Settings reference
 
-These settings are used only when fitting a reference TIFF or when a per-image fit needs a smoothed input:
+| Setting | What it controls | Default | Practical effect |
+|---|---|---|---|
+| **Enable illumination correction** | Master on/off switch for the whole panel. | Off | Leave off unless you clearly see smooth shading, vignetting, or broad multiplicative illumination variation. |
+| **Mode** | Which estimation strategy is used: `reference` (one stored model for all images), `blur` (per-image smoothed estimate), or `gaussfit` (per-image Gaussian-like fit). | `reference` | `reference` is the right choice for stitching and for consistent batch preprocessing. `blur` / `gaussfit` are for cases where no stable reference exists and the illumination pattern changes per image. |
+| **Normalize to** | Which reference point the correction is normalised to: `center`, `median`, or `mean`. | `center` | `center` works when the centre of the field is the natural reference region. Use `median` when the centre is not representative, or `mean` to keep the global average intensity stable. |
+| **Max gain clamp** | Caps how strongly dark regions may be amplified by the correction. | — | Increase only if under-corrected edges remain visible. If noisy corners become too bright, reduce it. |
+| **Blur sigma X / Y [px]** | Smoothing applied to the *input* before fitting a reference TIFF or running a per-image fit. Does not change the final correction model directly. | — | Increase when the reference contains strong sample structure, or when the fit is following fine image details too closely. Larger sigmas → only the large-scale illumination profile remains. |
+| **Downsample** | Downsampling factor of the fit input. | — | Increase for very large references or when fitting is slow. Only relevant if you only care about the broad illumination envelope. |
+| **dx, dy** | Centre offset of the illumination pattern relative to the image centre, in pixels. | `0, 0` | Shift to align the modelled illumination peak with the bright spot of the actual image. |
+| **sigma_x, sigma_y** | Spatial width of the illumination profile along x and y. | — | Larger sigmas → broader, gentler correction. Smaller sigmas → tighter correction localised around `(dx, dy)`. |
+| **strength** | Scalar multiplier applied to the correction field. | `1` | `1` is the standard case. Smaller values weaken the correction, larger values strengthen it. |
+| **floor** | Adds a constant baseline to the correction to bound the gain in dark regions. | — | Increase to avoid extreme amplification of dark areas; reduce for a more aggressive correction. |
+| **Load reference TIFF…** | Fits a stable correction model from one representative image. | — | Use when you have a flat-field, blank-field, or representative reference frame. |
+| **Preview model…** | Opens an inspection view of the current correction field. | — | Works even without a loaded reference, using a synthetic preview size. Use this to tune `dx`, `dy`, sigmas, `strength`, and `floor` interactively. |
+| **Clear reference TIFF** | Removes the loaded TIFF payload while keeping the current model parameters. | — | Use to reuse a manually tuned model on a different image without re-loading the reference. |
 
-- `Blur sigma X [px]`
-- `Blur sigma Y [px]`
-- `Downsample`
-
-They do not directly define the final manual/reference correction model. They define how aggressively the image is simplified before estimating a smooth illumination field.
-
-Use larger blur sigmas when:
-
-- the reference contains strong sample structure,
-- only the large-scale illumination profile should remain,
-- or the fitted model is following fine image details too much.
-
-Use more downsampling when:
-
-- the reference is very large,
-- fitting is slow,
-- and only the broad illumination envelope matters.
-
-### Reference / Model parameters
-
-These describe the smooth model itself:
-
-- `dx`, `dy`: center offset of the illumination pattern relative to the image center.
-- `sigma_x`, `sigma_y`: spatial width of the illumination profile along x and y.
-- `strength`: how strongly the correction is applied. `1` is the normal case, smaller values weaken the correction, larger values strengthen it.
-- `floor`: mixes in a constant baseline to avoid extreme gains in dark regions.
-
-In reference mode, these parameters are active even without a loaded reference TIFF. Use **Preview model...** to inspect the current synthetic/manual correction field, tune the parameters, and enable correction once the field looks reasonable. If a representative reference TIFF is available, load it first and then fine-tune `strength` and `floor`.
-
-### Reference TIFF buttons
-
-- `Load reference TIFF...`: fit a stable model from one representative image.
-- `Preview model...`: inspect the current correction model. This also works without a reference TIFF by using the synthetic preview size.
-- `Clear reference TIFF`: remove the loaded TIFF payload while keeping the current model parameters available.
-
-This makes `reference` mode practical for batch-like workflows: you can learn or manually tune the model once and reuse it on similar images.
+In `reference` mode all model parameters are active even without a loaded reference TIFF, so you can build a correction purely from manual / synthetic settings using **Preview model…**. If you load a representative reference TIFF first, fine-tune `strength` and `floor` afterwards. This makes `reference` mode the practical choice for batch workflows — learn or tune once, reuse on similar images.
 
 ## Practical checks
 

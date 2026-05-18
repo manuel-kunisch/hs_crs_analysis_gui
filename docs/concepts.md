@@ -67,7 +67,7 @@ In the GUI:
 - In seeded workflows, H is initialized from ROI spectra, loaded reference files, or Gaussian models.
 - In fixed-H NNLS, H stays fixed and only W is solved.
 
-The factorization has a component-wise scale ambiguity: for one component, multiplying its W map by a constant and dividing its H spectrum by the same constant leaves \(W H\) unchanged. In seeded NNMF this is acceptable because both W and H are updated during fitting; if a generated W seed starts on a normalized scale, the optimizer can adjust the matching H row to the scale needed by the data. The GUI therefore treats generated W maps mainly as spatial abundance shapes and normalizes them to a comparable unit maximum, while the H seeds keep the spectral/count scale. This makes different generated W seeds easier to compare and prevents raw image-count scale from dominating the initialization.
+The factorization has a per-component scale ambiguity: scaling the W column (image map) by a constant and the matching H row (spectrum) by its inverse leaves \(W H\) unchanged. The GUI therefore normalizes generated W seeds to a comparable unit maximum and leaves the spectral/count scale in the H seeds. In seeded NNMF the optimizer is free to undo this convention during fitting; the choice mainly avoids letting raw image-count differences dominate the initial W maps.
 
 ## ROI-Derived H Seeds
 

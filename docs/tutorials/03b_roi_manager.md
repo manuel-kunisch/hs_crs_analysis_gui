@@ -240,7 +240,7 @@ The result viewer can import components back into the ROI Manager. The import ca
 - W only: stores the result map as a fixed W seed.
 - H+W: stores both spectrum and map.
 
-This enables iterative workflows:
+This is what makes the result viewer into a feedback loop on the seed setup:
 
 ```text
 run random NNMF

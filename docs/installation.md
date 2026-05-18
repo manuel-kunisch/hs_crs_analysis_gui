@@ -1,6 +1,6 @@
 # Full Python Installation
 
-This page covers the full Python-based installation of HS MV Analysis.
+This page covers the full Python-based installation of HS-MOSAIC.
 
 Use this route when you want to run from source, modify the project, use Linux/macOS, or manage the Python environment yourself.
 

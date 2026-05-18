@@ -2,6 +2,8 @@
 
 This checklist is an extra page for avoiding common mistakes before running or publishing an analysis.
 
+![End-to-end workflow decision tree — three forks (4D, seeds, lock H), with the no-seeds branch looping back through PCA/Random NNMF and a feedback arc from Inspect to Seed setup](../assets/images/07_workflow_decision_tree.png)
+
 ## Before Loading
 
 - Confirm the TIFF dimensionality.

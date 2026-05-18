@@ -130,120 +130,46 @@ Use **IGNORECASE** when filename capitalization is inconsistent.
 
 > GIF placeholder: use the regex helper and show the preview table updating.
 
-## What the main settings mean
+## Settings reference
 
 ![Stitch manager overview](../assets/images/01b_stitch_manager.png)
 
-The screenshot below shows the main regions that matter for parameter choice:
+The screenshot above shows the three main regions of the panel: stitch geometry + correlation settings on the left, filename parsing + preview table on the right, and run/export actions at the bottom. The table below lists every control in those panels.
 
-- left: stitch geometry and correlation settings,
-- right: filename parsing and the preview table,
-- bottom: run/export actions and stitched-result status.
-
-### Pattern
-
-`Pattern` is only a file filter. It decides which files in the folder are considered for parsing and stitching.
-
-Use it when:
-
-- one folder contains several modalities or repeated exports,
-- only one subset should be stitched,
-- or the folder also contains overview images, thumbnails, or metadata files.
-
-If the preview table is empty, check `Pattern` before debugging the regex.
-
-## Binning and overlap
-
-The overlap fields are entered in raw pixels:
-
-- **Overlap row (raw px)**: overlap between vertically adjacent tiles.
-- **Overlap col (raw px)**: overlap between horizontally adjacent tiles.
-
-If binning is enabled, the GUI shows the effective binned overlap. Conceptually:
-
-$$
-\mathrm{overlap}_{\mathrm{binned}} =
-\left\lfloor
-\frac{\mathrm{overlap}_{\mathrm{raw}}}{\mathrm{binning}}
-\right\rfloor
-$$
-
-Example:
-
-```text
-raw overlap = 180 px
-binning = 2
-effective stitched overlap = 90 px
-```
-
-Use the raw microscope overlap as input. Do not manually divide it before entering it into the GUI.
-
-What these settings control:
-
-- `Binning`: reduces the spatial sampling before stitching. This is mainly a speed and memory setting.
-- `Overlap row (raw px)`: expected vertical overlap between neighboring tiles.
-- `Overlap col (raw px)`: expected horizontal overlap between neighboring tiles.
-
-When to use them:
-
-- Use `Binning = 1` when precise alignment matters and the dataset is still manageable.
-- Increase binning when tiles are very large and the first goal is a quick preview or parameter search.
-- Use the microscope’s nominal overlap as a starting point, then adjust if seams or duplicated structures remain visible.
-
-What happens if they are wrong:
-
-- too small overlap: duplicated structures or misregistered seams,
-- too large overlap: excessive blending and spatial compression,
-- too much binning: faster stitching but weaker correlation precision and less sharp seams.
+| Setting | What it controls | Default | Practical effect |
+|---|---|---|---|
+| **Pattern** | File-glob filter for which files in the folder are considered. | `*.tif` | Restrict to a subset when the folder mixes modalities, exports, or stray files. If the preview table is empty, check this before debugging the regex. |
+| **Regex** | Named-group regex that extracts the `x` and `y` tile indices from each filename. | `.*pos[_-](?P<x>-?\d+)[_-](?P<y>-?\d+).*` | Must contain `(?P<x>...)` and `(?P<y>...)`. See the regex examples earlier on this page. |
+| **IGNORECASE** | Whether the regex is case-insensitive. | Off | Enable when filename capitalisation is inconsistent. |
+| **Binning** | Spatial downsampling factor applied to every tile before stitching. | `1` | Higher binning is faster and more memory-friendly but loses fine alignment precision. Use `1` when alignment matters; raise it for a quick preview pass. |
+| **Overlap row (raw px)** | Expected vertical overlap between vertically adjacent tiles, in raw pixels. | — | The GUI shows the effective binned overlap automatically: ⌊raw / binning⌋. Use the microscope's nominal overlap as a starting point. See [How precise does the overlap value need to be?](#how-precise-does-the-overlap-value-need-to-be) below. |
+| **Overlap col (raw px)** | Expected horizontal overlap between horizontally adjacent tiles. | — | Same rules as Overlap row. |
+| **Use correlation** | Enable cross-correlation refinement of the geometric tile placement. | On | Use when stage motion has small positioning errors or when the entered overlap is approximate. Disable for clean grids where the overlap is known exactly. |
+| **Mode** | How correlation offsets are aggregated: `normal` (per-pair), `mean`, `sigma`, or `sigma mean`. | `sigma mean` | `sigma mean` is the most robust default. See [Correlation settings](#correlation-settings) for the per-mode trade-offs. |
+| **Sigma interval** | Confidence interval used by `sigma` / `sigma mean` to reject outlier offsets. | `1.0` | Smaller → reject more offsets as outliers; larger → trust more measured offsets. |
+| **Channels to correlate** | Comma-separated list of channel indices used for correlation, e.g. `40, 41, 42`. | empty (all) | Restrict to channels with reliable structure if some channels are noisy, saturated, or flat. |
+| **Scan X direction** | Which way higher x indices appear in the displayed mosaic: `left` or `right`. | `left` | If the stitched mosaic is mirrored, change this rather than the regex. |
+| **Scan Y direction** | Which way higher y indices appear: `up` (higher y at top) or `down` (higher y at bottom). | `down` | Same logic as Scan X direction. |
+| **Input image order** | Axis order inside each tile: `zyx`, `cyx`, or `yxc`. | `zyx` | Use `zyx` / `cyx` for spectral stacks saved frame-first; `yxc` for camera-style multi-channel images. If the stitched channel slider behaves strangely afterwards, this is the first thing to check. |
+| **Blending profile** | Weight ramp across the overlap region: `Cosine` or `Linear`. | `Cosine (recommended)` | `Cosine` is C¹-smooth at the seam centre; `Linear` is the legacy triangular tent, kept for comparison with older results. See [Blending](#blending) below. |
+| **Match tile intensities** | Per-channel rescaling of each incoming tile to match the running stitch's mean in the overlap region, before blending. | Off | Enable to remove soft brightness steps caused by vignetting or exposure drift. Leave off for quantitative work where absolute tile intensities must be preserved. |
+| **Apply regex** | Re-parses the folder against the current `Pattern` + `Regex` + `IGNORECASE` and refreshes the preview table. | — | Press after any change to the parsing fields. |
+| **Stitch now** | Runs the full stitching pipeline with the current settings. | — | Only enabled once the preview table looks correct. |
 
 ### How precise does the overlap value need to be?
 
 The right strategy depends on whether you know the true overlap accurately:
 
-- **Overlap unknown or approximate (e.g. only the nominal stage value is available).** Use **correlation** and enter an overlap that is somewhat *larger* than your best guess (e.g. +20–40 raw pixels). The cross-correlation search is robust enough to find the true shift within an oversized search region, and the extra margin protects you against under-shoot. Erring high in correlation mode is safer than erring low.
-- **Overlap known precisely (e.g. from a calibrated stage or measured directly on a reference tile).** Enter the **exact** overlap. With correlation enabled, an oversized overlap then dilutes the score with regions that do not actually correlate, which can pull the estimated shift onto a noise peak. With correlation disabled (pure grid placement), the value sets the blend region directly, so accuracy matters even more.
+- **Overlap unknown or approximate** (only the nominal stage value is available). Use **correlation** and enter an overlap that is somewhat *larger* than your best guess (e.g. +20–40 raw pixels). The cross-correlation search is robust enough to find the true shift within an oversized search region, and the extra margin protects you against under-shoot. Erring high in correlation mode is safer than erring low.
+- **Overlap known precisely** (calibrated stage or measured directly on a reference tile). Enter the **exact** overlap. With correlation enabled, an oversized overlap then dilutes the score with regions that do not actually correlate, which can pull the estimated shift onto a noise peak. With correlation disabled, the value sets the blend region directly, so accuracy matters even more.
 
-Rule of thumb:
+Rule of thumb: *unknown* → overestimate slightly, let correlation refine; *known* → enter the exact value, do not pad.
 
-- *unknown*: overestimate slightly, let correlation refine.
-- *known*: enter the exact value, do not pad.
+What happens if it is still wrong:
 
-## Scan direction
-
-Scan direction controls how the parsed x/y indices are mapped into the displayed mosaic.
-
-**Scan X direction**:
-
-- `right`: higher x indices appear to the right.
-- `left`: higher x indices appear to the left.
-
-**Scan Y direction**:
-
-- `down`: higher y indices appear lower in the image.
-- `up`: higher y indices appear higher in the image.
-
-If the preview table or stitched result is mirrored, change the scan direction rather than changing the regex.
-
-Use scan direction to correct orientation, not tile identification. The regex should answer "which tile is this?", while scan direction should answer "where do higher x and y indices appear in the displayed mosaic?".
-
-## Input image order
-
-Choose the array order used inside each tile:
-
-- `zyx`: spectral/channel axis first, then y, then x.
-- `cyx`: channel axis first, then y, then x.
-- `yxc`: y, x, then channel axis.
-
-For normal hyperspectral TIFF stacks, `zyx` or `cyx` is usually correct. For camera-style multi-channel images, `yxc` may be correct.
-
-If the stitched result has swapped spatial and spectral axes, this setting is the first thing to check.
-
-Practical rule:
-
-- `zyx` / `cyx`: choose this for spectral stacks saved frame-first.
-- `yxc`: choose this for conventional image formats where channels are stored last.
-
-If one stitched tile looks visually correct but the channel slider behaves strangely afterwards, the issue is often here.
+- too small → duplicated structures or misregistered seams,
+- too large → excessive blending and spatial compression,
+- too much binning → faster stitching but weaker correlation precision and less sharp seams.
 
 ## Choosing grid placement vs correlation
 
@@ -348,6 +274,14 @@ Implementation notes:
 | Soft brightness step across the seam | Match tile intensities |
 | Both | Cosine + Match tile intensities |
 | Need absolute intensity preservation | Cosine + leave matching off |
+
+![Multichannel liver tile stitching workflow](../assets/gifs/01b_stitching_multichannel.gif)
+
+This example stitches a three-channel multispectral liver dataset from a 9 x 9 tile grid. The workflow first loads a single 512 x 512 px tile to inspect which channels contain useful signal. Channels `0` and `2` are then entered as the correlation channels because they have enough counts for reliable shift estimation. If the channel field is left empty, all channels are used for correlation.
+
+The raw tile overlap is already known in this example, so the overlap values are left unchanged. The stitch is correlation-assisted for every neighbouring tile pair. `Match tile intensities` is not used here; keep it off when the goal is to preserve the measured channel intensities and only enable it for visible tile-to-tile brightness steps.
+
+The same liver tile data is used in [04 Physical units and rolling-ball correction](04_physical_units_and_rolling_ball.md) to show how a shared rolling-ball reference model can be applied to every tile before stitching.
 
 ## Saving and reusing stitch settings
 

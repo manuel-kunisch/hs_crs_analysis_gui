@@ -1,357 +1,129 @@
 # HS-MOSAIC
 
+**A desktop GUI for hyperspectral microscopy unmixing — PCA, seeded NMF and fixed-H NNLS, with GPU-accelerated backends and reproducible presets.**
+
+Built for coherent Raman scattering (CRS, CARS, SRS) and related hyperspectral imaging workflows, but applicable to any spectral image stack that needs non-negative unmixing.
+
+![Same dataset, four modes side by side — PCA, random NNMF, seeded NNMF, fixed-H NNLS — on the synthetic quickstart data shipped with the GUI](docs/assets/images/02_modes_comparison.png)
+
 > [!IMPORTANT]
-> Replace the placeholder sections in this README with your project-specific text before publishing.
+> The TODO markers in this README (project description, citation, license, acknowledgements) still need to be filled in before publication.
 
-## Overview
+---
 
-**[TODO: short project description]**
+## Why HS-MOSAIC
 
-This repository contains a graphical user interface for loading, exploring, and analyzing hyperspectral CRS/CARS data.
-
-**[TODO: 2-4 sentences describing the scientific goal, target users, and what makes this project useful.]**
-
-## Features
-
-- Load hyperspectral image stacks and associated spectral metadata
-- Interactively define and manage ROIs
-- Generate and inspect spectral/spatial seeds for NNMF workflows
-- Run PCA and NNMF analysis from the GUI
-- View component maps, spectra, and composite images
-- Save presets, export spectra, and reuse imported result components as seed inputs
-
-**[TODO: add or remove bullets so they match the actual scope you want to present publicly.]**
-
-## Screenshots
-
-**[TODO: add screenshots or GIFs here]**
-
-Example:
-
-```md
-![Main GUI](docs/main_window.png)
-```
+- **Four analysis modes in one workflow**: PCA for diagnostics, random NMF for unguided exploration, seeded NMF for the main guided workflow, and fixed-H NNLS for cross-slice / cross-time stability.
+- **Seed-first interaction**: draw ROIs, load reference spectra, build Gaussian resonance models, or let the auto-suggester scan the image for you. Every seed source feeds the same H/W building pipeline.
+- **3D and 4D stacks**: per-slice or fast multislice (NMF on a reference slice → NNLS everywhere else) for time series and z-stacks.
+- **Optional GPU acceleration** via PyTorch with graceful CPU fallback (scikit-learn NMF, SciPy NNLS).
+- **Reproducible by construction**: presets save the full analysis state, ROI configuration, and seed choices. Reload the same TIFF, reload the preset, get the same result.
+- **Publication-friendly export**: Fiji/ImageJ-compatible TIFFs, CSV spectra, and scale-bar metadata that survive into downstream figures.
 
 ## Documentation
 
-Live documentation site:
+Full documentation, including tutorials and worked examples:
 
-- [GitHub Pages docs](https://manuel-kunisch.github.io/hs_crs_analysis_gui/)
+**🌐 [Live docs](https://manuel-kunisch.github.io/hs_crs_analysis_gui/)** · 📂 [`docs/`](docs/index.md) in this repo
 
-> [!IMPORTANT]
-> Two markdown pages explain the analysis modes, but they serve different purposes:
-> - [`docs/tutorials/02_analysis_modes.md`](docs/tutorials/02_analysis_modes.md)
->   This is the practical user page: which mode to choose in the GUI, what kind of result to expect, and when to switch from PCA to random NNMF, seeded NNMF, or fixed-H NNLS.
-> - [`docs/reference/nnmf_nnls_modes.md`](docs/reference/nnmf_nnls_modes.md)
->   This is the concept and algorithm page: the thesis-style explanation of PCA, NNMF, and NNLS, the matrix model, the interpretation of `W` and `H`, and the methodological references.
+Quickest entry points:
 
-Documentation sources in the repository live in [`docs/`](docs/index.md).
+- [Quickstart](docs/quickstart.md) — minimal end-to-end GUI workflow
+- [Concepts](docs/concepts.md) — the unmixing model and the role of seeds
+- [Loading data](docs/tutorials/01_loading_data.md) — TIFF conventions, 3D/4D axis selection, intensity handling
+- [Analysis modes](docs/tutorials/02_analysis_modes.md) — which mode to choose and what to expect
+- [Seeds, spectra, and W maps](docs/tutorials/03_seeds_spectral_and_spatial.md) — building H and W seeds
+- [Presets and reproducibility](docs/tutorials/06_presets_and_reproducibility.md) — saving and restoring the full analysis state
+- [NNMF and NNLS methods](docs/methods/nnmf_nnls_modes.md) — math, convergence criteria, references
+- [Workflow checklist](docs/tutorials/07_workflow_checklist.md) — single-page reminder for a publication-grade run
+- [Troubleshooting](docs/troubleshooting.md) — known issues and their fixes
 
-Recommended starting points:
-
-- [`Quickstart`](docs/quickstart.md): minimal end-to-end GUI workflow
-- [`Concepts`](docs/concepts.md): unmixing model, seeds, NNMF, and fixed-H NNLS
-- [`Tutorials`](docs/tutorials/01_loading_data.md): step-by-step GUI usage
-- [`Examples`](docs/examples/reproduce_figure_1.md): figure-linked and modality-specific workflows
-- [`Reference`](docs/reference/nnmf_nnls_modes.md): feature-specific notes
-
-Local docs build:
-
-```powershell
-py -3 -m pip install -r docs-requirements.txt
-py -3 -m mkdocs serve
-```
-
-## Analysis Modes At A Glance
-
-> [!IMPORTANT]
-> Choose the mode by how much prior knowledge you already have:
-> - **PCA**: find the strongest variance patterns
-> - **Random NNMF**: discover non-negative components without prior seeds
-> - **Seeded NNMF**: guide the decomposition with spectral or spatial seeds, but still allow adaptation
-> - **Fixed-H NNLS**: keep spectra fixed and solve only for abundance maps
-
-- **PCA**
-  Good for a first inspection of unknown data. PCA finds orthogonal variance directions, not chemically pure components, and can produce negative values.
-- **Random NNMF**
-  Good for exploratory non-negative decomposition when no reliable prior spectra are available yet. It often gives more physically intuitive maps than PCA, but the result can depend on initialization.
-- **Seeded NNMF**
-  Good when you already know approximate spectra or spatial regions. The seeds act as informed starting points, but both the spectra `H` and the maps `W` can still change during the fit.
-- **Fixed-H NNLS**
-  Good when the spectra are already trusted and should stay fixed. Only the abundance maps `W` are solved, which makes this the most controlled mode for cross-slice, cross-time, or reference-based analysis.
-
-Rule of thumb:
-
-- use **PCA** for diagnostics
-- use **Random NNMF** for a first non-negative estimate
-- use **Seeded NNMF** for the main user-guided workflow
-- use **Fixed-H NNLS** when spectra must remain stable
-
-More detail:
-
-- practical mode-selection page: [Analysis modes tutorial](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/02_analysis_modes/)
-- concept and algorithm page: [NNMF and NNLS modes reference](https://manuel-kunisch.github.io/hs_crs_analysis_gui/reference/nnmf_nnls_modes/)
-- repo source tutorial: [`docs/tutorials/02_analysis_modes.md`](docs/tutorials/02_analysis_modes.md)
-- repo source reference: [`docs/reference/nnmf_nnls_modes.md`](docs/reference/nnmf_nnls_modes.md)
-
-## Repository Status
-
-**[TODO: add project status if desired, e.g. active development / research prototype / internal tool / stable release.]**
-
-## Installation
-
-### Prerequisites
-
-Before installation, users should have:
-
-- Python **3.11 or newer**
-- either **Conda** or plain **pip/venv**
-- a supported desktop platform:
-  - Windows
-  - Linux
-  - macOS
-
-Optional, for GPU acceleration:
-
-- **NVIDIA GPU**: recommended for the current PyTorch GPU path in this repository
-- **AMD GPU on Linux**: potentially usable through ROCm
-- **Apple Silicon**: the GUI should run, but this repository currently does not use the `mps` backend automatically
-
-Useful links:
-
-- PyTorch install selector: https://pytorch.org/get-started/locally/
-- NVIDIA CUDA downloads: https://developer.nvidia.com/cuda-downloads
-- NVIDIA driver downloads: https://www.nvidia.com/Download/index.aspx
-- PyTorch Apple MPS notes: https://docs.pytorch.org/docs/stable/notes/mps.html
-- PyTorch ROCm / HIP notes: https://docs.pytorch.org/docs/stable/notes/hip.html
-
-### Which Environment File Should I Use?
-
-- `environment.yml`
-  - lean Conda setup
-  - recommended for normal CPU usage
-  - no PyTorch included
-- `environment-pytorch.yml`
-  - Conda setup with PyTorch included
-  - recommended if you want to use the optional PyTorch-based NNMF / NNLS paths
-  - good base for later adding NVIDIA CUDA support
-  - CUDA does not need to be installed separately just to run the GUI, but you will need a CUDA-enabled PyTorch build for GPU acceleration
-- `requirements.txt`
-  - pip-based installation instead of Conda (not recommended)
-  - simplest fallback if you do not want to use Conda
-
-### Option 1: Conda environment without PyTorch
-
-Recommended for a lean setup that uses the standard CPU/scikit-learn/SciPy fallbacks.
+To build the docs locally:
 
 ```bash
+pip install -r docs-requirements.txt
+mkdocs serve
+```
+
+## Install
+
+Detailed installation guide and platform-specific notes: [docs/installation.md](docs/installation.md).
+
+**Prerequisites** — Python ≥ 3.11 on Windows, Linux, or macOS. Optionally an NVIDIA GPU (or ROCm-capable AMD on Linux) for PyTorch acceleration.
+
+**Conda (recommended)** — pick one of two environments:
+
+```bash
+# Lean CPU-only environment
 conda env create -f environment.yml
 conda activate hs-mv-analysis
-```
 
-### Option 2: Conda environment with PyTorch
-
-Recommended if you want the optional PyTorch-based NNMF / NNLS paths.
-This environment gives you PyTorch, but not necessarily a CUDA-enabled build by itself.
-
-```bash
+# Or: with PyTorch for the optional GPU backends
 conda env create -f environment-pytorch.yml
 conda activate hs-mv-analysis-pytorch
 ```
 
-Note:
-
-If you need a specific CUDA-enabled PyTorch build for a particular GPU, you may want to adjust the PyTorch installation using the official PyTorch installation selector.
-
-### Option 3: pip / requirements.txt
-
-If you do not want to use Conda:
+**pip** — alternative if you prefer venv:
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\activate              # Windows
+# source .venv/bin/activate         # Linux / macOS
 pip install -r requirements.txt
 ```
 
-Optional PyTorch installation afterward:
+For a CUDA-enabled PyTorch build, follow the [official PyTorch selector](https://pytorch.org/get-started/locally/) (the repo's GPU paths use the standard `torch.cuda` device convention; CUDA 12.6 is the recommended target). See [GPU acceleration](docs/tutorials/02a_gpu_acceleration.md) for the full backend / platform matrix including Apple Silicon and AMD/ROCm.
 
-```bash
-pip install torch
-```
-
-## GPU Acceleration and Platform Notes
-
-### NVIDIA GPUs on Windows / Linux
-
-This project currently uses PyTorch GPU acceleration only through the `cuda` device path in the optional NNMF / NNLS backends.
-
-Practical recommendation:
-
-- use the `environment-pytorch.yml` environment
-- for NVIDIA acceleration, install a CUDA-enabled PyTorch build afterward
-- for this project, prefer **CUDA 12.6**
-
-Why CUDA 12.6:
-
-- the official PyTorch "Get Started" page currently lists stable builds for CUDA `11.8`, `12.6`, and `12.8`
-- `12.6` is a good conservative recommendation for this repository: modern, well-supported, and less aggressive than simply chasing the newest option
-
-Important:
-
-For normal PyTorch usage, you usually do **not** need to install the full NVIDIA CUDA toolkit separately just to run this GUI. In practice, you mainly need:
-
-- a compatible NVIDIA driver
-- a CUDA-enabled PyTorch build
-
-Official links:
-
-- PyTorch install selector: https://pytorch.org/get-started/locally/
-- NVIDIA CUDA downloads: https://developer.nvidia.com/cuda-downloads
-- NVIDIA driver downloads: https://www.nvidia.com/Download/index.aspx
-
-
-Example pip install inside the PyTorch environment:
-
-```bash
-pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu126
-```
-
-Or, if you want to follow the official Conda-style PyTorch packaging route:
-
-```bash
-conda install pytorch pytorch-cuda=12.6 -c pytorch -c nvidia
-```
-
-Verification:
-
-```bash
-python -c "import torch; print('torch:', torch.__version__); print('cuda available:', torch.cuda.is_available()); print('torch cuda:', torch.version.cuda)"
-```
-
-If `torch.cuda.is_available()` prints `True`, the current code should be able to use the PyTorch GPU path.
-
-### Apple Silicon / macOS
-
-PyTorch itself supports Apple Silicon acceleration through the `mps` backend on supported macOS systems.
-
-However, this repository does **not** currently select `mps` in its own PyTorch backend code. The current implementation checks CUDA availability and otherwise falls back to CPU.
-
-So, today:
-
-- the GUI should still run on Apple Silicon
-- the PyTorch parts should still install
-- but the custom PyTorch NNMF / NNLS acceleration paths in this project will currently behave as **CPU-only**, unless the code is extended
-
-To add proper Apple GPU support later, the project would need to detect and route to `mps`, especially in:
-
-- `contents/torch_nmf.py`
-- `contents/nnls_pytorch.py`
-- `contents/multivariate_analyzer.py`
-
-### AMD GPUs
-
-For AMD GPUs, the best path is **Linux + ROCm + PyTorch ROCm**.
-
-This is promising for this project because official PyTorch ROCm uses the same `torch.cuda` Python-level semantics, and this repository already uses the `cuda` device naming convention in its PyTorch backend code.
-
-So in practice:
-
-- **AMD on Linux with ROCm**: potentially workable with the current code, and this is the most likely non-NVIDIA GPU route
-- **AMD on Windows**: not a realistic target for this PyTorch path right now; use CPU unless you test a working alternative backend
-
-### Intel and Other GPU Backends
-
-There is no dedicated support in this repository for Intel GPU backends or other non-CUDA/non-ROCm accelerators.
-
-For those systems, assume:
-
-- the GUI itself can still run
-- the analysis will still work
-- PyTorch acceleration should be considered **unsupported unless explicitly adapted and tested**
-
-### Keep This Section Updated
-
-CUDA / ROCm / PyTorch packaging changes over time. Before publishing a release, it is worth re-checking the official PyTorch installation page:
-
-- https://pytorch.org/get-started/locally/
-- https://docs.pytorch.org/docs/stable/notes/mps
-- https://docs.pytorch.org/docs/stable/notes/hip.html
-
-## Running the Application
-
-### Windows
-
-From an activated environment:
-
-```bash
-run_hs_crs_analysis_gui.bat
-```
-
-### Direct Python launch
+## Run
 
 ```bash
 python main.py
 ```
 
-## Exporting a Reproducible Conda Environment
-
-If you want to share the exact environment from a machine where the GUI is already working:
+On Windows you can also use the bundled launcher:
 
 ```bash
-conda env export --no-builds > environment.full.yml
+run_hs_crs_analysis_gui.bat
 ```
 
-This is the best compromise between reproducibility and avoiding overly machine-specific build strings.
+A pre-built standalone Windows executable is described in [docs/standalone_windows.md](docs/standalone_windows.md).
 
-A leaner export based only on explicitly requested packages is:
+## At a glance
 
-```bash
-conda env export --from-history > environment.min.yml
-```
+![Auto-suggested ROIs on synthetic microbead data — spatial detection followed by Ward hierarchical clustering on spectral fingerprints](docs/assets/gifs/03_suggest_rois_beads.gif)
 
-## Project Structure
+The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset. The same GUI handles seed building, NMF/NNLS analysis, and result export. See [docs/tutorials/03c_suggest_rois.md](docs/tutorials/03c_suggest_rois.md) for the algorithm and settings reference.
+
+## Repository layout
 
 ```text
-main.py                         Main application entry point
-composite_image.py              Result/composite viewer
-contents/analysis_manager.py    Analysis setup and seed handling
-contents/data_widgets.py        Raw-data loading and image viewer wiring
-contents/roi_manager_pg.py      ROI management and ROI plotting
-contents/multivariate_analyzer.py Core PCA / NNMF logic
-docs/                           Tutorial and reference documentation
-docs/tutorials/                 Step-by-step workflow tutorials
-docs/examples/                  Dataset-specific and figure-linked examples
-docs/reference/                 Feature-specific reference notes
-environment.yml                 Conda environment without PyTorch
-environment-pytorch.yml         Conda environment with PyTorch
-requirements.txt                pip-based core dependencies
-run_hs_crs_analysis_gui.bat     Windows launcher
+main.py                          Application entry point
+composite_image.py               Result / composite viewer
+contents/analysis_manager.py     Analysis setup, seed handling, 4D orchestration
+contents/multivariate_analyzer.py PCA / NMF / NNLS core
+contents/torch_nmf.py            Optional PyTorch MU-NMF backend
+contents/nnls_pytorch.py         Optional PyTorch FISTA-NNLS backend
+contents/roi_manager_pg.py       ROI management and ROI plotting
+contents/data_widgets.py         Raw-data loading and image viewer
+docs/                            User documentation (mkdocs site)
+environment.yml                  Conda environment, CPU-only
+environment-pytorch.yml          Conda environment, with PyTorch
+requirements.txt                 pip-based dependencies
+run_hs_crs_analysis_gui.bat      Windows launcher
 ```
 
-## Usage Notes
+## Repository status
 
-- The PyTorch backends are optional. If PyTorch is not installed, the code falls back to the non-PyTorch implementations where supported.
-- Presets, ROI state, and imported dummy ROI seed rows are intended to support iterative analysis workflows.
-- Some functionality is optimized for Windows/PyQt usage, especially the provided batch launcher.
-
-Data format and workflow notes:
-
-- The main input format is TIFF. 3D stacks must have shape `(channels, y, x)`. 4D stacks can have any axis order; the spectral and outer axes are selected in a dialog on load.
-- Non-`uint16` TIFFs (float32, int32, etc.) are remapped to the GUI's 0–65535 working range. Raw absolute values are not preserved after loading.
-- A `wavelength.json` file placed next to the TIFF is automatically used for the spectral axis. See [Spectral axis reference](docs/reference/spectral_axis_and_wavelength_json.md) for the supported keys.
-- The PyTorch backends (NNMF and NNLS) are optional. Without PyTorch, the GUI falls back to scikit-learn NMF and SciPy NNLS.
-- Presets are JSON files. They store the full analysis state but not the image data itself. Move or rename the TIFF after saving a preset and re-open it manually before loading the preset.
+**[TODO: project status — research prototype / active development / stable release / etc.]**
 
 ## Citation
 
-**[TODO: add paper / preprint / thesis / DOI / how you want the software cited.]**
+**[TODO: paper / preprint / thesis / DOI / preferred citation format. A `CITATION.cff` file is also recommended for GitHub's "Cite this repository" button.]**
 
 ## License
 
-**[TODO: add the project license here, e.g. MIT / GPL-3.0 / proprietary / internal academic use only.]**
-
-If you plan to publish this on GitHub, it is better to add an actual `LICENSE` file as well.
+**[TODO: project license — e.g. MIT / GPL-3.0 / proprietary. Add a top-level `LICENSE` file as well.]**
 
 ## Acknowledgements
 
-**[TODO: add collaborators, institutes, funding, datasets, or upstream packages you want to acknowledge.]**
+**[TODO: collaborators, institutes, funding sources, datasets, and upstream packages worth crediting.]**

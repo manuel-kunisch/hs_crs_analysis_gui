@@ -1,33 +1,38 @@
 # Citation
 
-A formal citation entry will be added here once the software has a DOI, preprint, or publication. Until then, please cite the repository directly.
+If you use HS-MOSAIC in published work, please cite the Zenodo record and include the exact release tag or commit you used. This makes the exact analysis workflow traceable, especially while the project is still under active development.
 
 ## Software
 
 ```
-HS-MOSAIC
+HS MOSAIC - A GUI for fast reconstruction and unmixing of hyperspectral imaging data
 https://github.com/manuel-kunisch/hs_crs_analysis_gui
+https://doi.org/10.5281/zenodo.20273076
 ```
 
 If you use this software in published work, please include:
 
 - the repository URL,
-- the version or commit hash used,
+- the DOI: `10.5281/zenodo.20273076`,
+- the release tag or commit hash used,
 - the analysis mode (PCA / Random NNMF / Seeded NNMF / Fixed-H NNLS) and main settings.
 
-## BibTeX placeholder
+The repository includes a top-level `CITATION.cff` file so GitHub and citation managers can generate citation metadata.
+
+## BibTeX
 
 ```bibtex
-@software{hs_mosaic,
+@software{kunisch_hs_mosaic,
   author    = {Kunisch, Manuel},
-  title     = {{HS-MOSAIC}: A GUI for hyperspectral multivariate analysis},
+  title     = {{HS MOSAIC} - A GUI for fast reconstruction and unmixing of hyperspectral imaging data},
+  doi       = {10.5281/zenodo.20273076},
   url       = {https://github.com/manuel-kunisch/hs_crs_analysis_gui},
-  year      = {2025},
-  note      = {Version X.Y.Z. Replace with actual version and DOI when available.}
+  year      = {2026},
+  note      = {Please cite the exact release tag or commit hash used.}
 }
 ```
 
-Replace `Version X.Y.Z` with the tag or commit you used.
+If a more specific version DOI, preprint, or paper becomes available, prefer that citation and include the software version used.
 
 ## Related references
 

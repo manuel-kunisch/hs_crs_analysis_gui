@@ -1,6 +1,8 @@
 # HS-MOSAIC
 
-**A desktop GUI for hyperspectral microscopy unmixing — PCA, seeded NNMF and fixed-H NNLS, with GPU-accelerated backends and reproducible presets.**
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20273076.svg)](https://doi.org/10.5281/zenodo.20273076)
+
+**A GUI for fast reconstruction and unmixing of hyperspectral imaging data — PCA, seeded NNMF and fixed-H NNLS, with GPU-accelerated backends and reproducible presets.**
 
 Built for coherent Raman scattering (CRS, CARS, SRS) and related hyperspectral imaging workflows, but applicable to any spectral image stack that needs non-negative unmixing.
 
@@ -13,7 +15,7 @@ Built for coherent Raman scattering (CRS, CARS, SRS) and related hyperspectral i
 *Above: the same synthetic dataset analyzed with each of the four available modes. PCA misses peaks, random NNMF mixes components, seeded NNMF and fixed-H NNLS recover the underlying blob spectra.*
 
 > [!IMPORTANT]
-> The TODO markers in this README (project description, citation, license, acknowledgements) still need to be filled in before publication.
+> HS-MOSAIC is under active development. For published analyses, cite the exact release tag or commit hash you used so the processing workflow remains reproducible.
 
 ---
 
@@ -120,16 +122,33 @@ run_hs_crs_analysis_gui.bat      Windows launcher
 
 ## Repository status
 
-**[TODO: project status — research prototype / active development / stable release / etc.]**
+HS-MOSAIC is a research software project under active development. The documented workflows are intended for reproducible image analysis, but users should validate settings and outputs for their own datasets before publication.
 
 ## Citation
 
-**[TODO: paper / preprint / thesis / DOI / preferred citation format. A `CITATION.cff` file is also recommended for GitHub's "Cite this repository" button.]**
+If you use HS-MOSAIC in published work, please cite the Zenodo record and include the exact release tag or commit you used. GitHub can generate a citation from [`CITATION.cff`](CITATION.cff).
+
+Preliminary DOI: [10.5281/zenodo.20273076](https://doi.org/10.5281/zenodo.20273076)
+
+```bibtex
+@software{kunisch_hs_mosaic,
+  author = {Kunisch, Manuel},
+  title = {{HS MOSAIC} - A GUI for fast reconstruction and unmixing of hyperspectral imaging data},
+  doi = {10.5281/zenodo.20273076},
+  url = {https://github.com/manuel-kunisch/hs_crs_analysis_gui},
+  note = {Please cite the exact release tag or commit hash used},
+  year = {2026}
+}
+```
 
 ## License
 
-**[TODO: project license — e.g. MIT / GPL-3.0 / proprietary. Add a top-level `LICENSE` file as well.]**
+Copyright (C) 2026 Manuel Kunisch.
+
+HS-MOSAIC is licensed under the **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See [`LICENSE`](LICENSE).
+
+The source code is distributed under GPL-3.0-or-later because the application uses PyQt5, which is available under GPLv3 or a commercial Riverbank license. Documentation and project media should be cited using the software citation above unless a file states otherwise.
 
 ## Acknowledgements
 
-**[TODO: collaborators, institutes, funding sources, datasets, and upstream packages worth crediting.]**
+HS-MOSAIC builds on the scientific Python and Qt ecosystem, including NumPy, SciPy, scikit-image, scikit-learn, tifffile, matplotlib, pyqtgraph, PyQt5, QtAwesome, and optional PyTorch backends. Please also cite the method references listed in the documentation when they are relevant to your analysis.

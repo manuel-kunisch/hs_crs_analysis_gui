@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use HS-MOSAIC in published work, please cite the software release or commit you used."
+title: "HS MOSAIC - A GUI for fast reconstruction and unmixing of hyperspectral imaging data"
+type: software
+doi: 10.5281/zenodo.20273076
+authors:
+  - family-names: Kunisch
+    given-names: Manuel
+    email: mkunisch@physik.uni-bielefeld.de
+repository-code: "https://github.com/manuel-kunisch/hs_crs_analysis_gui"
+url: "https://manuel-kunisch.github.io/hs_crs_analysis_gui/"
+abstract: "HS-MOSAIC is a GUI for fast reconstruction and unmixing of hyperspectral imaging data with PCA, seeded NNMF, fixed-H NNLS, optional GPU-accelerated backends, reproducible presets, and publication-oriented export workflows."
+keywords:
+  - hyperspectral microscopy
+  - coherent Raman scattering
+  - CARS
+  - SRS
+  - non-negative matrix factorization
+  - NNMF
+  - NNLS
+  - PyQt
+license: GPL-3.0-or-later

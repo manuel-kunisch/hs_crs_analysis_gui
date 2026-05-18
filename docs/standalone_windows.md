@@ -10,11 +10,11 @@ Use the [full Python installation](installation.md) instead when you want to run
 
 | Package | Use this when | Python required? | GPU acceleration? |
 |---|---|---:|---:|
-| `HS_CRS_Analysis_GUI_CPU_portable.zip` | Most users want the normal CPU workflow. | No | No |
-| `HS_CRS_Analysis_GUI_PyTorch_CPU_portable.zip` | Users want the optional PyTorch NNMF backend, but only on CPU. | No | No |
-| `HS_CRS_Analysis_GUI_PyTorch_CU124_portable.zip` | Users want PyTorch GPU acceleration on a compatible NVIDIA GPU. | No | Yes, through CUDA 12.4 PyTorch |
+| `HS_MOSAIC_CPU_vX.Y.Z.zip` | Most users want the normal CPU workflow. | No | No |
+| `HS_MOSAIC_PyTorch_CPU_vX.Y.Z.zip` | Users want the optional PyTorch NNMF backend, but only on CPU. | No | No |
+| `HS_MOSAIC_GPU_CUDA124_vX.Y.Z.zip` | Users want PyTorch GPU acceleration on a compatible NVIDIA GPU. | No | Yes, through CUDA 12.4 PyTorch |
 
-For most users, start with `HS_CRS_Analysis_GUI_CPU_portable.zip`.
+For most users, start with `HS_MOSAIC_CPU_vX.Y.Z.zip`.
 
 Use the CUDA PyTorch package only when the computer has a compatible NVIDIA GPU and a recent NVIDIA driver. The CUDA package is much larger because it bundles CUDA-enabled PyTorch.
 
@@ -23,11 +23,12 @@ Use the CUDA PyTorch package only when the computer has a compatible NVIDIA GPU 
 1. Download the chosen zip file.
 2. Extract the whole zip to a normal writable folder, for example `Downloads`, `Documents`, or a lab software folder.
 3. Open the extracted folder.
-4. Double-click the application:
-   - `HS_CRS_Analysis_GUI.exe` for the normal CPU package.
-   - `HS_CRS_Analysis_GUI_PyTorch.exe` for the PyTorch packages.
+4. Double-click `HS_MOSAIC.exe`.
 
-Keep the `.exe` next to its `_internal` folder. The `.exe` alone is not a complete application.
+!!! warning "Do not move the `.exe` out of the extracted folder"
+    Keep `HS_MOSAIC.exe` next to its `_internal` folder. The `.exe` alone is not a complete application, and moving it to the Desktop or another folder will break the portable app.
+
+    To start HS-MOSAIC from the Desktop, create a Windows shortcut instead: right-click `HS_MOSAIC.exe`, choose **Show more options** if needed, then choose **Send to > Desktop (create shortcut)**. You can also right-click the `.exe` and use **Create shortcut**, then move only the shortcut.
 
 Do not run executables from the repository `build/` folder. That folder is temporary PyInstaller output. The distributable application is the portable zip or the unpacked folder inside `dist/`.
 
@@ -119,6 +120,12 @@ Build the normal CPU package:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_cpu.ps1
 ```
 
+For a release version, pass the version explicitly:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_cpu.ps1 -Version 0.9.0
+```
+
 Build the PyTorch CPU package:
 
 ```powershell
@@ -128,7 +135,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1
 Build a CUDA PyTorch package by installing a CUDA-enabled PyTorch wheel into the build environment:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -TorchIndexUrl https://download.pytorch.org/whl/cu124 -RequireCuda
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -TorchIndexUrl https://download.pytorch.org/whl/cu124 -RequireCuda -Version 0.9.0
 ```
 
 `-RequireCuda` makes the build fail if the build environment cannot import CUDA-enabled PyTorch and see a CUDA device.
@@ -136,10 +143,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 
 If CUDA PyTorch already works in an existing Conda environment, build from that interpreter:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -SkipInstall -RequireCuda -PythonExeOverride C:\path\to\env\python.exe -TorchIndexUrl https://download.pytorch.org/whl/cu124
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -SkipInstall -RequireCuda -PythonExeOverride C:\path\to\env\python.exe -TorchIndexUrl https://download.pytorch.org/whl/cu124 -Version 0.9.0
 ```
 
-In this form, `-TorchIndexUrl` is used to label the output zip, for example `CU124`. The actual PyTorch build comes from the supplied Python interpreter.
+In this form, `-TorchIndexUrl` is used to label the output zip, for example `CUDA124`. The actual PyTorch build comes from the supplied Python interpreter.
 
 Use `-SkipInstall` only when dependencies are already correct. Do not use `-SkipInstall` after changing dependencies or switching between CPU and CUDA PyTorch.
 
@@ -163,7 +170,7 @@ The clean-machine test is the most important packaging check. It catches missing
 Backend self-test command for CUDA builds:
 
 ```powershell
-.\dist\HS_CRS_Analysis_GUI_PyTorch\HS_CRS_Analysis_GUI_PyTorch.exe --backend-self-test $env:TEMP\hs_backend_selftest.json
+.\dist\HS_MOSAIC_GPU_CUDA124_v0.9.0\HS_MOSAIC.exe --backend-self-test $env:TEMP\hs_backend_selftest.json
 Get-Content $env:TEMP\hs_backend_selftest.json
 ```
 

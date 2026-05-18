@@ -1,6 +1,6 @@
 # HS-MOSAIC
 
-**A desktop GUI for hyperspectral microscopy unmixing — PCA, seeded NMF and fixed-H NNLS, with GPU-accelerated backends and reproducible presets.**
+**A desktop GUI for hyperspectral microscopy unmixing — PCA, seeded NNMF and fixed-H NNLS, with GPU-accelerated backends and reproducible presets.**
 
 Built for coherent Raman scattering (CRS, CARS, SRS) and related hyperspectral imaging workflows, but applicable to any spectral image stack that needs non-negative unmixing.
 
@@ -10,19 +10,19 @@ Built for coherent Raman scattering (CRS, CARS, SRS) and related hyperspectral i
 
 ![Same dataset, four modes side by side — PCA, random NNMF, seeded NNMF, fixed-H NNLS — on the synthetic quickstart data shipped with the GUI](docs/assets/images/02_modes_comparison.png)
 
-*Above: the same synthetic dataset analyzed with each of the four available modes. PCA misses peaks, random NMF mixes components, seeded NMF and fixed-H NNLS recover the underlying blob spectra.*
+*Above: the same synthetic dataset analyzed with each of the four available modes. PCA misses peaks, random NNMF mixes components, seeded NNMF and fixed-H NNLS recover the underlying blob spectra.*
 
 > [!IMPORTANT]
 > The TODO markers in this README (project description, citation, license, acknowledgements) still need to be filled in before publication.
 
 ---
 
-## Why HS-MOSAIC
+## Why HS-MOSAIC?
 
-- **Four analysis modes in one workflow**: PCA for diagnostics, random NMF for unguided exploration, seeded NMF for the main guided workflow, and fixed-H NNLS for cross-slice / cross-time stability.
-- **Seed-first interaction**: draw ROIs, load reference spectra, build Gaussian resonance models, or let the auto-suggester scan the image for you. Every seed source feeds the same H/W building pipeline.
-- **3D and 4D stacks**: per-slice or fast multislice (NMF on a reference slice → NNLS everywhere else) for time series and z-stacks.
-- **Optional GPU acceleration** via PyTorch with graceful CPU fallback (scikit-learn NMF, SciPy NNLS).
+- **Four analysis modes in one workflow**: PCA for variance-based diagnostics, random NNMF for unguided exploration, seeded NNMF for the main guided workflow, and fixed-H NNLS for spectral seed stability, particularly in 4D cross-slice / cross-time.
+- **Seed-first interaction**: draw ROIs, load reference spectra, build Gaussian resonance models, or let the auto-suggester scan the image. Every seed source feeds the same H/W building pipeline.
+- **3D and 4D stacks**: per-slice or fast multislice (NNMF on a reference slice → NNLS everywhere else) for time series and z-stacks.
+- **Optional GPU acceleration** via PyTorch with CPU fallback (scikit-learn NMF, SciPy NNLS).
 - **Reproducible by construction**: presets save the full analysis state, ROI configuration, and seed choices. Reload the same TIFF, reload the preset, get the same result.
 - **Publication-friendly export**: Fiji/ImageJ-compatible TIFFs, CSV spectra, and scale-bar metadata that survive into downstream figures.
 
@@ -98,7 +98,7 @@ A pre-built standalone Windows executable is described in [docs/standalone_windo
 
 ![Auto-suggested ROIs on synthetic microbead data — spatial detection followed by Ward hierarchical clustering on spectral fingerprints](docs/assets/gifs/03_suggest_rois_beads.gif)
 
-The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset. The same GUI handles seed building, NMF/NNLS analysis, and result export. See [docs/tutorials/03c_suggest_rois.md](docs/tutorials/03c_suggest_rois.md) for the algorithm and settings reference.
+The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset. The same GUI handles seed building, NNMF/NNLS analysis, and result export. See [docs/tutorials/03c_suggest_rois.md](docs/tutorials/03c_suggest_rois.md) for the algorithm and settings reference.
 
 ## Repository layout
 
@@ -106,7 +106,7 @@ The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset.
 main.py                          Application entry point
 composite_image.py               Result / composite viewer
 contents/analysis_manager.py     Analysis setup, seed handling, 4D orchestration
-contents/multivariate_analyzer.py PCA / NMF / NNLS core
+contents/multivariate_analyzer.py PCA / NNMF / NNLS core
 contents/torch_nmf.py            Optional PyTorch MU-NMF backend
 contents/nnls_pytorch.py         Optional PyTorch FISTA-NNLS backend
 contents/roi_manager_pg.py       ROI management and ROI plotting

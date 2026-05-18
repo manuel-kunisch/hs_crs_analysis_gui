@@ -1,5 +1,8 @@
 # SWIR or multispectral reflection example
 
+!!! warning "Work in progress"
+    This page is a **planning outline**. The SWIR/reflection dataset, screenshots, and worked-out steps are not yet included. For a runnable end-to-end example today, see [Synthetic quickstart](synthetic_quickstart.md).
+
 This example will show decomposition of multispectral reflection data, such as SWIR imaging.
 
 ## Planned workflow

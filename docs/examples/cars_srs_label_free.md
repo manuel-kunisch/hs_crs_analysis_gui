@@ -1,5 +1,8 @@
 # CARS/SRS label-free example
 
+!!! warning "Work in progress"
+    This page is a **planning outline**. The dataset, screenshots, and worked-out steps are not yet included. For a runnable end-to-end example today, see [Synthetic quickstart](synthetic_quickstart.md).
+
 This example will show label-free chemical imaging with CARS or SRS data.
 
 ## Planned workflow

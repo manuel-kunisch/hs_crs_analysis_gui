@@ -2,9 +2,11 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20273076.svg)](https://doi.org/10.5281/zenodo.20273076)
 
-**A GUI for fast reconstruction and unmixing of hyperspectral imaging data — PCA, seeded NNMF and fixed-H NNLS, with GPU-accelerated backends and reproducible presets.**
+**HS-MOSAIC (HyperSpectral Multivariate Optical Analysis Components) is a GUI for fast reconstruction and unmixing of hyperspectral imaging data — PCA, seeded NNMF and fixed-H NNLS, with GPU-accelerated backends and reproducible presets.**
 
-Built for coherent Raman scattering (CRS, CARS, SRS) and related hyperspectral imaging workflows, but applicable to any spectral image stack that needs non-negative unmixing.
+Initially built for coherent Raman scattering (CARS, SRS) and related hyperspectral and multispectral imaging workflows, but applicable to any spectral image stack that needs non-negative unmixing.
+
+
 
 ![Demonstration of a typical hyperspectral stack stepping through its spectral channels — synthetic quickstart data shipped with the GUI](docs/assets/gifs/quick_synthetic_data_demo.gif)
 
@@ -59,17 +61,19 @@ Detailed installation guide and platform-specific notes: [docs/installation.md](
 
 **Prerequisites** — Python ≥ 3.11 on Windows, Linux, or macOS. Optionally an NVIDIA GPU (or ROCm-capable AMD on Linux) for PyTorch acceleration.
 
-**Conda (recommended)** — pick one of two environments:
+**Conda (recommended)** — use one of the packaged environment files in the repository root:
 
 ```bash
 # Lean CPU-only environment
 conda env create -f environment.yml
 conda activate hs-mv-analysis
 
-# Or: with PyTorch for the optional GPU backends
+# Or: with PyTorch for the optional PyTorch NNMF/NNLS backends
 conda env create -f environment-pytorch.yml
 conda activate hs-mv-analysis-pytorch
 ```
+
+Use the bundled `environment.yml` unless you specifically need the PyTorch-based backends. The bundled `environment-pytorch.yml` installs PyTorch, but it does not guarantee a CUDA-enabled build on every machine. For NVIDIA GPU acceleration, install a CUDA-enabled PyTorch build that matches your driver and platform after creating the environment from the `.yml` file.
 
 **pip** — alternative if you prefer venv:
 
@@ -80,7 +84,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-For a CUDA-enabled PyTorch build, follow the [official PyTorch selector](https://pytorch.org/get-started/locally/) (the repo's GPU paths use the standard `torch.cuda` device convention; CUDA 12.6 is the recommended target). See [GPU acceleration](docs/tutorials/02a_gpu_acceleration.md) for the full backend / platform matrix including Apple Silicon and AMD/ROCm.
+For a CUDA-enabled PyTorch install, follow the [official PyTorch selector](https://pytorch.org/get-started/locally/) inside the activated environment. The GPU paths use the standard `torch.cuda` device convention; CUDA 12.6 is the recommended target when available. See [GPU acceleration](docs/tutorials/02a_gpu_acceleration.md) for the backend and platform notes, including Apple Silicon and AMD/ROCm.
 
 ## Run
 

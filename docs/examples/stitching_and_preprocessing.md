@@ -1,8 +1,9 @@
 # Stitching and preprocessing example
 
-This example will show how tiled data is stitched and prepared before multivariate analysis.
+!!! warning "Work in progress"
+    This page is a **planning outline**. A worked tiled dataset is not yet included. For the detailed meaning of every stitch setting see [01b Stitching tile folders](../tutorials/01b_stitching_tile_folders.md); for physical-units and rolling-ball settings see [04 Physical units and rolling-ball correction](../tutorials/04_physical_units_and_rolling_ball.md).
 
-This page is intentionally workflow-oriented. For the detailed meaning of every stitch setting, see [01b Stitching tile folders](../tutorials/01b_stitching_tile_folders.md). For the detailed meaning of physical-units and rolling-ball settings, see [04 Physical units and rolling-ball correction](../tutorials/04_physical_units_and_rolling_ball.md).
+This example will show how tiled data is stitched and prepared before multivariate analysis.
 
 ## Planned workflow
 

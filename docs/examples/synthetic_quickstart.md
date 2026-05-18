@@ -1,14 +1,34 @@
 # Synthetic quickstart
 
-This example creates a small hyperspectral TIFF stack that can be used to test installation and the basic GUI workflow without experimental data.
+![A typical hyperspectral stack stepping through its spectral channels — the synthetic quickstart data shipped with the GUI](../assets/gifs/quick_synthetic_data_demo.gif)
+
+*Above: the dataset produced by this example, scrolling through its spectral channels in the GUI.*
+
+This example generates a small, fully reproducible hyperspectral TIFF stack you can use to test installation and learn the full GUI workflow — without any experimental data. It is the canonical "does everything work?" check shipped with HS-MOSAIC.
 
 Use it when:
 
-- you want to confirm that TIFF loading works,
-- you want a safe dataset for learning ROIs, seeds, NNMF, NNLS, and export,
-- you need a repeatable dataset for screenshots or GIFs.
+- you want to confirm that TIFF loading, spectral-axis detection, ROIs, seeds, NNMF/NNLS, and export all work end-to-end,
+- you want a safe dataset for learning the workflow before touching real data,
+- you need a repeatable dataset for screenshots, GIFs, or bug reports.
 
-## Files generated
+## TL;DR
+
+```bash
+# 1. generate the data
+python docs/examples/generate_synthetic_quickstart.py --output synthetic_quickstart_data
+
+# 2. launch the GUI
+python main.py
+
+# 3. in the GUI: load synthetic_hs_stack.tif → Load Spectrum from File on the CSV
+#                → set Components = 6 → NNMF + Custom init + Fixed-H NNLS mode
+#                → Run Analysis
+```
+
+The rest of this page explains what the dataset contains, what to expect at each step, and the seed experiments worth trying.
+
+## Synthetic data generation
 
 Run the generator script from an environment where the application dependencies are installed:
 
@@ -82,7 +102,7 @@ Then experiment with seeded NNMF by disabling **Fixed-H NNLS mode** while keepin
 |---|---|---|
 | Reference spectra | Load `synthetic_reference_spectra.csv` with **Load Spectrum from File**. | Best controlled starting point; useful for checking the expected separation. |
 | Spatial ROIs | Draw ROIs on representative lipid-like beads, mutated lipid-like beads, protein-like beads, and a background region. | Shows how well ROI-derived mean spectra work when you choose representative regions. |
-| Gaussian models | Add resonance settings near 2850 cm^-1, 2930 cm^-1, and the mutated lipid tail region around 2985-3035 cm^-1. | Shows how approximate peak knowledge can guide analysis without external spectra. |
+| Gaussian models or seed pixels | Add resonance settings near 2850 cm^-1, 2930 cm^-1, and the mutated lipid tail region around 2985-3035 cm^-1. | Shows how approximate peak knowledge can guide analysis without external spectra. |
 | Mixed strategy | Use loaded spectra for known components, then draw or model only the uncertain component. | Mirrors real workflows where some components are known and others need exploration. |
 | No seeds / random NNMF | Disable **Custom initialization** and run NNMF. | Shows why unguided NNMF can be less stable when components overlap. |
 
@@ -122,14 +142,12 @@ To demonstrate the point of the synthetic data, compare the raw channel around 2
 
 The overlap near 2850 cm^-1 is deliberate. It makes the example useful for teaching why the GUI uses full-spectrum fitting instead of assigning components from one bright channel. The mutated lipid-like bead variants are especially useful for screenshots because they are bright and spectrally similar enough to ordinary lipid-like beads that a single-channel view cannot explain them cleanly.
 
-## Media to add
+## What to look at if something looks wrong
 
-This is a good first GIF target because it is deterministic and does not require private data:
-
-1. generate the dataset,
-2. load the TIFF,
-3. load the reference spectra,
-4. show the ambiguous 2850 cm^-1 raw channel,
-5. run fixed-H NNLS or seeded NNMF,
-6. show that ordinary lipid-like beads and mutated lipid-like variants are separated,
-7. export the composite and H spectra.
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Image opens but spectral axis is in channel indices, not cm⁻¹ | `wavelength.json` was not placed next to the TIFF, or was renamed. | Re-run the generator into a folder that already contains the TIFF, or copy the JSON next to it manually. See [Spectral axis reference](../reference/spectral_axis_and_wavelength_json.md). |
+| "Loaded image contains NaN or Inf" warning | Should never appear for the generated stack. If it does, the TIFF was rewritten by another tool. | Re-generate from scratch. |
+| Fewer or more bead components than expected | Component count in the **Analysis** panel does not match the CSV. | Set **Components** to the number of rows in `synthetic_reference_spectra.csv` (default 6). |
+| Composite map looks all-cyan or all-grey | A background or fixed-W ROI dominates the display, or all components share the same colour. | Open the ROI manager, give each component a distinct LUT colour, and hide the background component for visual checks. |
+| Fixed-H NNLS maps look much grainier than seeded NNMF | This is expected behaviour, not a bug. | See the explanation in [Analysis modes – Fixed-H NNLS](../tutorials/02_analysis_modes.md#fixed-h-nnls). |

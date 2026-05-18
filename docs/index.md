@@ -1,6 +1,6 @@
 # HS-MOSAIC Documentation
 
-Welcome to the documentation for HS-MOSAIC, a desktop GUI for hyperspectral microscopy multivariate analysis.
+Welcome to the documentation for HS-MOSAIC (HyperSpectral Multivariate Optical Analysis Components), a desktop GUI for fast unmixing and reconstruction of hyperspectral and multispectral imaging data.
 This documentation is designed to guide users through the installation, usage, and troubleshooting of the software, as well as provide detailed tutorials and reference materials.
 
 ![GUI Overview](assets/images/gui_overview.png)
@@ -71,15 +71,14 @@ The rest of the tutorial is dedicated to handling results, exporting data, and e
 
 ## Examples
 
-The example section is reserved for data-specific workflows and for reproducing figure panels from a paper.
+The example section is for complete data-specific workflows. The synthetic quickstart is the canonical end-to-end check for a fresh install; the other pages are planning outlines for upcoming worked examples.
 
 - [Examples overview](examples/index.md)
-- [Reproduce Figure 1](examples/reproduce_figure_1.md)
-- [Synthetic quickstart](examples/synthetic_quickstart.md)
-- [CARS/SRS label-free data](examples/cars_srs_label_free.md)
-- [SWIR reflection data](examples/swir_reflection.md)
-- [4D fluorescence unmixing](examples/fluorescence_4d_unmixing.md)
-- [Stitching and preprocessing](examples/stitching_and_preprocessing.md)
+- [Synthetic quickstart](examples/synthetic_quickstart.md) — runnable end-to-end check
+- [Stitching and preprocessing](examples/stitching_and_preprocessing.md) — *WIP*
+- [CARS/SRS label-free data](examples/cars_srs_label_free.md) — *WIP*
+- [SWIR reflection data](examples/swir_reflection.md) — *WIP*
+- [4D fluorescence unmixing](examples/fluorescence_4d_unmixing.md) — *WIP*
 
 ## Methods
 

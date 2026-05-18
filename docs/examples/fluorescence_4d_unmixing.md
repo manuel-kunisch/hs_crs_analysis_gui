@@ -1,5 +1,8 @@
 # 4D fluorescence unmixing example
 
+!!! warning "Work in progress"
+    This page is a **planning outline**. The 4D dataset, screenshots, and worked-out steps are not yet included. For a runnable end-to-end example today, see [Synthetic quickstart](synthetic_quickstart.md).
+
 This example will show fluorescence or labeled multispectral data with an additional z or time axis.
 
 ## Planned workflow

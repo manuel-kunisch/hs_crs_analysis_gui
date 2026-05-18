@@ -47,7 +47,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="HS_CRS_Analysis_GUI_PyTorch",
+    name="HS_MOSAIC",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -68,5 +68,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="HS_CRS_Analysis_GUI_PyTorch",
+    name="HS_MOSAIC_PyTorch",
 )

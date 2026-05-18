@@ -1,5 +1,7 @@
 # 03 Seeds, Spectra, And W Maps
 
+![Seed estimation pipeline — flow of H and W seeds for a single slice, wrapped by the per-slice 4D loop](../assets/images/03_seed_building_flow.png)
+
 Seeds are the main way to guide the analysis. The GUI supports both spectral seeds and spatial seeds.
 
 ## H Seeds: Spectral Information

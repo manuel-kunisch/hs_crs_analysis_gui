@@ -3,7 +3,8 @@ param(
     [switch]$NoZip,
     [switch]$RequireCuda,
     [string]$PythonExeOverride,
-    [string]$TorchIndexUrl = "https://download.pytorch.org/whl/cpu"
+    [string]$TorchIndexUrl = "https://download.pytorch.org/whl/cpu",
+    [string]$Version = "0.9.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +12,8 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvDir = Join-Path $ProjectRoot ".venv-build-pytorch"
 $PythonExe = Join-Path $VenvDir "Scripts\python.exe"
+$DistDir = Join-Path $ProjectRoot "dist"
+$StagingDir = Join-Path $DistDir "HS_MOSAIC_PyTorch"
 $UsingExternalPython = $false
 if ($PythonExeOverride) {
     $PythonExe = (Resolve-Path $PythonExeOverride).Path
@@ -18,6 +21,26 @@ if ($PythonExeOverride) {
 }
 
 Set-Location $ProjectRoot
+
+function Compress-PackageWithRetry {
+    param(
+        [Parameter(Mandatory=$true)][string]$SourcePath,
+        [Parameter(Mandatory=$true)][string]$DestinationPath
+    )
+
+    for ($Attempt = 1; $Attempt -le 5; $Attempt++) {
+        try {
+            Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
+            Compress-Archive -Path $SourcePath -DestinationPath $DestinationPath -Force
+            return
+        } catch {
+            if ($Attempt -eq 5) {
+                throw
+            }
+            Start-Sleep -Seconds (5 * $Attempt)
+        }
+    }
+}
 
 if (-not $UsingExternalPython -and -not (Test-Path $PythonExe)) {
     py -3 -m venv $VenvDir
@@ -37,27 +60,44 @@ if ($LASTEXITCODE -ne 0) {
     throw "PyTorch verification failed with exit code $LASTEXITCODE"
 }
 
+$TorchBuildLabel = "CUSTOM"
+if ($TorchIndexUrl -match "/whl/([^/]+)/?$") {
+    $TorchBuildLabel = $Matches[1].ToUpperInvariant()
+}
+if ($TorchBuildLabel -match "^CU(\d+)$") {
+    $TorchBuildLabel = "CUDA$($Matches[1])"
+}
+if ($TorchBuildLabel -eq "CPU") {
+    $PackageName = "HS_MOSAIC_PyTorch_CPU_v$Version"
+} elseif ($RequireCuda -or $TorchBuildLabel.StartsWith("CUDA")) {
+    $PackageName = "HS_MOSAIC_GPU_${TorchBuildLabel}_v$Version"
+} else {
+    $PackageName = "HS_MOSAIC_PyTorch_${TorchBuildLabel}_v$Version"
+}
+$PackageDir = Join-Path $DistDir $PackageName
+$ZipPath = Join-Path $DistDir "$PackageName.zip"
+
 & $PythonExe -m PyInstaller --noconfirm --clean hs_crs_analysis_gui_pytorch.spec
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed with exit code $LASTEXITCODE"
 }
 
-$ExePath = Join-Path $ProjectRoot "dist\HS_CRS_Analysis_GUI_PyTorch\HS_CRS_Analysis_GUI_PyTorch.exe"
+$ExePath = Join-Path $StagingDir "HS_MOSAIC.exe"
 if (-not (Test-Path $ExePath)) {
     throw "Expected executable was not created: $ExePath"
 }
+
+if (Test-Path $PackageDir) {
+    Remove-Item -LiteralPath $PackageDir -Recurse -Force
+}
+Move-Item -LiteralPath $StagingDir -Destination $PackageDir
+$ExePath = Join-Path $PackageDir "HS_MOSAIC.exe"
 
 Write-Host "Built PyTorch-enabled executable:"
 Write-Host $ExePath
 
 if (-not $NoZip) {
-    $PackageDir = Join-Path $ProjectRoot "dist\HS_CRS_Analysis_GUI_PyTorch"
-    $TorchBuildLabel = "CUSTOM"
-    if ($TorchIndexUrl -match "/whl/([^/]+)/?$") {
-        $TorchBuildLabel = $Matches[1].ToUpperInvariant()
-    }
-    $ZipPath = Join-Path $ProjectRoot "dist\HS_CRS_Analysis_GUI_PyTorch_${TorchBuildLabel}_portable.zip"
-    Compress-Archive -Path $PackageDir -DestinationPath $ZipPath -Force
+    Compress-PackageWithRetry -SourcePath $PackageDir -DestinationPath $ZipPath
     Write-Host "Built portable zip:"
     Write-Host $ZipPath
 }

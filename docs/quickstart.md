@@ -32,8 +32,8 @@ If you do not have real data yet, the [Synthetic quickstart example](examples/sy
 
 With the standalone Windows `.exe`, extract the whole portable zip and double-click the app:
 
-- `HS_CRS_Analysis_GUI.exe` for the normal CPU package, or
-- `HS_CRS_Analysis_GUI_PyTorch.exe` for the PyTorch package.
+- `HS_MOSAIC.exe` inside `HS_MOSAIC_CPU_v...` for the normal CPU package, or
+- `HS_MOSAIC.exe` inside `HS_MOSAIC_GPU_CUDA..._v...` for the PyTorch/CUDA package.
 
 Keep the `.exe` next to its `_internal` folder.
 

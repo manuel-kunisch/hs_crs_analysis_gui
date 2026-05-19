@@ -45,6 +45,11 @@ class CompositeImageViewWidget(QMainWindow):
     ]
     color_changed_signal = pyqtSignal(int, QColor)
     import_result_component_signal = pyqtSignal(str, int, int)
+    # Emits the most recent false-colour composite RGB(A) image after any
+    # histogram / colour change. Consumers (e.g. the raw image viewer's
+    # "Composite from analysis" projection mode) can connect to this to
+    # mirror the composite display elsewhere in the GUI.
+    compositeImageChanged = pyqtSignal(object)
     def __init__(self, img:np.ndarray = None, spectral_cmps: np.ndarray|None = None,
                  color_manager: ComponentColorManager=None):
         super().__init__()
@@ -155,7 +160,8 @@ class CompositeImageViewWidget(QMainWindow):
         export_composite_button.clicked.connect(self.save_data)
         
         # add button to save the H seeds with combobox to select the mode
-        save_seeds_button = QPushButton("Save Histogram Preset")
+        save_seeds_button = QPushButton("Save Histogram and Spectra Preset")
+        save_seeds_button.setToolTip("Save the .preset for different FOVs")
         save_seed_mode_combobox = QComboBox()
         save_seed_mode_combobox.addItem("Results")
         save_seed_mode_combobox.addItem("Seeds")
@@ -2151,6 +2157,9 @@ class CompositeImageViewWidget(QMainWindow):
         else:
             min_, max_ = composite_levels if composite_levels is not None else self._current_composite_levels()
             self.composite_view.ui.histogram.setLevels(min_, max_)
+        # Broadcast the current composite RGB(A) to any external mirror
+        # (e.g. the raw image viewer's "Composite from analysis" mode).
+        self.compositeImageChanged.emit(false_color_im)
 
     def min_max_levels(self):
         # Initialize variables for min_levels and max_levels

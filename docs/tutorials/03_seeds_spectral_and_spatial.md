@@ -100,6 +100,12 @@ For normal spatial ROIs, the mean spectrum inside the ROI can be used as an H se
 
 Use ROI-derived seeds when a visible region is representative for a component.
 
+When a candidate region is identified during analysis inspection — for example a structure that appears only in the composite or in residual data — the raw image viewer's **Projection** dropdown can be set to **Composite (from analysis)** so the same composite is shown under the ROI tools. ROIs placed in this view behave like any other ROI and produce an H seed for the next analysis run.
+
+![Composite-from-analysis projection mode showing the result-viewer composite in the raw image viewer, with the ROI manager available for seeding new components](../assets/images/05_analysis_projection.png)
+
+See [Composite projection in the raw image viewer](05_results_and_export.md#composite-projection-in-the-raw-image-viewer) for the projection-mode behaviour and update semantics.
+
 ## Gaussian Resonance Seeds
 
 Gaussian models can be generated from manually defined resonance settings. This is useful when the approximate spectral position and width of a component are known.

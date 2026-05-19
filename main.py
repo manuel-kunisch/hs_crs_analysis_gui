@@ -152,6 +152,11 @@ class MainApplication(QtWidgets.QMainWindow):
         # pass the label names to the result viewer
         self.data_widget.roi_manager.label_change_signal.connect(self.result_viewer_widget.update_label)
         self.result_viewer_widget.import_result_component_signal.connect(self.import_displayed_result_component)
+        # Mirror the result viewer's composite into the raw image viewer when
+        # the user picks the "Composite (from analysis)" projection mode.
+        self.result_viewer_widget.compositeImageChanged.connect(
+            self.data_widget.update_composite_mirror
+        )
         # on macos the widget has to be moved to the main thread to be able to open file dialogs etc.
         self.result_viewer_widget.moveToThread(self.thread())
 

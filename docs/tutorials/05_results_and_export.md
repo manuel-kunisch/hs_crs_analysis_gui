@@ -30,6 +30,28 @@ For 4D results, the result viewer can browse the outer z/time axis.
 
 > GIF placeholder: browsing channels and changing component color.
 
+## Composite Projection In The Raw Image Viewer
+
+The **Projection** dropdown above the raw image viewer has an entry called **Composite (from analysis)**. When this mode is selected, the raw viewer displays the false-colour composite produced by the result viewer. The display is kept in sync with the result viewer: any change of component colour, gradient, channel level, or 4D slice index on the result side is reflected on the raw side without a manual refresh.
+
+![Composite-from-analysis projection mode in the raw image viewer mirroring the result viewer composite](../assets/images/05_analysis_projection.png)
+
+### Use cases
+
+- **Verification against the input data.** Switching the dropdown between **None** (raw stack) and **Composite (from analysis)** places the composite and the raw channels in the same viewport. This is useful for checking whether structures in the composite have corresponding signal in the underlying spectral channels, or whether they were introduced or amplified by the unmixing step.
+- **Identification of unexpected structures.** Features that are not present in the seeded H basis can appear in the composite when residual-data analysis is used or when the chosen component count exceeds the number of seeded spectra. With the composite displayed in the raw viewer, the ROI Manager can be used to place a region of interest directly on such a feature. The mean spectrum of that region is then available as an H seed for a subsequent analysis run, supporting an iterative refinement of the spectral basis.
+
+### Behaviour
+
+- The mirror is updated whenever the result viewer recomputes its composite. Updates are triggered by colour changes, gradient or histogram-level changes, and 4D slice changes.
+- If no analysis has been run, the cache is empty and the raw viewer remains on the raw image regardless of the dropdown selection. The mirror becomes active as soon as a composite is available.
+- Switching to any other projection mode (**None**, **Average**, **Max**, **Min**) does not discard the cached composite, so returning to **Composite (from analysis)** does not require recomputation.
+- The mirror shares the viewbox of the raw viewer, so the current pan and zoom state are preserved across projection changes.
+
+In the example screenshot above, the ROI rectangles overlaid on the mirrored composite take on each component's display colour. When the colour of each box matches the dominant component inside it, the spectrally distinct objects have been assigned to separate components — a simple visual check on the seeded analysis.
+
+For details on placing seeds derived from features identified in the mirrored composite, see [Seeds, spectra, and W maps](03_seeds_spectral_and_spatial.md).
+
 ## Result Data Types And W Scaling
 
 The result viewer is primarily a visualization layer. It does not assume that every analysis result already fits into `uint16`.
@@ -104,6 +126,44 @@ Use **Show H Scales** in the result viewer to show these values in the fit summa
 For fixed-H NNLS, these scale factors help interpret the coefficient maps: a normalized fixed spectrum gives `W` coefficients relative to a max=1 basis. For seeded NNMF, the factors describe the seed convention, but the final fit can still rescale `W` and `H` during optimization.
 
 For 4D results, the displayed H scale list follows the selected z/time slice. In fast 4D NNMF/NNLS hybrid mode, the later slices use the fitted reference-slice `H` from NNMF, so initial seed scale factors may not be present for those NNLS slices.
+
+## Save Histogram And Spectra Preset
+
+!!! important "Main feature for reproducibility across fields of view"
+    The **Save Histogram and Spectra Preset** button in the result viewer writes a `.preset` file that captures the current display state and the spectra in use. It is the recommended way to apply a finalised analysis to a series of FOVs of the same sample without rebuilding ROIs, colours, or display levels each time.
+
+![Save Histogram and Spectra Preset button and mode dropdown in the result viewer](../assets/images/05_save_histogram_and_spectra_preset.png)
+
+Use this once you are satisfied with an analysis on a representative FOV — for example the multi-bead mixture used in the synthetic quickstart — and want to replay the same display and spectral basis on neighbouring FOVs or on a new sample acquired with the same settings.
+
+### What the `.preset` stores
+
+| Saved | Notes |
+|---|---|
+| Component colours and LUTs | One colour per component, applied to composite, channel view, and exported maps. |
+| Histogram / contrast levels per component | The min/max display levels and gradient state for each component, including the composite-level limits. |
+| Spectra (H rows) | Either the fitted result spectra or the seed spectra, depending on the **Mode** dropdown next to the button (`Results` or `Seeds`). |
+| Spectral axis at save time | The axis values associated with the saved spectra, used for resampling on load. |
+| Component labels | The labels currently shown in the ROI manager and result viewer. |
+
+### What it does not store
+
+- Analysis settings (solver, backend, iteration limits, fixed-H mode, normalize-H toggle) — these live in the main JSON application preset.
+- ROI geometry, physical units, 4D slice index, or preprocessing choices — same reason.
+- The raw image data.
+
+If a full session needs to be reproduced, save **both** the `.preset` (for the result-side display and spectra) and the main JSON preset via **Save Preset** in the analysis panel. See [Reference: Presets](../reference/presets.md) for the full field-by-field breakdown.
+
+### How to load it
+
+The `.preset` is loaded from the ROI Manager via the **Load Lookup Table and Spectra Preset** button. The GUI then asks how it should be applied:
+
+- **LUTs Only** — apply the saved colours and histogram levels to the current components without touching the ROI list. Use this when the current ROIs are already correct and only the visual style should match a previous session.
+- **LUTs + ROIs** — also import the saved spectra as **dummy ROI rows**. The imported spectra are loaded as **fixed seeds**: they do not depend on any drawn region in the current image, and they enter the seed pipeline as ready-made H rows. This is the route to reuse a finalised spectral basis on a new FOV.
+
+When the saved spectral axis differs from the axis of the currently loaded dataset, the spectra are **interpolated** onto the current axis. Channels of the new axis that fall outside the saved range are filled by **extrapolation** of the nearest stored value. This is what allows the same `.preset` to be reused across acquisitions with slightly different spectral windows.
+
+For the button and the load dialog in the ROI Manager, see [ROI Manager: Load Lookup Table and Spectra Preset](03b_roi_manager.md#load-lookup-table-and-spectra-preset). For the broader reproducibility context including the main JSON preset, see [Presets and reproducibility](06_presets_and_reproducibility.md).
 
 ## Saving Spectra
 

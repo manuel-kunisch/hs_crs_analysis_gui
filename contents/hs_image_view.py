@@ -279,8 +279,12 @@ class RamanImageView(ImageViewLineRoi):
             kwargs.setdefault('autoLevels', False)
             kwargs.setdefault('autoHistogramRange', False)
         self._suppress_manual_stop = True
+        # Default axes assume a (t, y, x) grayscale stack. Callers that need
+        # to display a single RGB(A) frame (e.g. the composite mirror from
+        # the result viewer) can pass an explicit axes={'x': 1, 'y': 0, 'c': 2}.
+        axes_override = kwargs.pop('axes', {'x': 2, 'y': 1, 't': 0})
         try:
-            super().setImage(*args, axes={'x': 2, 'y': 1, 't': 0}, **kwargs)
+            super().setImage(*args, axes=axes_override, **kwargs)
         finally:
             self._suppress_manual_stop = False
         if keep_viewbox:

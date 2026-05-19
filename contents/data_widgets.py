@@ -51,6 +51,10 @@ class DataWidget(QtWidgets.QWidget):
         self.dock_area_layout = None
         self.image = img
         self._binning_factor: int = 1
+        # Cached false-colour composite RGB(A) from the result viewer.
+        # Populated whenever CompositeImageViewWidget.compositeImageChanged
+        # fires; consumed by the "Composite from analysis" projection mode.
+        self._cached_composite_rgb: np.ndarray | None = None
         self.layout = QtWidgets.QVBoxLayout(self)
         self.setLayout(self.layout)
 
@@ -236,6 +240,13 @@ class DataWidget(QtWidgets.QWidget):
         self.projection_mode_combo.addItem("Average", "average")
         self.projection_mode_combo.addItem("Max", "max")
         self.projection_mode_combo.addItem("Min", "min")
+        self.projection_mode_combo.addItem("Composite (from analysis)", "composite")
+        self.projection_mode_combo.setItemData(
+            self.projection_mode_combo.count() - 1,
+            "Mirror the false-colour composite shown in the result viewer.\n"
+            "Updates live whenever colours or histograms change there.",
+            QtCore.Qt.ToolTipRole,
+        )
         self.projection_mode_combo.currentIndexChanged.connect(self.on_projection_mode_changed)
 
         self.binning_combo_box = QtWidgets.QComboBox(self)
@@ -327,6 +338,7 @@ class DataWidget(QtWidgets.QWidget):
             "average": "Average Image",
             "max": "Max Intensity Projection",
             "min": "Min Intensity Projection",
+            "composite": "Composite (mirror of result viewer)",
         }.get(mode, "Image")
 
     def _compute_projection_stack(self, mode: str) -> np.ndarray | None:
@@ -348,12 +360,46 @@ class DataWidget(QtWidgets.QWidget):
         if mode == "none":
             self.display_raw_image(keep_view=keep_view)
             return
+        if mode == "composite":
+            # Mirror the false-colour composite from the result viewer.
+            # If no composite is available yet (analysis never ran), fall
+            # back to the raw image so the viewer is not left blank.
+            rgb = self._cached_composite_rgb
+            if rgb is None or rgb.ndim < 3:
+                self.display_raw_image(keep_view=keep_view)
+                return
+            self.raman_raw_image_view.stopAutoPlay()
+            self.raman_raw_image_view.setImage(
+                np.asarray(rgb),
+                keep_viewbox=keep_view,
+                axes={'x': 1, 'y': 0, 'c': 2},  # force rgb mode
+            )
+            self.raman_raw_image_view.getView().setTitle(self._projection_title(mode))
+            return
         projection_stack = self._compute_projection_stack(mode)
         if projection_stack is None:
             return
         self.raman_raw_image_view.stopAutoPlay()
         self.raman_raw_image_view.setImage(projection_stack, keep_viewbox=keep_view)
         self.raman_raw_image_view.getView().setTitle(self._projection_title(mode))
+
+    def update_composite_mirror(self, rgb_image):
+        """
+        Slot for `CompositeImageViewWidget.compositeImageChanged`.
+
+        Caches the latest composite RGB(A) image so the "Composite (from
+        analysis)" projection mode has something to show, and re-renders
+        immediately if that mode is already selected.
+        """
+        if rgb_image is None:
+            self._cached_composite_rgb = None
+            return
+        arr = np.asarray(rgb_image)
+        if arr.ndim < 3:
+            return
+        self._cached_composite_rgb = arr
+        if self._current_projection_mode() == "composite":
+            self.display_projection_image("composite", keep_view=True)
 
     def on_projection_mode_changed(self, *_args):
         mode = self._current_projection_mode()

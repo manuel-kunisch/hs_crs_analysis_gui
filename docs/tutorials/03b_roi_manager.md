@@ -49,9 +49,15 @@ The full settings dialog is explained in [Auto-Suggested ROIs](03_seeds_spectral
 
 Loads external spectra from CSV, TXT, or ASC files. Loaded spectra appear as dummy ROI rows because they carry spectral information without a drawn image ROI.
 
+<a id="load-lookup-table-and-spectra-preset"></a>
+
 `Load Lookup Table and Spectra Preset`
 
-Loads a result-viewer `.preset` file created from the result viewer.
+Loads a result-viewer `.preset` file created from the result viewer with **Save Histogram and Spectra Preset** (see [Save Histogram and Spectra Preset](05_results_and_export.md#save-histogram-and-spectra-preset) for the save side).
+
+![Load Lookup Table and Spectra Preset button in the ROI manager toolbar](../assets/images/03b_load_histogram_and_spectra_preset.png)
+
+This is the canonical way to replay a finalised analysis on a new FOV of the same sample. The `.preset` carries the colour scheme, the histogram levels, and the spectra used in the previous analysis. Loading it before running a new analysis means the next FOV starts from the same display state and the same spectral basis as the reference one, which is what makes results visually and quantitatively comparable across fields.
 
 When the preset is loaded, the GUI asks how it should be applied:
 
@@ -59,6 +65,8 @@ When the preset is loaded, the GUI asks how it should be applied:
 - `LUTs + ROIs`: also import the saved spectra as dummy ROI rows so they can be reused as H seeds.
 
 Use `LUTs Only` when you already have the correct ROI/component setup and only want to reuse the visual style. Use `LUTs + ROIs` when the preset should also transfer spectral seeds into the ROI Manager.
+
+Spectra loaded from a `.preset` enter the table as **fixed dummy seeds** — they do not depend on any drawn region in the current image. If the saved spectral axis differs from the axis of the currently loaded dataset, the spectra are interpolated (and extrapolated at the edges) onto the current axis, so the same `.preset` can be reused across acquisitions with slightly different spectral windows.
 
 ## Row types
 

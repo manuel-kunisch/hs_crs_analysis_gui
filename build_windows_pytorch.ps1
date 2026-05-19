@@ -4,7 +4,7 @@ param(
     [switch]$RequireCuda,
     [string]$PythonExeOverride,
     [string]$TorchIndexUrl = "https://download.pytorch.org/whl/cpu",
-    [string]$Version = "0.9.0"
+    [string]$Version = "0.9.1"
 )
 
 $ErrorActionPreference = "Stop"

@@ -9,8 +9,11 @@ This documentation is designed to guide users through the installation, usage, a
 Quick Demo of the main workflow:
 ![Demo](assets/gifs/quick_beads_demo.gif)
 
+> **💡 New here? Read [Essentials](essentials.md) first.** Six features that are easy to miss when clicking around but change how productive HS-MOSAIC is once you know them — ROI placement options, residual-data analysis, the composite mirror, Gaussian seeds, seed pixels with two ranking metrics, and the `.preset` for cross-FOV reproducibility.
+
 ## Start Here
 
+- [Essentials](essentials.md) — six must-know features (visual TL;DR)
 - [Standalone Windows .exe](standalone_windows.md)
 - [Full Python installation](installation.md)
 - [Quickstart](quickstart.md)

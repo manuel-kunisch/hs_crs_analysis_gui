@@ -123,7 +123,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_cpu.ps1
 For a release version, pass the version explicitly:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_cpu.ps1 -Version 0.9.0
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_cpu.ps1 -Version 0.9.1
 ```
 
 Build the PyTorch CPU package:
@@ -135,7 +135,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1
 Build a CUDA PyTorch package by installing a CUDA-enabled PyTorch wheel into the build environment:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -TorchIndexUrl https://download.pytorch.org/whl/cu124 -RequireCuda -Version 0.9.0
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -TorchIndexUrl https://download.pytorch.org/whl/cu124 -RequireCuda -Version 0.9.1
 ```
 
 `-RequireCuda` makes the build fail if the build environment cannot import CUDA-enabled PyTorch and see a CUDA device.
@@ -143,7 +143,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 
 If CUDA PyTorch already works in an existing Conda environment, build from that interpreter:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -SkipInstall -RequireCuda -PythonExeOverride C:\path\to\env\python.exe -TorchIndexUrl https://download.pytorch.org/whl/cu124 -Version 0.9.0
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -SkipInstall -RequireCuda -PythonExeOverride C:\path\to\env\python.exe -TorchIndexUrl https://download.pytorch.org/whl/cu124 -Version 0.9.1
 ```
 
 In this form, `-TorchIndexUrl` is used to label the output zip, for example `CUDA124`. The actual PyTorch build comes from the supplied Python interpreter.
@@ -170,7 +170,7 @@ The clean-machine test is the most important packaging check. It catches missing
 Backend self-test command for CUDA builds:
 
 ```powershell
-.\dist\HS_MOSAIC_GPU_CUDA124_v0.9.0\HS_MOSAIC.exe --backend-self-test $env:TEMP\hs_backend_selftest.json
+.\dist\HS_MOSAIC_GPU_CUDA124_v0.9.1\HS_MOSAIC.exe --backend-self-test $env:TEMP\hs_backend_selftest.json
 Get-Content $env:TEMP\hs_backend_selftest.json
 ```
 

@@ -190,6 +190,36 @@ Use correlation when:
 - there is enough texture or contrast in the overlap region,
 - and a purely geometric stitch still leaves visible seams or small jumps.
 
+## How the two-pass correlation works
+
+Correlation is applied in **two distinct passes**, not as a single global alignment step. The implementation lives in `contents/cross_correlate.py`; the architecture is the same whether the input is a small grid or a 9 × 9 tile mosaic.
+
+### Why per-pair correlation in the first place
+
+Without per-pair correlation, sub-pixel-to-few-pixel positioning errors accumulate down a column. The wide stitched image often looks fine at first glance because the eye averages over the seams. The artefacts only become obvious in close-up of a single seam:
+
+![Close-up of a single tile-to-tile seam. Top: the full overlap region before correlation, with a red dashed line marking where the two tiles meet. Bottom-left: averaging without shift correction (👎). Bottom-right: averaging after correlation (👍). The green ellipses mark the region where the alignment improvement is most visible](../assets/images/01b_correlation_alignment.png)
+
+When two tiles in an overlap region are not aligned and you average them anyway, the result is a doubled or distorted copy of features close to the seam. These are easy to miss in the wide view but unambiguous once you zoom in to the overlap row:
+
+![Two examples on different overlap regions of the same CARS liver dataset. Top row: the overlap regions before correlation, with a red dashed line marking the seam between the two tiles. Bottom row: the same regions after averaging without shift correction. Red arrows mark doubling artefacts and ghosted lipid droplets that the wide stitched image hides](../assets/images/01b_correlation_artifacts.png)
+
+These artefacts motivate the per-tile-pair correlation approach: every vertical neighbour gets its own correlation-based `(y, x)` shift estimate rather than relying on the nominal stage grid alone.
+
+### Pass 1 — per-tile alignment within each column
+
+For every column position, the program walks the tiles top-to-bottom and aligns each pair of vertical neighbours individually using cross-correlation in the overlap region. Each pair gets its own small `(y, x)` shift. Whenever a pair carries an x-offset (the lower tile is a few pixels left or right of the upper tile), the column grows a thin strip of NaN "extension" pixels on the appropriate side so that the cumulative column stays a regular array. These per-tile dynamic offsets are tracked by the `dummy_added` counter in `correct_y_offset`.
+
+The result of running Pass 1 correctly on every tile pair of a real 9 × 9 mosaic — every vertical seam corrected, no doubling artefacts left along any column — is the intermediate state below. Each column is now a rigid stack of vertically-aligned tiles. The column outlines are slightly ragged because every tile pair contributed its own dynamic offset, and the columns are not yet merged across: that is what Pass 2 does next.
+
+![Intermediate state of a 9 × 9 CARS liver mosaic after Pass 1: every per-tile pair within each column has been correlated and aligned, producing nine column-images side by side. The ragged top and bottom of each column reveal the per-tile dynamic offsets accumulated during vertical stitching, and the white gaps between columns are the across-column shifts that Pass 2 will close](../assets/images/01b_column_stitching_intermediate.png)
+
+### Pass 2 — cross-column alignment
+
+Once every column has been stitched into a single column-image, the same correlation step is applied between adjacent column-images. The function `attach_cols` plus `dummy_correlation` re-runs the correlation core between the right edge of column N and the left edge of column N+1 — internally segment by segment, so that columns with different per-segment dummy padding can still be aligned correctly. The white gaps in the intermediate image close in this pass and the final stitched image emerges.
+
+The two-pass design attacks two distinct error sources in turn: per-tile dynamic offsets in Pass 1 pick up the small drifts inside each column (and prevent the doubling artefacts shown above), and the cross-column pass in Pass 2 picks up the residual drift between columns. The settings in [Correlation settings](#correlation-settings) below control the aggregation strategy that turns the per-pair offsets within a column into one consistent offset.
+
 ## Correlation settings
 
 When **Use correlation** is enabled, the program estimates small relative shifts between overlapping tiles. This is useful when the stage coordinates are approximate or the microscope has small positioning errors.

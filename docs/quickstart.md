@@ -57,7 +57,7 @@ python -m hs_mosaic          # equivalent module form
 or on Windows:
 
 ```bash
-hs_mosaic.bat
+hs-mosaic.bat
 ```
 
 ## Step 2: Load the TIFF stack

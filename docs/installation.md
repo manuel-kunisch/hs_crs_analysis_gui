@@ -103,7 +103,7 @@ See [GPU acceleration](tutorials/02a_gpu_acceleration.md) for the backend and pl
 From an activated Conda or venv environment:
 
 ```bash
-hs_mosaic.bat
+hs-mosaic.bat
 ```
 
 The launcher calls `python -m hs_mosaic` under the hood.

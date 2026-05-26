@@ -126,7 +126,7 @@ python -m hs_mosaic          # equivalent module form
 On Windows you can also use the bundled launcher (which calls `python -m hs_mosaic` under the hood):
 
 ```bash
-hs_mosaic.bat
+hs-mosaic.bat
 ```
 
 A pre-built standalone Windows executable is described in [docs/standalone_windows.md](docs/standalone_windows.md).
@@ -161,7 +161,7 @@ hs_crs_analysis_gui_cpu.spec        PyInstaller spec for standalone CPU build
 hs_crs_analysis_gui_pytorch.spec    PyInstaller spec for standalone PyTorch / CUDA build
 build_windows_cpu.ps1               Build script for the standalone CPU zip
 build_windows_pytorch.ps1           Build script for the standalone PyTorch / CUDA zip
-hs_mosaic.bat                       Windows launcher (calls `python -m hs_mosaic`)
+hs-mosaic.bat                       Windows launcher (calls `python -m hs_mosaic`)
 ```
 
 ## Repository status

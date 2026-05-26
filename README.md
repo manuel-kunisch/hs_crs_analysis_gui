@@ -11,11 +11,11 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 
 
 
-![Demonstration of a typical hyperspectral stack stepping through its spectral channels — synthetic quickstart data shipped with the GUI](docs/assets/gifs/quick_synthetic_data_demo.gif)
+![Demonstration of a typical hyperspectral stack stepping through its spectral channels — synthetic quickstart data shipped with the GUI](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/gifs/quick_synthetic_data_demo.gif)
 
 *Above: a typical hyperspectral stack as it appears in HS-MOSAIC — one grayscale frame per spectral channel, with the channel slider scrolling through the cube.*
 
-![Same dataset, four modes side by side — PCA, random NNMF, seeded NNMF, fixed-H NNLS — on the synthetic quickstart data shipped with the GUI](docs/assets/images/02_modes_comparison.png)
+![Same dataset, four modes side by side — PCA, random NNMF, seeded NNMF, fixed-H NNLS — on the synthetic quickstart data shipped with the GUI](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/images/02_modes_comparison.png)
 
 *Above: the same synthetic dataset analyzed with each of the four available modes. PCA misses peaks, random NNMF mixes components, seeded NNMF and fixed-H NNLS recover the underlying blob spectra.*
 
@@ -37,19 +37,19 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 
 Full documentation, including tutorials and worked examples:
 
-**🌐 [Live docs](https://manuel-kunisch.github.io/hs_crs_analysis_gui/)** · 📂 [`docs/`](docs/index.md) in this repo
+**🌐 [Live docs](https://manuel-kunisch.github.io/hs_crs_analysis_gui/)** · 📂 [`docs/`](https://github.com/manuel-kunisch/hs_crs_analysis_gui/tree/main/docs) in this repo
 
 Quickest entry points:
 
-- [Quickstart](docs/quickstart.md) — minimal end-to-end GUI workflow
-- [Concepts](docs/concepts.md) — the unmixing model and the role of seeds
-- [Loading data](docs/tutorials/01_loading_data.md) — TIFF conventions, 3D/4D axis selection, intensity handling
-- [Analysis modes](docs/tutorials/02_analysis_modes.md) — which mode to choose and what to expect
-- [Seeds, spectra, and W maps](docs/tutorials/03_seeds_spectral_and_spatial.md) — building H and W seeds
-- [Presets and reproducibility](docs/tutorials/06_presets_and_reproducibility.md) — saving and restoring the full analysis state
-- [NNMF and NNLS methods](docs/methods/nnmf_nnls_modes.md) — math, convergence criteria, references
-- [Workflow checklist](docs/tutorials/07_workflow_checklist.md) — single-page reminder for a publication-grade run
-- [Troubleshooting](docs/troubleshooting.md) — known issues and their fixes
+- [Quickstart](https://manuel-kunisch.github.io/hs_crs_analysis_gui/quickstart/) — minimal end-to-end GUI workflow
+- [Concepts](https://manuel-kunisch.github.io/hs_crs_analysis_gui/concepts/) — the unmixing model and the role of seeds
+- [Loading data](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/01_loading_data/) — TIFF conventions, 3D/4D axis selection, intensity handling
+- [Analysis modes](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/02_analysis_modes/) — which mode to choose and what to expect
+- [Seeds, spectra, and W maps](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/03_seeds_spectral_and_spatial/) — building H and W seeds
+- [Presets and reproducibility](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/06_presets_and_reproducibility/) — saving and restoring the full analysis state
+- [NNMF and NNLS methods](https://manuel-kunisch.github.io/hs_crs_analysis_gui/methods/nnmf_nnls_modes/) — math, convergence criteria, references
+- [Workflow checklist](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/07_workflow_checklist/) — single-page reminder for a publication-grade run
+- [Troubleshooting](https://manuel-kunisch.github.io/hs_crs_analysis_gui/troubleshooting/) — known issues and their fixes
 
 To build the docs locally:
 
@@ -77,7 +77,7 @@ pip install --upgrade --force-reinstall torch --index-url https://download.pytor
 Replace `cu124` with the URL matching your driver (cu118, cu121, cu126, etc. per the [PyTorch selector](https://pytorch.org/get-started/locally/)).
 
 ### From source:
-Detailed installation guide and platform-specific notes: [docs/installation.md](docs/installation.md).
+Detailed installation guide and platform-specific notes: [docs/installation.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/).
 
 **Prerequisites** — Python ≥ 3.11 on Windows, Linux, or macOS. Optionally an NVIDIA GPU (or ROCm-capable AMD on Linux) for PyTorch acceleration.
 
@@ -112,7 +112,7 @@ pip install -e ".[gpu]"             # add CPU PyTorch (NNMF MU + FISTA-NNLS back
 pip install -e ".[dev]"             # add ruff, pytest, pyinstaller for development
 ```
 
-For a CUDA-enabled PyTorch install, follow the [official PyTorch selector](https://pytorch.org/get-started/locally/) *after* the editable install — PyPI hosts CPU-only torch wheels, so CUDA builds come from `https://download.pytorch.org/whl/cu124` (or the version matching your driver). The GPU paths use the standard `torch.cuda` device convention; CUDA 12.6 is the recommended target when available. See [GPU acceleration](docs/tutorials/02a_gpu_acceleration.md) for the backend and platform notes, including Apple Silicon and AMD/ROCm.
+For a CUDA-enabled PyTorch install, follow the [official PyTorch selector](https://pytorch.org/get-started/locally/) *after* the editable install — PyPI hosts CPU-only torch wheels, so CUDA builds come from `https://download.pytorch.org/whl/cu124` (or the version matching your driver). The GPU paths use the standard `torch.cuda` device convention; CUDA 12.6 is the recommended target when available. See [GPU acceleration](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/02a_gpu_acceleration/) for the backend and platform notes, including Apple Silicon and AMD/ROCm.
 
 ## Run
 
@@ -129,13 +129,13 @@ On Windows you can also use the bundled launcher (which calls `python -m hs_mosa
 hs-mosaic.bat
 ```
 
-A pre-built standalone Windows executable is described in [docs/standalone_windows.md](docs/standalone_windows.md).
+A pre-built standalone Windows executable is described in [docs/standalone_windows.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/standalone_windows/).
 
 ## At a glance
 
-![Auto-suggested ROIs on synthetic microbead data — spatial detection followed by Ward hierarchical clustering on spectral fingerprints](docs/assets/gifs/03_suggest_rois_beads.gif)
+![Auto-suggested ROIs on synthetic microbead data — spatial detection followed by Ward hierarchical clustering on spectral fingerprints](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/gifs/03_suggest_rois_beads.gif)
 
-The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset. The same GUI handles seed building, NNMF/NNLS analysis, and result export. See [docs/tutorials/03c_suggest_rois.md](docs/tutorials/03c_suggest_rois.md) for the algorithm and settings reference.
+The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset. The same GUI handles seed building, NNMF/NNLS analysis, and result export. See [docs/tutorials/03c_suggest_rois.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/03c_suggest_rois/) for the algorithm and settings reference.
 
 ## Repository layout
 
@@ -170,7 +170,7 @@ HS-MOSAIC is a research software project under active development. The documente
 
 ## Citation
 
-If you use HS-MOSAIC in published work, please cite the Zenodo record and include the exact release tag or commit you used. GitHub can generate a citation from [`CITATION.cff`](CITATION.cff).
+If you use HS-MOSAIC in published work, please cite the Zenodo record and include the exact release tag or commit you used. GitHub can generate a citation from [`CITATION.cff`](https://github.com/manuel-kunisch/hs_crs_analysis_gui/blob/main/CITATION.cff).
 
 Preliminary DOI: [10.5281/zenodo.20273076](https://doi.org/10.5281/zenodo.20273076)
 
@@ -189,7 +189,7 @@ Preliminary DOI: [10.5281/zenodo.20273076](https://doi.org/10.5281/zenodo.202730
 
 Copyright (C) 2026 Manuel Kunisch.
 
-HS-MOSAIC is licensed under the **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See [`LICENSE`](LICENSE).
+HS-MOSAIC is licensed under the **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See [`LICENSE`](https://github.com/manuel-kunisch/hs_crs_analysis_gui/blob/main/LICENSE).
 
 The source code is distributed under GPL-3.0-or-later because the application uses PyQt5, which is available under GPLv3 or a commercial Riverbank license. Documentation and project media should be cited using the software citation above unless a file states otherwise.
 

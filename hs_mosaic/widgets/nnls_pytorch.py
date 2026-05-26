@@ -19,7 +19,43 @@ def torch_available() -> bool:
 
 
 def cuda_available() -> bool:
+    """True if NVIDIA-CUDA PyTorch is installed and a CUDA device is detected."""
     return torch is not None and torch.cuda.is_available()
+
+
+def mps_available() -> bool:
+    """True if Apple-Metal (MPS) PyTorch is built and a Metal device is detected.
+    Supported on Apple Silicon Macs with macOS 12.3+ and a PyTorch build that
+    includes the MPS backend (the standard PyPI macOS wheel does)."""
+    if torch is None:
+        return False
+    mps = getattr(torch.backends, "mps", None)
+    if mps is None:
+        return False
+    is_avail = getattr(mps, "is_available", None)
+    is_built = getattr(mps, "is_built", None)
+    try:
+        return bool(is_avail and is_avail() and is_built and is_built())
+    except Exception:
+        return False
+
+
+def xpu_available() -> bool:
+    """True if Intel-XPU PyTorch is installed and an Intel GPU is detected."""
+    if torch is None:
+        return False
+    xpu = getattr(torch, "xpu", None)
+    if xpu is None:
+        return False
+    try:
+        return bool(xpu.is_available())
+    except Exception:
+        return False
+
+
+def gpu_available() -> bool:
+    """True if ANY GPU-class accelerator is detected: CUDA, MPS, or XPU."""
+    return cuda_available() or mps_available() or xpu_available()
 
 
 def import_error() -> Exception | None:
@@ -27,8 +63,13 @@ def import_error() -> Exception | None:
 
 
 def default_device() -> str:
+    """Pick the best available device. Order: CUDA > MPS > XPU > CPU."""
     if cuda_available():
         return "cuda"
+    if mps_available():
+        return "mps"
+    if xpu_available():
+        return "xpu"
     if torch_available():
         return "cpu"
     raise RuntimeError("PyTorch is not available.")
@@ -90,8 +131,21 @@ def solve_batched_nnls_projected_gradient(
     basis_t = torch.as_tensor(b_np, device=dev)
     gram = basis_t.T @ basis_t
     diag = torch.diag(gram)
-    # TODO: forces a GPU → CPU synchronization. Can we estimate this more cheaply?
-    max_eig = torch.linalg.eigvalsh(gram).amax().item()
+    # Lipschitz-constant estimation for the FISTA step size.
+    # `torch.linalg.eigvalsh` is supported on CUDA and CPU, and on MPS since
+    # PyTorch 2.1 (with possible internal CPU fallback for some shapes). On
+    # older builds or unsupported devices, fall back to a one-off CPU compute
+    # — gram is k×k where k = #components (≤ ~10), so the cost is negligible.
+    # TODO: forces a device→CPU synchronization via .item(); can we estimate
+    # this more cheaply for very small k?
+    try:
+        max_eig = torch.linalg.eigvalsh(gram).amax().item()
+    except (NotImplementedError, RuntimeError) as exc:
+        logger.debug(
+            "torch.linalg.eigvalsh failed on device %s (%s); using CPU fallback.",
+            dev, exc,
+        )
+        max_eig = torch.linalg.eigvalsh(gram.detach().cpu()).amax().item()
     step = 1.0 / max(max_eig, eps)
 
     n_pixels, _ = x_np.shape

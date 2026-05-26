@@ -25,7 +25,7 @@ Optional, for GPU acceleration:
 
 - **NVIDIA GPU**: the recommended GPU path, using CUDA via PyTorch
 - **AMD GPU on Linux**: potentially usable through ROCm (see [GPU notes](#gpu-notes))
-- **Apple Silicon**: the GUI runs, but the PyTorch acceleration paths currently fall back to CPU
+- **Apple Silicon (M1/M2/M3/M4)**: NNMF and NNLS run on the Metal MPS backend (PyTorch ≥ 2.0)
 
 ## Which Environment File Should I Use?
 
@@ -65,40 +65,60 @@ source .venv/bin/activate     # Linux / macOS
 
 ### Pick an install variant
 
-Three variants exist; the choice does **not** affect the application's features — only which numerical backend the NNMF and NNLS code paths use, and where torch comes from. **For serious hyperspectral analysis the NVIDIA-CUDA GPU variant is recommended** (CPU runs typically take minutes per field of view; GPU runs finish in seconds, and 4D z- or t-stacks multiply the cost).
+Five variants cover the realistic hardware setups. The choice does **not** affect the application's features — only which numerical backend the NNMF and NNLS code paths use, and where torch comes from. **For serious hyperspectral analysis, the matching GPU variant for your hardware is recommended** (CPU runs typically take minutes per field of view; GPU runs finish in seconds, and 4D z- or t-stacks multiply the cost).
 
-| Variant | What it installs | NNMF / NNLS backend | GPU? | When to use |
+| Variant | Hardware | What it installs | Dispatch label | When to use |
 |---|---|---|---|---|
-| **NVIDIA CUDA GPU** *(recommended)* | CUDA-enabled PyTorch from PyTorch's index (~2 GB) + hs-mosaic | PyTorch on GPU | ✅ | Any NVIDIA GPU machine. **Install order matters** — see admonition below. |
-| **CPU only (fallback)** | hs-mosaic only | scikit-learn / SciPy on CPU | ❌ | Machines without an NVIDIA GPU — laptops, Apple Silicon, ARM Linux, CI runners. Functionally complete; runs in minutes per FOV instead of seconds. |
-| **CPU + PyTorch** *(advanced)* | hs-mosaic + CPU PyTorch from PyPI (~150 MB) | scikit-learn / SciPy **or** PyTorch on CPU | ❌ | Niche. Sometimes faster for very large fixed-H NNLS mosaics (≥ 10⁶ pixels) where PyTorch's vectorised FISTA beats SciPy's per-pixel active-set. For typical images the bare CPU variant is equal or faster. **Does not provide GPU acceleration.** |
+| **1. NVIDIA CUDA GPU** *(primary tested)* | NVIDIA GPU + driver | CUDA-enabled PyTorch from PyTorch's index (~2 GB) + hs-mosaic | `torch-cuda` | Any NVIDIA GPU machine. **Install order matters** — see admonition below. |
+| **2. Apple Silicon (MPS)** | M1 / M2 / M3 / M4 Mac | macOS PyPI torch (includes MPS by default) + hs-mosaic | `torch-mps` | Any Apple Silicon Mac on macOS 12.3+. PyPI's macOS torch wheel includes the Metal backend, so no separate CUDA-style index URL is needed. |
+| **3. Intel Arc (XPU)** | Intel Arc GPU on Linux/Windows | XPU-enabled PyTorch from PyTorch's index + hs-mosaic | `torch-xpu` | Intel Arc hardware with PyTorch ≥ 2.5. Same two-command order as CUDA. |
+| **4. CPU only** *(fallback)* | Anything else | hs-mosaic only | `scipy-cpu` | Machines without a supported GPU — older Macs, AMD on Windows, ARM Linux without ROCm, CI runners. Functionally complete; minutes per FOV instead of seconds. |
+| **5. CPU + PyTorch** *(advanced)* | Anything else | hs-mosaic + CPU PyTorch from PyPI (~150 MB) | `torch-cpu` | Niche. Sometimes faster than variant 4 for very large fixed-H NNLS mosaics (≥ 10⁶ pixels) where PyTorch's vectorised FISTA beats SciPy's per-pixel active-set. For typical images variant 4 is equal or faster. **Does not provide GPU acceleration.** |
 
-!!! important "PyPI does NOT host CUDA-enabled PyTorch — install order matters for the GPU variant"
-    PyPI only hosts the **CPU** build of PyTorch. To enable CUDA acceleration you must install the CUDA-enabled torch wheel from **PyTorch's own package index** *before* installing hs-mosaic. Doing it in reverse (`pip install hs-mosaic` first, then CUDA torch) downloads ~150 MB of CPU torch that gets immediately discarded. **For the same reason, do not use `pip install "hs-mosaic[torch]"` for the CUDA path** — that extra pulls CPU torch from PyPI.
+!!! important "PyPI does NOT host CUDA or XPU PyTorch — install order matters for those variants"
+    PyPI only hosts the **CPU** build of PyTorch on Linux/Windows, and the **CPU + MPS** build on macOS. CUDA wheels live on PyTorch's own index (`https://download.pytorch.org/whl/cu124` etc.); XPU wheels live at `https://download.pytorch.org/whl/xpu`. For these two variants you must install the GPU-enabled torch wheel *before* hs-mosaic. Doing it in reverse downloads ~150 MB of CPU torch that gets immediately discarded. **For the same reason, do not use `pip install "hs-mosaic[torch]"` for any GPU variant** — that extra pulls CPU torch from PyPI.
 
-    This is a property of the whole Python packaging ecosystem (every CUDA-using Python package — JAX, CuPy, RAPIDS … — has the same constraint). It is not specific to HS-MOSAIC.
+    Apple Silicon does **not** have this issue: PyPI's macOS torch wheel already includes MPS, so `pip install torch` works directly without an index URL.
 
 Concrete commands per variant:
 
 ```bash
-# Variant 1 — NVIDIA CUDA GPU (recommended). Two commands, GPU-first.
+# Variant 1 — NVIDIA CUDA GPU. Two commands, GPU-first.
 pip install torch --index-url https://download.pytorch.org/whl/cu124
 pip install hs-mosaic
 
-# Variant 2 — CPU only (fallback). One command.
+# Variant 2 — Apple Silicon (MPS). One command suffices on macOS.
+pip install hs-mosaic torch
+# (equivalent: `pip install torch && pip install hs-mosaic` — order is free on macOS
+# because PyPI's macOS torch wheel includes the MPS backend, no special index needed.)
+
+# Variant 3 — Intel Arc (XPU). Two commands, GPU-first.
+pip install torch --index-url https://download.pytorch.org/whl/xpu
 pip install hs-mosaic
 
-# Variant 3 — CPU + PyTorch (advanced, see table).
+# Variant 4 — CPU only (fallback). One command.
+pip install hs-mosaic
+
+# Variant 5 — CPU + PyTorch (advanced, see table).
 pip install "hs-mosaic[torch]"
 ```
 
-For variant 1, pick the `cu124` URL to match your CUDA driver: `cu118`, `cu121`, `cu124`, `cu126`, etc. — see the [PyTorch selector](https://pytorch.org/get-started/locally/). Then verify CUDA is detected:
+For variant 1, pick the `cu124` URL to match your CUDA driver: `cu118`, `cu121`, `cu124`, `cu126`, etc. — see the [PyTorch selector](https://pytorch.org/get-started/locally/). For variant 3, the XPU URL is currently a single endpoint regardless of GPU; check the [PyTorch XPU install guide](https://pytorch.org/get-started/locally/) for any updates.
+
+Verify the GPU is detected after the install:
 
 ```bash
-python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+# Variant 1 — CUDA
+python -c "import torch; print('CUDA:', torch.cuda.is_available())"
+
+# Variant 2 — MPS (Apple Silicon)
+python -c "import torch; print('MPS :', torch.backends.mps.is_available() and torch.backends.mps.is_built())"
+
+# Variant 3 — XPU (Intel Arc)
+python -c "import torch; print('XPU :', hasattr(torch, 'xpu') and torch.xpu.is_available())"
 ```
 
-`True` means the GPU backends will be used; `False` means HS-MOSAIC silently falls back to CPU (still works).
+`True` means the corresponding GPU backend will be used; `False` means HS-MOSAIC silently falls back to CPU (still works). The fit-summary `backend` field reports `torch-cuda`, `torch-mps`, `torch-xpu`, `torch-cpu`, or `scipy-cpu` so you can see which path actually ran.
 
 On macOS/zsh the quotes around `"hs-mosaic[torch]"` are required (zsh treats `[` as a glob); on Windows and Linux/bash they are harmless. The project page is at [pypi.org/project/hs-mosaic](https://pypi.org/project/hs-mosaic/).
 
@@ -151,18 +171,18 @@ python -m hs_mosaic           # equivalent module form
 
 ### Supported GPU backends — at a glance
 
-HS-MOSAIC's PyTorch NNMF and NNLS backends select a device by calling `torch.cuda.is_available()`. Anything that exposes itself through that check gets the GPU code path; anything that doesn't falls back silently to CPU. In practice:
+Since v0.9.3, HS-MOSAIC's PyTorch NNMF and NNLS backends pick a device in this priority order: **CUDA → MPS → XPU → CPU**. Whichever PyTorch reports as available first gets used.
 
 | Hardware + driver stack | Detection | Acceleration | Notes |
 |---|---|---|---|
-| **NVIDIA GPU + CUDA-enabled PyTorch** | `torch.cuda.is_available() == True` | ✅ Full | The officially supported path. Use the matching `cuXXX` wheel from PyTorch's index. |
-| **AMD GPU on Linux + ROCm-built PyTorch** | `torch.cuda.is_available() == True` (ROCm maps to the CUDA namespace) | ✅ Incidental | Works without code changes but is not part of the test matrix. Use the official AMD ROCm PyTorch builds for your distro. |
+| **NVIDIA GPU + CUDA-enabled PyTorch** | `torch.cuda.is_available() == True` | ✅ Full, primary tested platform | Use the matching `cuXXX` wheel from PyTorch's index. The dispatch label in the fit summary is `torch-cuda`. |
+| **AMD GPU on Linux + ROCm-built PyTorch** | `torch.cuda.is_available() == True` (ROCm maps to the CUDA namespace) | ✅ Incidental | Works without code changes but is not part of the CI matrix. Install the official AMD ROCm PyTorch build for your distro. |
 | **AMD GPU on Windows** | No supported PyTorch backend | ❌ CPU only | ROCm has no Windows distribution. |
-| **Apple Silicon (M1/M2/M3/M4) + MPS-enabled PyTorch** | `torch.cuda.is_available() == False`; `torch.backends.mps.is_available() == True` | ❌ CPU only BUT WIP | The GUI runs fine, but the MPS backend is **not yet wired up** in HS-MOSAIC's PyTorch paths — they only check `cuda`. Planned for a future release. |
-| **Intel Arc GPU + Intel XPU PyTorch** | `torch.xpu.is_available() == True`, but not checked | ❌ CPU only | Same situation as Apple Silicon — backend not wired. |
-| **CPU only (any platform)** | n/a | ❌ CPU paths used | scikit-learn NMF + SciPy NNLS for the bare install; PyTorch on CPU if `[torch]` extra installed. |
+| **Apple Silicon (M1/M2/M3/M4) + MPS-enabled PyTorch** | `torch.backends.mps.is_available() == True` | ✅ Supported since v0.9.3 | The standard PyPI macOS torch wheel includes the MPS backend, so `pip install hs-mosaic torch` Just Works on Apple Silicon. Dispatch label: `torch-mps`. The Lipschitz-constant `torch.linalg.eigvalsh` call in fixed-H NNLS internally falls back to CPU for that one ~1 ms op on older PyTorch builds — negligible. |
+| **Intel Arc GPU + Intel XPU PyTorch** | `torch.xpu.is_available() == True` | ✅ Supported since v0.9.3 (untested in CI) | Requires PyTorch built with XPU support (PyTorch ≥ 2.5 or IPEX). Dispatch label: `torch-xpu`. Please report issues if you have hardware to test. |
+| **CPU only (any platform)** | n/a | ❌ CPU paths used | scikit-learn NMF + SciPy NNLS for the bare install; PyTorch on CPU if `[torch]` extra installed. Dispatch label: `torch-cpu` (PyTorch path) or `scipy-cpu` (bare path). |
 
-If you need acceleration on Apple Silicon or Intel hardware, the only current option is to use the standalone Windows .exe on a Windows + NVIDIA machine, or to run on a Linux box with AMD ROCm.
+CUDA remains the primary tested platform. MPS and XPU support is dispatch-clean (`torch_nmf.gpu_available()` returns `True`, the backend label appears as `torch-mps` or `torch-xpu` in the fit summary), but absolute throughput on those backends depends on PyTorch's own op coverage for the hardware.
 
 ### NVIDIA (Windows and Linux)
 
@@ -178,9 +198,27 @@ Replace `12.6` with the version recommended by the [PyTorch selector](https://py
 
 HS-MOSAIC's PyTorch paths use the `torch.cuda` API; PyTorch ROCm maps that to ROCm devices on Linux. AMD GPUs on Linux therefore work incidentally, but this is not part of the test matrix — install via the official AMD ROCm PyTorch builds. AMD on Windows is not a practical target.
 
-### Apple Silicon and Intel Arc
+### Apple Silicon (MPS)
 
-The GUI runs on both platforms, but the analysis backends fall back to CPU because HS-MOSAIC's PyTorch paths only check `torch.cuda.is_available()` at present. Routing to `torch.backends.mps` (Apple) or `torch.xpu` (Intel) is planned for a future release.
+Since v0.9.3, Apple Silicon Macs (M1/M2/M3/M4) get hardware acceleration through PyTorch's MPS backend. The standard PyPI macOS torch wheel includes MPS, so the install reduces to:
+
+```bash
+pip install hs-mosaic torch
+```
+
+(no PyTorch-index step is needed; PyPI's macOS torch wheel already includes the Metal/MPS backend.)
+
+Verify MPS is detected:
+
+```bash
+python -c "import torch; print('MPS available:', torch.backends.mps.is_available() and torch.backends.mps.is_built())"
+```
+
+`True` → HS-MOSAIC's PyTorch NNMF and NNLS backends run on the GPU; you'll see `torch-mps` as the backend label in the fit summary. Requires macOS 12.3 or newer and PyTorch ≥ 2.0.
+
+### Intel Arc (XPU)
+
+Since v0.9.3, Intel Arc GPUs are picked up automatically via `torch.xpu.is_available()` when an XPU-enabled PyTorch is installed (PyTorch ≥ 2.5 with the XPU build, or the Intel Extension for PyTorch / IPEX). Dispatch label is `torch-xpu`. Untested in CI — please report issues.
 
 ## Exporting a Reproducible Environment
 

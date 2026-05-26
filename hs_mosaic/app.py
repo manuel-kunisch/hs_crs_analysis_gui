@@ -75,6 +75,9 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
     result = {
         "torch_available": False,
         "cuda_available": False,
+        "mps_available": False,
+        "xpu_available": False,
+        "gpu_available": False,
         "torch_version": None,
         "torch_cuda_version": None,
         "cuda_device_count": 0,
@@ -102,6 +105,9 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
             result["torch_version"] = getattr(torch, "__version__", None)
             result["torch_cuda_version"] = getattr(torch.version, "cuda", None)
             result["cuda_available"] = bool(torch.cuda.is_available())
+            result["mps_available"] = bool(torch_nmf.mps_available())
+            result["xpu_available"] = bool(torch_nmf.xpu_available())
+            result["gpu_available"] = bool(torch_nmf.gpu_available())
             result["cuda_device_count"] = int(torch.cuda.device_count())
             result["cuda_devices"] = [
                 torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())
@@ -132,11 +138,15 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
         )
         result["nnls_backend"] = nnls_info.get("backend")
 
+        # Self-test passes if torch is available AND both NMF and NNLS used
+        # a torch backend (any device: cuda/mps/xpu/cpu) or — for NNLS — the
+        # closed-form path used when k=1 components.
+        valid_nnls = {"torch-cuda", "torch-mps", "torch-xpu", "torch-cpu", "closed-form"}
         result["ok"] = bool(
             result["torch_available"]
             and result["nmf_backend"]
             and str(result["nmf_backend"]).startswith("torch-")
-            and result["nnls_backend"] in {"torch-cuda", "closed-form"}
+            and result["nnls_backend"] in valid_nnls
         )
     except Exception as exc:
         result["error"] = {

@@ -316,6 +316,9 @@ class MultivariateAnalyzer(object):
         """
         Resolve the PyTorch NMF device from the backend preference.
         Returns None when the torch backend should not be used.
+
+        Device selection order when GPU is preferred or auto:
+        CUDA (NVIDIA) > MPS (Apple Silicon) > XPU (Intel) > CPU.
         """
         if not self.prefer_torch_nmf:
             return None
@@ -326,14 +329,20 @@ class MultivariateAnalyzer(object):
         if not torch_nmf.torch_available():
             return None
 
-        if self.nnmf_backend_preference == 'gpu':
-            if torch_nmf.cuda_available():
-                return 'cuda'
-            logger.info("NNMF backend is set to prefer GPU, but CUDA is unavailable. Falling back to CPU.")
-            return 'cpu'
-
+        # Prefer GPU explicitly OR auto-detect: in both cases try GPU class
+        # accelerators in order, fall back to CPU only if none available.
         if torch_nmf.cuda_available():
             return 'cuda'
+        if torch_nmf.mps_available():
+            return 'mps'
+        if torch_nmf.xpu_available():
+            return 'xpu'
+
+        if self.nnmf_backend_preference == 'gpu':
+            logger.info(
+                "NNMF backend is set to prefer GPU, but no GPU accelerator "
+                "(CUDA / MPS / XPU) is available. Falling back to CPU."
+            )
         return 'cpu'
 
     def _run_torch_mu_nmf(
@@ -574,8 +583,15 @@ class MultivariateAnalyzer(object):
         return source_key, n_pixels, basis.shape, basis_components, basis_hash, backend_name
 
     def _nnls_backend_name(self) -> str:
-        if self.prefer_torch_nnls and nnls_pytorch.cuda_available():
-            return 'torch-cuda'
+        if self.prefer_torch_nnls and nnls_pytorch.gpu_available():
+            # Report which GPU class is being used so logs/cache keys are
+            # unambiguous across CUDA / MPS / XPU machines.
+            if nnls_pytorch.cuda_available():
+                return 'torch-cuda'
+            if nnls_pytorch.mps_available():
+                return 'torch-mps'
+            if nnls_pytorch.xpu_available():
+                return 'torch-xpu'
         return 'scipy-cpu'
 
     def _build_scipy_nnls_abundance_matrix(
@@ -689,13 +705,17 @@ class MultivariateAnalyzer(object):
             }
             return abundance, self._finalize_fit_info(info, working_data)
 
-        if self.prefer_torch_nnls and nnls_pytorch.cuda_available():
+        if self.prefer_torch_nnls and nnls_pytorch.gpu_available():
+            # Pick the best available GPU device; nnls_pytorch.default_device()
+            # already implements the CUDA > MPS > XPU > CPU priority.
+            gpu_device = nnls_pytorch.default_device()
+            backend_label = f"torch-{gpu_device}"
             try:
-                logger.info('Using PyTorch CUDA NNLS solver for %s data.', source_key)
+                logger.info('Using PyTorch %s NNLS solver for %s data.', gpu_device.upper(), source_key)
                 abundance, info = nnls_pytorch.solve_batched_nnls_projected_gradient(
                     image_data,
                     basis,
-                    device='cuda',
+                    device=gpu_device,
                     max_iter=self.nnls_max_iter,
                     tol=self.torch_nnls_tol,
                     eps=eps,
@@ -703,14 +723,14 @@ class MultivariateAnalyzer(object):
                     progress_callback=self._maybe_yield_to_ui,
                 )
                 info = self._finalize_fit_info(info, image_data)
-                info["backend"] = "torch-cuda"
+                info["backend"] = backend_label
                 return np.maximum(abundance, 0.0).astype(np.float32, copy=False), info
             except Exception as exc:
-                logger.warning('PyTorch CUDA NNLS solver failed; falling back to SciPy NNLS. Error: %s', exc)
+                logger.warning('PyTorch %s NNLS solver failed; falling back to SciPy NNLS. Error: %s', gpu_device.upper(), exc)
 
-        if self.prefer_torch_nnls and not nnls_pytorch.cuda_available():
+        if self.prefer_torch_nnls and not nnls_pytorch.gpu_available():
             if nnls_pytorch.torch_available():
-                logger.info('PyTorch is available but CUDA is not. Using SciPy NNLS fallback.')
+                logger.info('PyTorch is available but no GPU (CUDA / MPS / XPU) is detected. Using SciPy NNLS fallback.')
             elif nnls_pytorch.import_error() is not None:
                 logger.debug('PyTorch import unavailable: %s', nnls_pytorch.import_error())
 

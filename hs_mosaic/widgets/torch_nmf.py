@@ -19,7 +19,45 @@ def torch_available() -> bool:
 
 
 def cuda_available() -> bool:
+    """True if NVIDIA-CUDA PyTorch is installed and a CUDA device is detected."""
     return torch is not None and torch.cuda.is_available()
+
+
+def mps_available() -> bool:
+    """True if Apple-Metal-Performance-Shaders (MPS) PyTorch is built and a
+    Metal device is detected. Supported on Apple Silicon (M1/M2/M3/M4) Macs
+    with macOS 12.3+ and a PyTorch build that includes the MPS backend
+    (the standard PyPI macOS wheel does include it)."""
+    if torch is None:
+        return False
+    mps = getattr(torch.backends, "mps", None)
+    if mps is None:
+        return False
+    is_avail = getattr(mps, "is_available", None)
+    is_built = getattr(mps, "is_built", None)
+    try:
+        return bool(is_avail and is_avail() and is_built and is_built())
+    except Exception:
+        return False
+
+
+def xpu_available() -> bool:
+    """True if Intel-XPU PyTorch is installed and an Intel GPU is detected.
+    Requires the IPEX (Intel Extension for PyTorch) or PyTorch ≥ 2.5 XPU build."""
+    if torch is None:
+        return False
+    xpu = getattr(torch, "xpu", None)
+    if xpu is None:
+        return False
+    try:
+        return bool(xpu.is_available())
+    except Exception:
+        return False
+
+
+def gpu_available() -> bool:
+    """True if ANY GPU-class accelerator is detected: CUDA, MPS, or XPU."""
+    return cuda_available() or mps_available() or xpu_available()
 
 
 def import_error() -> Exception | None:
@@ -27,8 +65,13 @@ def import_error() -> Exception | None:
 
 
 def default_device() -> str:
+    """Pick the best available device. Order: CUDA > MPS > XPU > CPU."""
     if cuda_available():
         return "cuda"
+    if mps_available():
+        return "mps"
+    if xpu_available():
+        return "xpu"
     if torch_available():
         return "cpu"
     raise RuntimeError("PyTorch is not available.")
@@ -122,8 +165,15 @@ def solve_nmf_multiplicative_updates(
 
     resolved_device = device or default_device()
     dev = torch.device(resolved_device)
-    generator = torch.Generator(device=dev)
-    generator.manual_seed(int(seed))
+    # Device-specific Generator (currently unused — random inits below go
+    # through NumPy — but kept seeded for future torch.rand calls that might
+    # be added). Some backends (notably older MPS) raise here, so swallow it.
+    try:
+        generator = torch.Generator(device=dev)
+        generator.manual_seed(int(seed))
+    except (RuntimeError, TypeError) as exc:
+        logger.debug("torch.Generator(device=%s) not available: %s — skipping.", dev, exc)
+        generator = None  # noqa: F841
 
     x = torch.as_tensor(x_np, device=dev)
     n_samples, n_features = x.shape

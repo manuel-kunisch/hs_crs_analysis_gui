@@ -4,7 +4,7 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
-## [0.9.3] — 2026-05-24
+## [0.9.3] — 2026-05-25
 
 ### Added
 - **Color-blind-safe component palette.** Two new bidirectionally-synced
@@ -19,6 +19,23 @@ this project uses [Semantic Versioning](https://semver.org/).
   `PALETTE_LABELS` dictionaries in `hs_mosaic/widgets/color_manager.py`
   — see *Results and export → Default colour palette → Adding a custom
   palette* in the docs.
+- **Apple Silicon (MPS) and Intel Arc (XPU) GPU acceleration.** The
+  PyTorch NNMF and NNLS backends now pick a device in priority order
+  **CUDA → MPS → XPU → CPU** instead of the previous CUDA-only check.
+  Apple Silicon Macs (M1/M2/M3/M4) get hardware acceleration via the
+  PyTorch MPS backend automatically — the standard PyPI macOS torch wheel
+  already includes MPS, so `pip install hs-mosaic torch` is the entire
+  setup. Intel Arc GPUs are detected via `torch.xpu.is_available()` when
+  an XPU-enabled PyTorch is installed. New `mps_available()`,
+  `xpu_available()` and `gpu_available()` helpers are exposed alongside
+  the existing `cuda_available()` in both `hs_mosaic/widgets/torch_nmf.py`
+  and `hs_mosaic/widgets/nnls_pytorch.py`. The fit-summary `backend` label
+  now reports `torch-mps` or `torch-xpu` accordingly. The Lipschitz-constant
+  `torch.linalg.eigvalsh` call in fixed-H NNLS is wrapped in a defensive
+  CPU fallback so older PyTorch MPS builds (≤ 2.0) don't error out on it.
+  CUDA remains the primary tested platform; MPS and XPU support is
+  dispatch-clean but throughput depends on PyTorch's own op coverage for
+  the hardware.
 
 ### Changed
 - **Default component-colour palette switched to Magenta–Cyan–Yellow.**

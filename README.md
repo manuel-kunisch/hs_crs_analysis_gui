@@ -63,45 +63,50 @@ mkdocs serve
 ###  PyPI:
 The package is published on PyPI as `hs-mosaic`. Install in a virtual environment with pip.
 
-**Recommended — NVIDIA CUDA GPU install (two commands):**
+**Recommended — GPU install (the right one for your hardware):**
 
-Hyperspectral NNMF and fixed-H NNLS are heavy: typical fields of view (~10⁶ pixels × tens of channels) run in seconds on a GPU and in minutes on a CPU, with 4D z- and t-stacks multiplying the cost. GPU acceleration is the intended path for serious analysis.
+Hyperspectral NNMF and fixed-H NNLS are heavy: typical fields of view (~10⁶ pixels × tens of channels) run in seconds on a GPU and in minutes on a CPU, with 4D z- and t-stacks multiplying the cost. Since v0.9.3 HS-MOSAIC supports three GPU backends — pick the one matching your hardware:
+
+```bash
+# NVIDIA CUDA GPU — install CUDA torch from PyTorch's index FIRST, then hs-mosaic.
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install hs-mosaic
+
+# Apple Silicon (M1/M2/M3/M4) — PyPI's macOS torch wheel already includes MPS.
+pip install hs-mosaic torch
+
+# Intel Arc GPU — install XPU torch from PyTorch's index FIRST, then hs-mosaic.
+pip install torch --index-url https://download.pytorch.org/whl/xpu
+pip install hs-mosaic
+```
 
 > [!IMPORTANT]
-> **PyPI does not host CUDA-enabled PyTorch wheels** — only CPU PyTorch. You must install CUDA PyTorch from PyTorch's own index **before** `pip install hs-mosaic`. The two-command order below is **not optional**: doing it in reverse (`pip install hs-mosaic` first, then CUDA torch) downloads ~150 MB of CPU torch that gets immediately replaced. This is a property of the whole Python packaging ecosystem (every CUDA-using package has the same constraint), not of HS-MOSAIC.
+> **PyPI does not host CUDA-enabled or XPU-enabled PyTorch wheels** — only CPU torch (and CPU+MPS on macOS). For the NVIDIA and Intel variants you must install GPU-enabled torch from PyTorch's own index **before** `pip install hs-mosaic`. The order is **not optional**: doing it in reverse downloads ~150 MB of CPU torch that gets immediately replaced. Apple Silicon does NOT have this issue because PyPI's macOS torch already includes MPS. This is a property of the whole Python packaging ecosystem (every GPU-accelerated package has the same constraint), not of HS-MOSAIC.
+
+For NVIDIA, pick the `cu124` URL to match your CUDA driver — `cu118`, `cu121`, `cu124`, `cu126`, etc. — using the [PyTorch selector](https://pytorch.org/get-started/locally/).
+
+Verify the right GPU is detected after the install:
 
 ```bash
-# Step 1 — install CUDA-enabled PyTorch from PyTorch's index FIRST
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-
-# Step 2 — then install hs-mosaic; it picks up the already-installed CUDA torch
-pip install hs-mosaic
+python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('MPS :', torch.backends.mps.is_available() and torch.backends.mps.is_built()); print('XPU :', hasattr(torch, 'xpu') and torch.xpu.is_available())"
 ```
 
-Pick the `cu124` URL to match your CUDA driver — `cu118`, `cu121`, `cu124`, `cu126`, etc. — using the [PyTorch selector](https://pytorch.org/get-started/locally/).
+Whichever line says `True` is the GPU backend HS-MOSAIC will use. The fit-summary `backend` field reports `torch-cuda`, `torch-mps`, or `torch-xpu` so you can confirm in the GUI.
 
-Verify GPU is detected after the install:
+**Fallback — CPU install (no supported GPU):**
 
-```bash
-python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
-```
-
-`True` means the GPU backends will be used; `False` means HS-MOSAIC silently falls back to CPU.
-
-**Fallback — CPU install (no NVIDIA GPU):**
-
-For machines without a compatible NVIDIA GPU (e.g. laptops, Apple Silicon, CI runners), HS-MOSAIC runs on CPU using scikit-learn's NMF and SciPy's NNLS. It works correctly but expect minutes per run instead of seconds.
+For machines without a compatible GPU (e.g. AMD on Windows, ARM Linux without ROCm, CI runners, older Macs), HS-MOSAIC runs on CPU using scikit-learn's NMF and SciPy's NNLS. It works correctly but expect minutes per run instead of seconds.
 
 ```bash
 pip install hs-mosaic
 ```
 
-> A third optional `[torch]` extra exists for advanced users who want the PyTorch FISTA-NNLS backend on CPU (sometimes faster than SciPy's per-pixel solver for very large fixed-H NNLS mosaics). It does **not** provide GPU acceleration. See [docs/installation.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/) for the full comparison table and for the v0.9.2 → v0.9.3 `[gpu]` → `[torch]` rename recovery instructions.
+> A `[torch]` extra also exists for users who want the PyTorch FISTA-NNLS backend on CPU (sometimes faster than SciPy's per-pixel solver for very large fixed-H NNLS mosaics). It does **not** provide GPU acceleration on its own. See [docs/installation.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/) for the full comparison table and for the v0.9.2 → v0.9.3 `[gpu]` → `[torch]` rename recovery instructions.
 
 ### From source:
 Detailed installation guide and platform-specific notes: [docs/installation.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/).
 
-**Prerequisites** — Python ≥ 3.10 on Windows, Linux, or macOS. Optionally an NVIDIA GPU (or ROCm-capable AMD on Linux) for PyTorch acceleration.
+**Prerequisites** — Python ≥ 3.10 on Windows, Linux, or macOS. Optionally a supported GPU for PyTorch acceleration: NVIDIA (CUDA), Apple Silicon (MPS), Intel Arc (XPU), or AMD on Linux (ROCm).
 
 **Conda (recommended)** — use one of the packaged environment files in the repository root:
 

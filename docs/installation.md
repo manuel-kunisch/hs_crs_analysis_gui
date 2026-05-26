@@ -55,18 +55,48 @@ This installs PyTorch but does not automatically give you a CUDA-enabled build. 
 
 ## Option 3: pip / venv
 
+The project ships as a proper Python package named **`hs-mosaic`**. Start by creating and activating a virtual environment:
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 source .venv/bin/activate     # Linux / macOS
-pip install -r requirements.txt
 ```
 
-Optional PyTorch installation:
+Then install the package by one of two routes.
+
+### 3a. From PyPI (recommended — once published)
 
 ```bash
-pip install torch
+pip install hs-mosaic                 # CPU-only
+pip install "hs-mosaic[gpu]"          # adds CPU PyTorch (NNMF MU + FISTA-NNLS backends)
 ```
+
+!!! note "PyPI availability"
+    Publishing of `hs-mosaic` to PyPI is in progress. Until the first PyPI release is
+    live, install from a git clone (Option 3b) — the resulting environment is identical.
+
+### 3b. From a git clone
+
+```bash
+git clone https://github.com/manuel-kunisch/hs_crs_analysis_gui.git
+cd hs_crs_analysis_gui
+
+pip install -e .                      # editable install — picks up local edits
+pip install -e ".[gpu]"               # add CPU PyTorch alongside
+pip install -e ".[dev]"               # add pytest, ruff, pyinstaller for development
+```
+
+### CUDA-enabled PyTorch (NVIDIA GPUs)
+
+In either case, PyPI only hosts the CPU build of PyTorch. To enable CUDA acceleration of the NNMF and NNLS backends, install a matching CUDA torch wheel *after* the package install:
+
+```bash
+pip install --upgrade --force-reinstall torch \
+    --index-url https://download.pytorch.org/whl/cu124   # or the URL matching your driver
+```
+
+See [GPU acceleration](tutorials/02a_gpu_acceleration.md) for the backend and platform notes, including Apple Silicon and AMD/ROCm.
 
 ## Running the Application
 
@@ -75,13 +105,18 @@ pip install torch
 From an activated Conda or venv environment:
 
 ```bash
-run_hs_crs_analysis_gui.bat
+hs_mosaic.bat
 ```
 
-### Direct Python launch (all platforms)
+The launcher calls `python -m hs_mosaic` under the hood.
+
+### Direct launch (all platforms)
+
+After `pip install`:
 
 ```bash
-python main.py
+hs-mosaic                     # console / shortcut launcher
+python -m hs_mosaic           # equivalent module form
 ```
 
 > Screenshot placeholder: first successful GUI startup, showing the main window after launch and the empty data-loading area.
@@ -145,8 +180,10 @@ conda env export --from-history > environment.min.yml
 
 **Qt plugin error on startup** (`Could not find or load the Qt platform plugin`):
 
-- Ensure the Conda environment is activated before running.
-- On Linux, install the required Qt system libraries. The exact package names depend on the distro but typically include `libxcb-*` and `libGL` libraries.
+- Ensure the Conda or venv environment is activated before running.
+- On Linux, install the required Qt system libraries — typically `libxcb-*` and `libGL` packages from your distro.
+- On Windows, the most common root cause is a missing **Microsoft Visual C++ 2015–2022 Redistributable (x64)** — install it from [Microsoft's download page](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) and reboot.
+- If the error persists after the above, see the full [Qt platform plugin troubleshooting](troubleshooting.md#qt-platform-plugin-error) section — it covers forced PyQt5 reinstall, setting `QT_QPA_PLATFORM_PLUGIN_PATH`, and the last-resort manual install of standalone Qt 5.15 with the matching `PATH` entries on Windows.
 
 **`ModuleNotFoundError: No module named 'tifffile'` or similar**:
 

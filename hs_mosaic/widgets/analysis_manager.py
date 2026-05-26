@@ -14,19 +14,19 @@ from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import QLabel
 from skimage.filters.rank import minimum
 
-from composite_image import CompositeImageViewWidget
-from contents.custom_pyqt_objects import ImageViewYX
-from contents.multivariate_analyzer import HSeedScaleState, MultivariateAnalyzer
-from contents.roi_manager_pg import ROIManager
-from contents.spectral_axis import (
+from hs_mosaic.composite_image import CompositeImageViewWidget
+from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX
+from hs_mosaic.widgets.multivariate_analyzer import HSeedScaleState, MultivariateAnalyzer
+from hs_mosaic.widgets.roi_manager_pg import ROIManager
+from hs_mosaic.widgets.spectral_axis import (
     is_index_unit,
     normalize_spectral_unit,
     spectral_axis_label,
     spectral_csv_header,
     spectral_unit_suffix,
 )
-from contents.color_manager import ComponentColorManager
-from contents.hs_image_view import ColorButton
+from hs_mosaic.widgets.color_manager import ComponentColorManager
+from hs_mosaic.widgets.hs_image_view import ColorButton
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('Hyperspectral Analysis')

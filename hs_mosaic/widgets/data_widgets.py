@@ -9,11 +9,11 @@ import qtawesome as qta
 from PyQt5 import QtWidgets, QtCore, Qt
 from pyqtgraph.dockarea import DockArea, Dock
 
-from composite_image import dtype, max_dtype_val
-from contents.data_managers import ImageLoader
-from contents.hs_image_view import RamanImageView
-from contents.roi_manager_pg import ROIManager
-from contents.spectral_axis import (
+from hs_mosaic.composite_image import dtype, max_dtype_val
+from hs_mosaic.widgets.data_managers import ImageLoader
+from hs_mosaic.widgets.hs_image_view import RamanImageView
+from hs_mosaic.widgets.roi_manager_pg import ROIManager
+from hs_mosaic.widgets.spectral_axis import (
     INDEX_UNIT,
     is_index_unit,
     normalize_spectral_unit,

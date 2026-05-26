@@ -4,5 +4,12 @@ __pycache__/
 /docs/examples/synthetic_quickstart_data/
 /.venv-build/
 /.venv-build-pytorch/
+/.venv-pip-test/
 /build/
 /dist/
+/dist-test/
+
+# Python packaging artefacts
+*.egg-info/
+*.egg
+/wheelhouse/

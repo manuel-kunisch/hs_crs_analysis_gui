@@ -15,7 +15,7 @@ try:
     from .cross_correlate import stitch_corr
 except ImportError:
     # otherwise import from absolute path
-    from contents.cross_correlate import stitch_corr
+    from hs_mosaic.widgets.cross_correlate import stitch_corr
 
 
 @dataclass

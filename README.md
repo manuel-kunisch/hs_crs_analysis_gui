@@ -57,6 +57,14 @@ mkdocs serve
 
 ## Install
 
+###  PyPI:
+The package is published on PyPI as `hs-mosaic`. Install in a virtual environment with pip:
+
+```bash
+pip install hs-mosaic
+```
+
+### From source:
 Detailed installation guide and platform-specific notes: [docs/installation.md](docs/installation.md).
 
 **Prerequisites** — Python ≥ 3.11 on Windows, Linux, or macOS. Optionally an NVIDIA GPU (or ROCm-capable AMD on Linux) for PyTorch acceleration.
@@ -75,27 +83,38 @@ conda activate hs-mv-analysis-pytorch
 
 Use the bundled `environment.yml` unless you specifically need the PyTorch-based backends. The bundled `environment-pytorch.yml` installs PyTorch, but it does not guarantee a CUDA-enabled build on every machine. For NVIDIA GPU acceleration, install a CUDA-enabled PyTorch build that matches your driver and platform after creating the environment from the `.yml` file.
 
-**pip** — alternative if you prefer venv:
+**pip** — alternative if you prefer venv. The project is packaged; install the package itself rather than just its requirements file:
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate              # Windows
 # source .venv/bin/activate         # Linux / macOS
-pip install -r requirements.txt
+pip install -e .                    # editable install from a clone
 ```
 
-For a CUDA-enabled PyTorch install, follow the [official PyTorch selector](https://pytorch.org/get-started/locally/) inside the activated environment. The GPU paths use the standard `torch.cuda` device convention; CUDA 12.6 is the recommended target when available. See [GPU acceleration](docs/tutorials/02a_gpu_acceleration.md) for the backend and platform notes, including Apple Silicon and AMD/ROCm.
+
+Optional extras:
+
+```bash
+pip install -e ".[gpu]"             # add CPU PyTorch (NNMF MU + FISTA-NNLS backends)
+pip install -e ".[dev]"             # add ruff, pytest, pyinstaller for development
+```
+
+For a CUDA-enabled PyTorch install, follow the [official PyTorch selector](https://pytorch.org/get-started/locally/) *after* the editable install — PyPI hosts CPU-only torch wheels, so CUDA builds come from `https://download.pytorch.org/whl/cu124` (or the version matching your driver). The GPU paths use the standard `torch.cuda` device convention; CUDA 12.6 is the recommended target when available. See [GPU acceleration](docs/tutorials/02a_gpu_acceleration.md) for the backend and platform notes, including Apple Silicon and AMD/ROCm.
 
 ## Run
 
+After a pip install (editable or from PyPI) the GUI is reachable through the `hs-mosaic` console entry point or as a Python module:
+
 ```bash
-python main.py
+hs-mosaic                    # console / shortcut launcher
+python -m hs_mosaic          # equivalent module form
 ```
 
-On Windows you can also use the bundled launcher:
+On Windows you can also use the bundled launcher (which calls `python -m hs_mosaic` under the hood):
 
 ```bash
-run_hs_crs_analysis_gui.bat
+hs_mosaic.bat
 ```
 
 A pre-built standalone Windows executable is described in [docs/standalone_windows.md](docs/standalone_windows.md).
@@ -109,19 +128,28 @@ The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset.
 ## Repository layout
 
 ```text
-main.py                          Application entry point
-composite_image.py               Result / composite viewer
-contents/analysis_manager.py     Analysis setup, seed handling, 4D orchestration
-contents/multivariate_analyzer.py PCA / NNMF / NNLS core
-contents/torch_nmf.py            Optional PyTorch MU-NMF backend
-contents/nnls_pytorch.py         Optional PyTorch FISTA-NNLS backend
-contents/roi_manager_pg.py       ROI management and ROI plotting
-contents/data_widgets.py         Raw-data loading and image viewer
-docs/                            User documentation (mkdocs site)
-environment.yml                  Conda environment, CPU-only
-environment-pytorch.yml          Conda environment, with PyTorch
-requirements.txt                 pip-based dependencies
-run_hs_crs_analysis_gui.bat      Windows launcher
+hs_mosaic/                          Top-level Python package (pip-installable)
+├── app.py                          Application entry point — exports main()
+├── __main__.py                     Enables `python -m hs_mosaic`
+├── composite_image.py              Result / composite viewer
+├── assets/                         Bundled icons and example metadata
+└── widgets/                        Internal modules
+    ├── analysis_manager.py         Analysis setup, seed handling, 4D orchestration
+    ├── multivariate_analyzer.py    PCA / NNMF / NNLS core
+    ├── torch_nmf.py                Optional PyTorch MU-NMF backend
+    ├── nnls_pytorch.py             Optional PyTorch FISTA-NNLS backend
+    ├── roi_manager_pg.py           ROI management and ROI plotting
+    └── data_widgets.py             Raw-data loading and image viewer
+pyproject.toml                      Package metadata, deps, hs-mosaic entry point
+docs/                               User documentation (mkdocs site)
+environment.yml                     Conda environment, CPU-only
+environment-pytorch.yml             Conda environment, with PyTorch
+requirements.txt                    pip-based dependencies (legacy; pyproject.toml is authoritative)
+hs_crs_analysis_gui_cpu.spec        PyInstaller spec for standalone CPU build
+hs_crs_analysis_gui_pytorch.spec    PyInstaller spec for standalone PyTorch / CUDA build
+build_windows_cpu.ps1               Build script for the standalone CPU zip
+build_windows_pytorch.ps1           Build script for the standalone PyTorch / CUDA zip
+hs_mosaic.bat                       Windows launcher (calls `python -m hs_mosaic`)
 ```
 
 ## Repository status

@@ -10,11 +10,11 @@ from pyqtgraph.dockarea import Dock
 from scipy.ndimage import gaussian_filter1d, gaussian_filter, label, maximum_filter
 from scipy.cluster.hierarchy import linkage, fcluster
 
-from composite_image import max_dtype_val, CompositeImageViewWidget as ci
-from contents.custom_pyqt_objects import ImageViewYX
-from contents.hs_image_view import ROITableDelegate, ColorButton
-from contents.spectrum_loader import SpectrumLoader
-from contents.spectral_axis import normalize_spectral_unit, spectral_axis_label, spectral_csv_header
+from hs_mosaic.composite_image import max_dtype_val, CompositeImageViewWidget as ci
+from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX
+from hs_mosaic.widgets.hs_image_view import ROITableDelegate, ColorButton
+from hs_mosaic.widgets.spectrum_loader import SpectrumLoader
+from hs_mosaic.widgets.spectral_axis import normalize_spectral_unit, spectral_axis_label, spectral_csv_header
 
 logger = logging.getLogger('ROI Manager')
 
@@ -2044,7 +2044,7 @@ class ROIManager(QtCore.QObject):
             self._emit_label_for_component(int(component_number), preferred_row=new_row_idx)
         return new_row_idx
 
-    from contents.spectrum_loader import SpectrumLoader
+    from hs_mosaic.widgets.spectrum_loader import SpectrumLoader
     # make sure DummyROI is imported as well
     # from contents.some_module import DummyROI
 
@@ -3771,4 +3771,4 @@ class DummyROI(pg.ROI):
         self.spectrum_data = np.asarray(new_spectrum_data).copy()
 
 if __name__ == '__main__':
-    print('Please run the main.py file to start the application')
+    print('Please run `hs-mosaic` (or `python -m hs_mosaic`) to start the application.')

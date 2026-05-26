@@ -10,7 +10,7 @@ project_root = Path(SPECPATH).resolve()
 datas = []
 datas += collect_data_files("qtawesome")
 datas += collect_data_files("pyqtgraph")
-datas += [(str(project_root / "contents" / "HS-MOSAIC-logo.ico"), "contents")]
+datas += collect_data_files("hs_mosaic", subdir="assets")
 
 binaries = []
 binaries += collect_dynamic_libs("torch")
@@ -24,13 +24,17 @@ excludes = [
 ]
 
 a = Analysis(
-    ["main.py"],
+    ["hs_mosaic/app.py"],
     pathex=[str(project_root)],
     binaries=binaries,
     datas=datas,
     hiddenimports=[
-        "contents.torch_nmf",
-        "contents.nnls_pytorch",
+        "hs_mosaic",
+        "hs_mosaic.app",
+        "hs_mosaic.composite_image",
+        "hs_mosaic.widgets",
+        "hs_mosaic.widgets.torch_nmf",
+        "hs_mosaic.widgets.nnls_pytorch",
     ],
     hookspath=[],
     hooksconfig={},
@@ -58,7 +62,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(project_root / "contents" / "HS-MOSAIC-logo.ico"),
+    icon=str(project_root / "hs_mosaic" / "assets" / "HS-MOSAIC-logo.ico"),
 )
 
 coll = COLLECT(

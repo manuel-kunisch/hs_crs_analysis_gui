@@ -192,7 +192,7 @@ Use correlation when:
 
 ## How the two-pass correlation works
 
-Correlation is applied in **two distinct passes**, not as a single global alignment step. The implementation lives in `contents/cross_correlate.py`; the architecture is the same whether the input is a small grid or a 9 × 9 tile mosaic.
+Correlation is applied in **two distinct passes**, not as a single global alignment step. The implementation lives in `hs_mosaic/widgets/cross_correlate.py`; the architecture is the same whether the input is a small grid or a 9 × 9 tile mosaic.
 
 ### Why per-pair correlation in the first place
 

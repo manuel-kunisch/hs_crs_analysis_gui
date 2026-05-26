@@ -7,11 +7,11 @@ import numpy as np
 from PyQt5 import QtWidgets, QtCore
 from tifffile import TiffFile, imread
 
-from contents import stitch_functions as stitching
-from contents.physical_units_manager import PhysicalUnitsManager
-from contents.rolling_ball_correction import RollingBallCorrectionWidget, RollingBallCorrectionController
-from contents.spectral_axis import normalize_spectral_unit
-from contents.stitch_manager import StitchManager
+from hs_mosaic.widgets import stitch_functions as stitching
+from hs_mosaic.widgets.physical_units_manager import PhysicalUnitsManager
+from hs_mosaic.widgets.rolling_ball_correction import RollingBallCorrectionWidget, RollingBallCorrectionController
+from hs_mosaic.widgets.spectral_axis import normalize_spectral_unit
+from hs_mosaic.widgets.stitch_manager import StitchManager
 
 logger = logging.getLogger('Data Manager')
 

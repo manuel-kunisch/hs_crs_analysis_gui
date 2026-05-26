@@ -14,9 +14,11 @@ There are two supported ways to get to that point:
 
 If you do not have real data yet, the [Synthetic quickstart example](examples/synthetic_quickstart.md) shows how to generate a small test dataset from Python.
 
-> Screenshot placeholder: annotated main GUI with numbered regions matching the quickstart steps: load data, set spectral axis, create seeds, choose analysis settings, run analysis, inspect/export results.
+![Main HS-MOSAIC window with the data viewer, ROI Manager, Analysis panel and result viewer docked together — the regions used throughout this quickstart](assets/images/gui_overview.png)
 
-> GIF placeholder: complete quickstart on the synthetic dataset, from loading `synthetic_hs_stack.tif` to exporting the result composite.
+*Overview of the main HS-MOSAIC window. The data viewer (top left), ROI Manager (bottom left), Analysis panel (top right) and result viewer (bottom right) are the four docks referenced in the steps below.*
+
+![Complete quickstart on the synthetic dataset: loading the TIFF, importing the reference CSV spectra, setting five components, running seeded NNMF, and inspecting the resulting composite](assets/gifs/quick_synthetic_data_demo.gif)
 
 ## Minimal workflow at a glance
 
@@ -37,16 +39,17 @@ With the standalone Windows `.exe`, extract the whole portable zip and double-cl
 
 Keep the `.exe` next to its `_internal` folder.
 
-With a full Python installation, start from an activated environment:
+With a full Python installation, start from an activated environment after `pip install hs-mosaic` (or `pip install -e .` from a clone):
 
 ```bash
-python main.py
+hs-mosaic                    # console / shortcut launcher
+python -m hs_mosaic          # equivalent module form
 ```
 
 or on Windows:
 
 ```bash
-run_hs_crs_analysis_gui.bat
+hs_mosaic.bat
 ```
 
 ## Step 2: Load the TIFF stack

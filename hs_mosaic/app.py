@@ -8,7 +8,7 @@ import numpy as np
 # On Windows, importing PyQt before torch can make torch's c10.dll fail to
 # initialize. Preload the optional torch modules before any Qt imports so the
 # PyTorch NNMF/NNLS backends remain available in source and frozen builds.
-from contents import nnls_pytorch, torch_nmf
+from hs_mosaic.widgets import nnls_pytorch, torch_nmf
 import pyqtgraph as pg
 from PyQt5 import QtCore, Qt  # Import the necessary modules
 from PyQt5 import QtWidgets
@@ -16,21 +16,56 @@ from PyQt5.QtGui import QColor, QIcon
 from pyqtgraph.dockarea.Dock import Dock
 from pyqtgraph.dockarea.DockArea import DockArea
 
-from composite_image import CompositeImageViewWidget
-from contents import analysis_manager, data_widgets
-from contents.color_manager import ComponentColorManager
-from contents.data_widgets import DataWidget
-from contents.scalebar import ScaleBar
-from contents.spectral_axis import normalize_spectral_unit, spectral_axis_label
+from hs_mosaic.composite_image import CompositeImageViewWidget
+from hs_mosaic.widgets import analysis_manager, data_widgets
+from hs_mosaic.widgets.color_manager import ComponentColorManager
+from hs_mosaic.widgets.data_widgets import DataWidget
+from hs_mosaic.widgets.scalebar import ScaleBar
+from hs_mosaic.widgets.spectral_axis import normalize_spectral_unit, spectral_axis_label
 
 logger = logging.getLogger('Main')
 logger.setLevel(logging.INFO)
 
 
 def resource_path(relative_path: str) -> str:
-    """Resolve files both from source and from a PyInstaller bundle."""
-    base_path = getattr(sys, "_MEIPASS", os.path.abspath("."))
-    return os.path.join(base_path, relative_path)
+    """Resolve packaged assets in editable, wheel, and PyInstaller installs.
+
+    Lookup order:
+      1. PyInstaller's ``_MEIPASS`` (frozen builds).
+      2. ``importlib.resources`` against the ``hs_mosaic`` package — works
+         for both editable (``pip install -e .``) and wheel installs.
+      3. Filesystem fallback rooted at the current working directory, for
+         development scripts that run files directly.
+
+    Accepts both old-style ``contents/HS-MOSAIC-logo.ico`` paths and the
+    new ``assets/HS-MOSAIC-logo.ico`` form: a leading ``contents/`` is
+    rewritten to ``assets/`` so legacy callers keep working.
+    """
+    rel = relative_path.replace("\\", "/")
+    if rel.startswith("contents/"):
+        rel = "assets/" + rel[len("contents/"):]
+
+    # 1) PyInstaller bundle (only set when frozen).
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidate = os.path.join(meipass, rel)
+        if os.path.exists(candidate):
+            return candidate
+
+    # 2) Package data (editable + wheel installs).
+    try:
+        from importlib.resources import files
+        # rel may contain subdirectories ("assets/HS-MOSAIC-logo.ico").
+        resource = files("hs_mosaic").joinpath(rel)
+        if resource.is_file():
+            # files() may return a MultiplexedPath inside a zip; cast to str
+            # so callers that only want a filesystem path still work.
+            return str(resource)
+    except (ModuleNotFoundError, FileNotFoundError):
+        pass
+
+    # 3) CWD fallback for ad-hoc scripts.
+    return os.path.join(os.path.abspath("."), rel)
 
 
 def _run_backend_self_test(output_path: str | None = None) -> int:
@@ -52,8 +87,8 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
         "error": None,
     }
     try:
-        from contents import nnls_pytorch, torch_nmf
-        from contents.multivariate_analyzer import MultivariateAnalyzer
+        from hs_mosaic.widgets import nnls_pytorch, torch_nmf
+        from hs_mosaic.widgets.multivariate_analyzer import MultivariateAnalyzer
 
         result["torch_available"] = bool(torch_nmf.torch_available())
         result["torch_import_error"] = (
@@ -738,19 +773,24 @@ class MainApplication(QtWidgets.QMainWindow):
         if self.analysis_manager.seed_window is not None:
             self.analysis_manager.seed_window.close()
 
-if __name__ == '__main__':
-    if "--backend-self-test" in sys.argv:
-        arg_index = sys.argv.index("--backend-self-test")
-        output = sys.argv[arg_index + 1] if len(sys.argv) > arg_index + 1 else None
-        sys.exit(_run_backend_self_test(output))
+def main(argv: list[str] | None = None) -> int:
+    """Launch the HS-MOSAIC GUI. Used as the ``hs-mosaic`` console script."""
+    if argv is None:
+        argv = sys.argv
+
+    if "--backend-self-test" in argv:
+        arg_index = argv.index("--backend-self-test")
+        output = argv[arg_index + 1] if len(argv) > arg_index + 1 else None
+        return _run_backend_self_test(output)
 
     import faulthandler
     if sys.stderr is not None:
         faulthandler.enable(all_threads=True)
-    from contents.darkmode import set_darkmode
-    app = QtWidgets.QApplication(sys.argv)  # Create a QApplication instance that runs in a dedicated thread.
-    app.setWindowIcon(QIcon(resource_path("contents/HS-MOSAIC-logo.ico")))
-    # Issue: Unlike on MacOS, darkmode is not automatically set with Windows 
+    from hs_mosaic.widgets.darkmode import set_darkmode
+
+    app = QtWidgets.QApplication(argv)
+    app.setWindowIcon(QIcon(resource_path("assets/HS-MOSAIC-logo.ico")))
+    # On Windows, dark mode is not auto-applied by Qt — apply manually.
     set_darkmode(app)
     main_app = MainApplication()
     try:
@@ -758,11 +798,11 @@ if __name__ == '__main__':
     except FileNotFoundError as e:
         logger.error(f"Could not load example data: {e}")
 
-    # set default size of the main window
     main_app.resize(1920, 1080)
     main_app.setWindowTitle("HS-MOSAIC")
-    # show window maximized
-    # main_app.showMaximized()
-
     main_app.show()
-    app.exec_()
+    return app.exec_()
+
+
+if __name__ == '__main__':
+    sys.exit(main())

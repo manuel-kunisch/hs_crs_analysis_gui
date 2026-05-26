@@ -7,32 +7,92 @@
 Symptom: the application exits immediately with a message like:
 
 ```
+qt.qpa.plugin: Could not find or load the Qt platform plugin "windows"
 qt.qpa.plugin: Could not find or load the Qt platform plugin "xcb"
+This application failed to start because no Qt platform plugin could be initialized.
 ```
 
-Cause: Qt system libraries are missing (common on Linux) or the Conda environment is not activated.
+Cause: Qt's platform plugins cannot be located at runtime. This happens when the Conda environment is not activated, when system Qt libraries are missing (Linux), when PyQt5's bundled plugin directory is incomplete or quarantined by anti-virus (Windows), or when a competing Qt installation shadows PyQt5's bundled Qt.
 
-Fix:
+Try these fixes in order — the first applicable one usually resolves it:
 
-- Make sure the correct Conda environment is activated before running.
-- On Linux, install the missing Qt platform dependencies. Depending on the distro:
+#### 1. Confirm the environment is active
+
+Make sure the correct Conda or venv environment is activated before launching. If you opened a new terminal, activation does not carry over.
+
+#### 2. (Linux only) Install the Qt platform system libraries
 
 ```bash
 # Debian / Ubuntu
 sudo apt-get install libxcb-cursor0 libxcb-xinerama0 libgl1-mesa-glx
+
+# Fedora / RHEL
+sudo dnf install libxcb xcb-util-cursor mesa-libGL
 ```
 
-- If the problem persists, try setting the platform variable:
+#### 3. (Windows only) Install or reinstall the Microsoft Visual C++ Redistributable
+
+PyQt5's Qt DLLs depend on the **Microsoft Visual C++ 2015–2022 Redistributable (x64)**. Download it from [https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) and run the installer. Reboot, then relaunch the GUI.
+
+#### 4. Reinstall PyQt5 and its bundled Qt
+
+If PyQt5's plugin folder was removed by anti-virus, a forced reinstall restores it:
 
 ```bash
-QT_QPA_PLATFORM=offscreen python main.py   # headless test only
+pip install --force-reinstall --no-cache-dir PyQt5 PyQt5-Qt5 PyQt5-sip
 ```
+
+#### 5. Point Qt at its bundled plugins explicitly
+
+When the plugin path autodetection fails, set the environment variable to the plugins directory inside your PyQt5 install. Find the path with:
+
+```bash
+python -c "import PyQt5, os; print(os.path.join(os.path.dirname(PyQt5.__file__), 'Qt5', 'plugins'))"
+```
+
+Set it in the same terminal before launch:
+
+```bash
+# Windows (PowerShell)
+$env:QT_QPA_PLATFORM_PLUGIN_PATH = "C:\path\printed\above\platforms"
+
+# Linux / macOS (bash / zsh)
+export QT_QPA_PLATFORM_PLUGIN_PATH="/path/printed/above/platforms"
+```
+
+#### 6. Last resort — install standalone Qt 5.15 manually
+
+If none of the above resolves the error (most commonly on corporate-managed Windows machines or after multiple conflicting Qt installs), install Qt **5.15.x** standalone from the Qt project and point Windows at its DLLs:
+
+1. Download the **Qt Online Installer** from [https://www.qt.io/download-qt-installer-oss](https://www.qt.io/download-qt-installer-oss). The open-source LGPL version is free; you need a free Qt account.
+2. In the installer, select **Qt 5.15.2** (or the matching `5.15.x` patch level), and the **MSVC 2019 64-bit** component for your platform. The default install location is `C:\Qt\`.
+3. Add Qt's `bin` directory to the Windows **PATH** environment variable so its DLLs are discoverable:
+   - Open *Settings → System → About → Advanced system settings → Environment Variables*.
+   - Under *User variables*, edit `Path` and add a new entry:
+     ```
+     C:\Qt\5.15.2\msvc2019_64\bin
+     ```
+   - Optionally also add `QT_PLUGIN_PATH` as a new user variable pointing at `C:\Qt\5.15.2\msvc2019_64\plugins`.
+4. Close and reopen any terminal so the new environment variables take effect.
+5. Relaunch HS-MOSAIC.
+
+The PyQt5 version on PyPI is `5.15.x`, so the matching standalone Qt is `5.15.x` (any patch level — 5.15.2 is the most commonly tested). Do **not** mix Qt 6 with PyQt5.
+
+#### Headless / scripted environments
+
+For automated checks (e.g. CI) where no display is available, force the offscreen backend:
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m hs_mosaic   # headless test only
+```
+
+The GUI will run without a window. This is not a fix for end-user Qt errors — only useful for testing.
 
 ### Blank or frozen window on startup
 
 Possible causes:
 
-- A previous session's preset contains a path or state that takes a long time to resolve. Start with `python main.py` without loading a preset automatically.
+- A previous session's preset contains a path or state that takes a long time to resolve. Start with `hs-mosaic` (or `python -m hs_mosaic`) without loading a preset automatically.
 - Multiple monitors with different DPI settings on Windows can sometimes cause blank windows. Try launching with only one monitor connected.
 
 ---

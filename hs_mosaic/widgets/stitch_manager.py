@@ -8,7 +8,7 @@ import re
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
 
-from contents.cross_correlation_stitcher import CrossCorrelationStitcher  # adjust import!
+from hs_mosaic.widgets.cross_correlation_stitcher import CrossCorrelationStitcher  # adjust import!
 
 logger = logging.getLogger("StitchManager")
 

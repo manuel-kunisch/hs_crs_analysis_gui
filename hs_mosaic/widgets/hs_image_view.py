@@ -5,8 +5,8 @@ import pyqtgraph as pg
 from PyQt5 import QtCore, QtWidgets, QtGui
 from pyqtgraph import VTickGroup
 
-from contents.custom_pyqt_objects import ImageViewLineRoi
-from contents.spectral_axis import (
+from hs_mosaic.widgets.custom_pyqt_objects import ImageViewLineRoi
+from hs_mosaic.widgets.spectral_axis import (
     is_index_unit,
     normalize_spectral_unit,
     spectral_axis_label,

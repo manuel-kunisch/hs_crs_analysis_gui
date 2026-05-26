@@ -10,7 +10,9 @@ project_root = Path(SPECPATH).resolve()
 datas = []
 datas += collect_data_files("qtawesome")
 datas += collect_data_files("pyqtgraph")
-datas += [(str(project_root / "contents" / "HS-MOSAIC-logo.ico"), "contents")]
+# Ship the bundled icon AND every other file in hs_mosaic/assets/ so callers
+# using resource_path("assets/<file>") keep resolving inside the frozen build.
+datas += collect_data_files("hs_mosaic", subdir="assets")
 
 excludes = [
     "torch",
@@ -22,11 +24,16 @@ excludes = [
 ]
 
 a = Analysis(
-    ["main.py"],
+    ["hs_mosaic/app.py"],
     pathex=[str(project_root)],
     binaries=[],
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=[
+        "hs_mosaic",
+        "hs_mosaic.app",
+        "hs_mosaic.composite_image",
+        "hs_mosaic.widgets",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -53,7 +60,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(project_root / "contents" / "HS-MOSAIC-logo.ico"),
+    icon=str(project_root / "hs_mosaic" / "assets" / "HS-MOSAIC-logo.ico"),
 )
 
 coll = COLLECT(

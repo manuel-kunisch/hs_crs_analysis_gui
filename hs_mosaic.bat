@@ -5,9 +5,9 @@ cd /d "%~dp0"
 
 where python >nul 2>nul
 if %errorlevel%==0 (
-    python main.py
+    python -m hs_mosaic
 ) else (
-    py -3 main.py
+    py -3 -m hs_mosaic
 )
 
 if errorlevel 1 (

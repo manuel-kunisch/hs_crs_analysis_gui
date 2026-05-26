@@ -11,10 +11,10 @@ from scipy.optimize import nnls
 from skimage.restoration import rolling_ball
 from sklearn.decomposition import PCA, NMF
 
-from contents.custom_pyqt_objects import ImageViewYX
-from contents import nnls_pytorch
-from contents import torch_nmf
-from contents.spectral_axis import normalize_spectral_unit, spectral_axis_label
+from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX
+from hs_mosaic.widgets import nnls_pytorch
+from hs_mosaic.widgets import torch_nmf
+from hs_mosaic.widgets.spectral_axis import normalize_spectral_unit, spectral_axis_label
 
 d_type = '16bit'
 

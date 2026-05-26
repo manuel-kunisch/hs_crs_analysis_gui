@@ -15,7 +15,7 @@ from scipy import interpolate
 from scipy.optimize import curve_fit
 from skimage import io  # READIN TIF STACKS
 
-import contents.rolling_ball_mask as rb
+import hs_mosaic.widgets.rolling_ball_mask as rb
 
 
 def stitch_load(data_path: str, base_name: str = None,

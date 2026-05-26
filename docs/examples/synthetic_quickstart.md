@@ -19,7 +19,7 @@ Use it when:
 python docs/examples/generate_synthetic_quickstart.py --output synthetic_quickstart_data
 
 # 2. launch the GUI
-python main.py
+hs-mosaic              # or: python -m hs_mosaic
 
 # 3. in the GUI: load synthetic_hs_stack.tif → Load Spectrum from File on the CSV
 #                → set Components = 6 → NNMF + Custom init + Fixed-H NNLS mode

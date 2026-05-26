@@ -15,11 +15,11 @@ from PyQt5.QtWidgets import (
     QMessageBox, QDialog, QDialogButtonBox, QFormLayout)
 from pyqtgraph import PlotItem
 
-from contents.color_manager import ComponentColorManager
-from contents.custom_pyqt_objects import ImageViewYXC, ImageViewLineRoiYXZ
-from contents.fiji_saver import FIJISaver
-from contents.scalebar import ScaleBar
-from contents.spectral_axis import normalize_spectral_unit, spectral_axis_label, spectral_csv_header
+from hs_mosaic.widgets.color_manager import ComponentColorManager
+from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYXC, ImageViewLineRoiYXZ
+from hs_mosaic.widgets.fiji_saver import FIJISaver
+from hs_mosaic.widgets.scalebar import ScaleBar
+from hs_mosaic.widgets.spectral_axis import normalize_spectral_unit, spectral_axis_label, spectral_csv_header
 
 max_but_size = (100, 50)
 dtype = np.uint16

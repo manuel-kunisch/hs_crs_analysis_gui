@@ -1,21 +1,29 @@
 """Component color management with named, color-blind-aware palettes.
 
-Three named palettes are provided out of the box:
+Four named palettes are provided out of the box:
 
-* ``okabe_ito`` (default) — the Okabe-Ito 8-colour qualitative palette,
-  designed for protanopia and deuteranopia. Recommended for publication
-  figures (Wong, *Nat. Methods* **8**, 441, 2011).
-* ``high_contrast`` — magenta-green-cyan-led palette optimised for additive
-  composite display on dark backgrounds. The magenta + green pair is the
-  standard colour-blind-friendly alternative to red + green in
-  multi-channel fluorescence microscopy.
+* ``magenta_cyan_yellow`` (default) — the additive-secondary trio
+  (magenta + cyan + yellow), which provides the highest mutual contrast on a
+  black composite background of any 3-color combination. Padded with five
+  supplementary colors for components 4-8.
+* ``high_contrast`` — magenta-green-sky-blue-led palette, brighter than
+  Okabe-Ito while still preserving the color-blind-friendly magenta + green
+  colocalisation signal of multi-channel fluorescence microscopy.
+* ``okabe_ito`` — the canonical 8-color qualitative palette designed for
+  protanopia and deuteranopia. Recommended specifically when color-vision
+  deficiency is a concern in the audience (Wong, *Nat. Methods* **8**, 441,
+  2011).
 * ``classic_rgb`` — the legacy saturated RGB cycle that HS-MOSAIC shipped
   before v0.9.3. Kept for backwards compatibility with users who expect
   component 1 = red, 2 = green, 3 = blue.
 
-The palette is the *initial* colour assignment for new components. Per-component
-choices made through the GUI colour pickers (or loaded from a ``.preset``) take
-precedence and are not overridden when the palette is switched.
+The palette is the *initial* color assignment for new components. Per-component
+choices made through the GUI color pickers (or loaded from a ``.preset``) take
+precedence and are not overridden when the palette is switched. When any
+component differs from the palette's baseline value, the manager reports the
+palette as *customized* via :attr:`ComponentColorManager.is_customized` and the
+:attr:`ComponentColorManager.sigCustomizationChanged` signal — the GUI palette
+selector reflects this by appending ``(customized)`` to the current entry.
 """
 from __future__ import annotations
 
@@ -28,7 +36,25 @@ from PyQt5.QtWidgets import QComboBox, QLabel, QWidget
 # hex strings, kept hex-only for readability and for round-tripping into
 # JSON presets.
 PALETTES: dict[str, list[str]] = {
-    # Okabe & Ito 8-colour palette — color-blind safe, scientific default.
+    # Magenta-Cyan-Yellow trio — the three additive secondaries. Each is
+    # "two of three RGB primaries lit", which makes them maximally bright
+    # on a black additive composite background AND maximally distinct from
+    # each other in the additive-mixing sense (each is missing a DIFFERENT
+    # primary, so their pairwise overlaps land on cleanly different mixes
+    # rather than degenerating to white). This is the best 3-color
+    # contrast palette for composite display; supplementary colors fill
+    # slots 4-8 for higher component counts.
+    "magenta_cyan_yellow": [
+        "#FF00FF",   # Magenta
+        "#00FFFF",   # Cyan
+        "#FFFF00",   # Yellow
+        "#00FF00",   # Pure green        — distinct from cyan (no blue)
+        "#FF8000",   # Orange            — warm, distinct from yellow (no blue)
+        "#0080FF",   # Sky blue          — bluer than cyan
+        "#FFFFFF",   # White             — max brightness for "extras"
+        "#FF6040",   # Coral             — warm red-orange variant
+    ],
+    # Okabe & Ito 8-color palette — color-blind safe, scientific default.
     # Source: Okabe, M. & Ito, K. "Color Universal Design (CUD)" (2008);
     # popularised by Wong, B. "Color blindness." Nat. Methods 8, 441 (2011).
     "okabe_ito": [
@@ -54,9 +80,9 @@ PALETTES: dict[str, list[str]] = {
     ],
     # High-contrast palette hand-tuned for additive composite display on
     # dark backgrounds. Built around the magenta–green–cyan trio, which is
-    # the standard colour-blind-friendly alternative to red–green–blue in
+    # the standard color-blind-friendly alternative to red–green–blue in
     # multi-channel fluorescence microscopy (magenta + green co-localise to
-    # white, the classic two-colour overlap signal). Brighter overall than
+    # white, the classic two-color overlap signal). Brighter overall than
     # Okabe-Ito, at the cost of being slightly less "scientifically neutral".
     "high_contrast": [
         "#FF00FF",   # Magenta             — purple-pink primary
@@ -73,17 +99,18 @@ PALETTES: dict[str, list[str]] = {
 # Human-readable labels for the GUI palette selector. Order here is the order
 # they appear in any dropdown built from PALETTE_LABELS.items().
 PALETTE_LABELS: dict[str, str] = {
-    "okabe_ito":     "Color-blind safe (Okabe-Ito)",
-    "high_contrast": "High contrast (magenta–green, composite-optimised)",
-    "classic_rgb":   "Classic RGB (legacy)",
+    "magenta_cyan_yellow": "Magenta–Cyan–Yellow (max contrast)",
+    "high_contrast":       "High contrast (magenta–green, composite-optimised)",
+    "okabe_ito":           "Color-blind safe (Okabe-Ito)",
+    "classic_rgb":         "Classic RGB (legacy)",
 }
 
 # The default palette for fresh sessions / presets that do not specify one
-DEFAULT_PALETTE = "high_contrast"
+DEFAULT_PALETTE = "magenta_cyan_yellow"
 
 # The palette used for legacy presets (those saved before v0.9.3 that have no
 # ``palette_name`` field). Pre-v0.9.3 sessions used the saturated RGB cycle,
-# so loading a legacy preset without explicit per-component colours should
+# so loading a legacy preset without explicit per-component colors should
 # restore the user to that visual identity.
 LEGACY_PRESET_PALETTE = "classic_rgb"
 
@@ -110,26 +137,34 @@ def _coerce_to_qcolor(c) -> QColor:
 
 
 class ComponentColorManager(QObject):
-    """Holds the per-component colour list and broadcasts changes."""
+    """Holds the per-component color list and broadcasts changes."""
 
-    # Signal emitted when a single colour changes: (component_index, new_QColor)
+    # Signal emitted when a single color changes: (component_index, new_QColor)
     sigColorChanged = pyqtSignal(int, QColor)
     # Signal emitted when the palette is replaced wholesale (palette_name)
     sigPaletteChanged = pyqtSignal(str)
+    # Signal emitted when the customisation status flips: True when at least
+    # one component color now differs from the active palette's baseline,
+    # False when all components match the baseline again. Use this in GUI
+    # widgets to render "(customized)" hints next to the palette selector.
+    sigCustomizationChanged = pyqtSignal(bool)
 
     def __init__(
         self,
         default_colors: list | None = None,
         palette_name: str | None = None,
     ):
-        """Create the colour manager.
+        """Create the color manager.
 
         Parameters
         ----------
         default_colors
-            Explicit list of colour specs (QColor / hex str / RGB tuple). If
+            Explicit list of color specs (QColor / hex str / RGB tuple). If
             given, takes precedence over ``palette_name`` — used for restoring
-            saved presets verbatim.
+            saved presets verbatim. When this path is taken, the customisation
+            check still runs against the named palette's baseline, so a
+            preset that explicitly stored colors which match the palette is
+            reported as *not* customized, and one whose colors differ is.
         palette_name
             Name of one of the entries in :data:`PALETTES`. Used when
             ``default_colors`` is not supplied. Defaults to
@@ -142,43 +177,96 @@ class ComponentColorManager(QObject):
         else:
             self._colors = _colors_from_palette(self._palette_name)
 
+        # Snapshot of the palette's baseline at the moment the palette is
+        # set / switched. Customisation = any current color differs from
+        # its slot in this baseline.
+        self._palette_baseline: list[QColor] = _colors_from_palette(self._palette_name)
+        self._customized: bool = self._compute_customized()
+
     # ── Palette management ────────────────────────────────────────────
     @property
     def palette_name(self) -> str:
         """Name of the currently active palette."""
         return self._palette_name
 
+    @property
+    def is_customized(self) -> bool:
+        """True if at least one component color differs from the active
+        palette's baseline. Switches back to False when every component
+        matches its slot in the palette again (e.g. after re-applying the
+        same palette, or after manually restoring the baseline colors)."""
+        return self._customized
+
     def set_palette(self, palette_name: str) -> None:
-        """Switch the active palette and refresh component colours.
+        """Switch the active palette and refresh component colors.
 
         Emits :attr:`sigColorChanged` for every component slot so all
         downstream widgets update, plus :attr:`sigPaletteChanged` once
-        at the end.
+        at the end. Always resets the customisation baseline to the new
+        palette and emits :attr:`sigCustomizationChanged` if the
+        customized state actually flipped.
         """
-        if palette_name == self._palette_name:
-            return
-        if palette_name not in PALETTES:
+        # Allow re-applying the same palette as a "reset to baseline"
+        # — useful when the user wants to undo manual color edits.
+        new_colors = _colors_from_palette(palette_name) if palette_name in PALETTES else None
+        if new_colors is None:
             raise ValueError(
                 f"Unknown palette {palette_name!r}; "
                 f"available: {sorted(PALETTES)}"
             )
+
+        palette_actually_changed = palette_name != self._palette_name
         self._palette_name = palette_name
-        new_colors = _colors_from_palette(palette_name)
+
         # Preserve the previous length so existing component slots stay valid;
         # extra slots beyond the palette cycle through it.
         old_len = len(self._colors)
         if old_len <= len(new_colors):
-            self._colors = new_colors[:old_len] if old_len > 0 else new_colors
+            self._colors = new_colors[:old_len] if old_len > 0 else list(new_colors)
         else:
-            # Cycle through the palette to fill all existing slots.
             self._colors = [
                 new_colors[i % len(new_colors)] for i in range(old_len)
             ]
+
+        # Refresh the customisation baseline to match the newly-applied palette.
+        self._palette_baseline = list(new_colors)
+
         for i, color in enumerate(self._colors):
             self.sigColorChanged.emit(i, color)
-        self.sigPaletteChanged.emit(self._palette_name)
+        if palette_actually_changed:
+            self.sigPaletteChanged.emit(self._palette_name)
+        # The set of colors is now identical to the baseline, so
+        # customisation MUST be False. Emit if this is a change.
+        self._update_customization(False)
 
-    # ── Colour accessors ──────────────────────────────────────────────
+    # ── Customisation tracking ────────────────────────────────────────
+    def _baseline_color_for(self, index: int) -> QColor:
+        """Return the palette-baseline color for ``index``, cycling
+        if ``index`` exceeds the baseline length (same as get_qcolor's
+        cycling behaviour)."""
+        if not self._palette_baseline:
+            return QColor(255, 255, 255)
+        return self._palette_baseline[index % len(self._palette_baseline)]
+
+    def _compute_customized(self) -> bool:
+        if len(self._colors) != len(self._palette_baseline):
+            # Different length means some component slot has no baseline
+            # counterpart of identical position — treat as customized.
+            return True
+        for cur, base in zip(self._colors, self._palette_baseline):
+            if cur.rgb() != base.rgb():
+                return True
+        return False
+
+    def _update_customization(self, new_state: bool | None = None) -> None:
+        """Recompute (or take given) customisation flag and emit if changed."""
+        if new_state is None:
+            new_state = self._compute_customized()
+        if new_state != self._customized:
+            self._customized = new_state
+            self.sigCustomizationChanged.emit(new_state)
+
+    # ── color accessors ──────────────────────────────────────────────
     def get_qcolor(self, index: int) -> QColor:
         """Get QColor for a component index (cycles if index > len)."""
         if not self._colors:
@@ -196,13 +284,19 @@ class ComponentColorManager(QObject):
         return (c.red(), c.green(), c.blue(), 255)
 
     def set_color(self, index: int, color: QColor):
-        """Update color and notify all listeners."""
+        """Update color and notify all listeners.
+
+        Also recomputes the customisation status: if the new color makes
+        the manager state diverge from (or re-converge with) the active
+        palette baseline, :attr:`sigCustomizationChanged` fires.
+        """
         # Ensure list is long enough
         while len(self._colors) <= index:
             self._colors.append(QColor(255, 255, 255))
 
         self._colors[index] = color
         self.sigColorChanged.emit(index, color)
+        self._update_customization()
 
     def set_color_rgb(self, index: int, *args):
         """Set color using RGB values.
@@ -244,8 +338,8 @@ def create_palette_selector(
     """
     if tooltip is None:
         tooltip = (
-            "Default component-colour palette for new components.\n"
-            "Per-component colour picks (and colours loaded from .preset) "
+            "Default component-color palette for new components.\n"
+            "Per-component color picks (and colors loaded from .preset) "
             "override this."
         )
 
@@ -281,5 +375,32 @@ def create_palette_selector(
                 combo_.blockSignals(False)
 
         color_manager.sigPaletteChanged.connect(_sync)
+
+        # Mark the currently-selected item with " (customized)" whenever the
+        # user has modified any per-component color away from the active
+        # palette's baseline. Other items always show their canonical label.
+        # We reset ALL item texts on every update so switching palettes
+        # never leaves a stale "(customized)" tag on a previously-active
+        # entry. blockSignals around setItemText prevents the currentIndexChanged
+        # cascade from re-triggering set_palette.
+        def _refresh_customization(is_customized: bool, combo_=combo):
+            combo_.blockSignals(True)
+            try:
+                for i in range(combo_.count()):
+                    name = combo_.itemData(i)
+                    if name is None:
+                        continue
+                    base = PALETTE_LABELS.get(name, name)
+                    combo_.setItemText(i, f"{base} (customized)"
+                                       if is_customized and i == combo_.currentIndex()
+                                       else base)
+            finally:
+                combo_.blockSignals(False)
+
+        color_manager.sigCustomizationChanged.connect(_refresh_customization)
+        # Initialise — show the current state on first render (handles the
+        # case where the manager was already customized when the selector
+        # was constructed, e.g. after preset load).
+        _refresh_customization(color_manager.is_customized)
 
     return label, combo

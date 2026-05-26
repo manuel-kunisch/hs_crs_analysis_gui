@@ -43,7 +43,7 @@ With a full Python installation, install the package in an activated environment
 
 ```bash
 pip install hs-mosaic                  # CPU-only
-pip install "hs-mosaic[gpu]"           # adds CPU PyTorch backends
+pip install "hs-mosaic[torch]"         # adds CPU PyTorch backends (not GPU)
 # pip install -e .                     # editable install from a clone
 ```
 

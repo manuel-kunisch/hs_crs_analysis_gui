@@ -818,7 +818,9 @@ def main(argv: list[str] | None = None) -> int:
     set_darkmode(app)
     main_app = MainApplication()
     try:
-        main_app.set_data('./example_data/2016_05_13_Nematode_K11_60mW_816,7nm_60mW_1064nm_PMT804_HyperwaveVar.mat_COR_Channel1.tif')
+        ...
+        # set default data directory
+        # main_app.set_data('./example_data/2016_05_13_Nematode_K11_60mW_816,7nm_60mW_1064nm_PMT804_HyperwaveVar.mat_COR_Channel1.tif')
     except FileNotFoundError as e:
         logger.error(f"Could not load example data: {e}")
 

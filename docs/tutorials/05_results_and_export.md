@@ -12,25 +12,36 @@ Each component uses a color shared with the ROI manager. Changing the component 
 
 ### Default colour palette
 
-Since v0.9.3, new sessions inter alia provide the **Okabe-Ito** 8-colour palette for components 1–8. This palette is designed to remain distinguishable under the common forms of colour vision deficiency (protanopia, deuteranopia) (Wong, *Nat. Methods* **8**, 441 (2011)).
+Since v0.9.3, new sessions use the **Magenta–Cyan–Yellow** palette as the default for components 1–3, with five supplementary colours filling slots 4–8. The magenta + cyan + yellow trio gives the highest mutual contrast on a black composite background of any three-colour combination, each of the three additive secondaries lights up two of three RGB primaries, so the three colours are simultaneously bright AND maximally separated in additive-mixing space.
 
 ![Palette dropdown in the result viewer toolbar (next to Save Histogram and Spectra Preset) and the matching dropdown in the ROI Manager — both stay in sync and switch the active component-colour palette](../assets/images/05_color_blind_preset.png)
 
-Another palette, called **High contrast (magenta–green, composite-optimised)**, is also available for cases where the composite has many overlapping components on a dark background and the colocalisation signal needs to pop. The classic RGB palette is still there as a legacy option.
-
 *The **Palette** dropdown shown above is bidirectionally synced via the shared component-colour manager. Switching one updates the other instantly, and the choice is saved into the application JSON preset.*
 
-Three palettes ship out of the box:
+Four palettes ship out of the box:
 
 | Palette | When to use |
 |---|---|
-| **Color-blind safe (Okabe-Ito)** — default | Publication figures, presentations, mixed audiences. Designed for protanopia and deuteranopia. |
-| **High contrast (magenta–green, composite-optimised)** | When the composite has multiple overlapping components on a dark background and you want the colocalisation signal (magenta + green → white) to pop. Brighter than Okabe-Ito but stays colour-blind aware. |
-| **Classic RGB (legacy)** | Backwards compatibility with HS-MOSAIC ≤ 0.9.2 and with audiences who specifically expect component 1 = red, 2 = green, 3 = blue. Not colour-blind safe. |
+| **Magenta–Cyan–Yellow (max contrast)** — default | General use, particularly for additive composites on dark backgrounds. Highest three-way contrast of any built-in palette. |
+| **High contrast (magenta–green, composite-optimised)** | When you specifically want the magenta + green colocalisation signal (the classic two-colour fluorescence overlay → white) to pop. Also colour-blind aware. |
+| **Color-blind safe (Okabe-Ito)** | Publication figures aimed at a mixed audience where colour-vision deficiency is a concern. Designed for protanopia and deuteranopia (Wong, *Nat. Methods* **8**, 441 (2011)). Slightly less vivid on dark backgrounds than the two above. |
+| **Classic RGB (legacy)** | Backwards compatibility with HS-MOSAIC ≤ 0.9.2 and audiences who specifically expect component 1 = red, 2 = green, 3 = blue. Not colour-blind safe. |
 
 To switch palette, use the **Palette** dropdown in the result-viewer toolbar (next to **Save Histogram and Spectra Preset**) or the matching dropdown in the **ROI Manager** (next to **Load Lookup Table and Spectra Preset**). Both selectors share the same underlying state — changing one updates the other automatically. The selection is saved with the application JSON preset (`Save Preset`) and restored on load.
 
 Per-component colour picks made through the colour buttons in the ROI Manager always override the palette default, so existing analyses that explicitly chose colours are unaffected when the palette is switched.
+
+### Customising palette colours
+
+When you modify any component colour with the colour-picker buttons in the ROI Manager (or via a preset that loaded explicit colours), the **Palette** dropdown reflects this by appending **`(customized)`** to the current entry — for example *"Magenta–Cyan–Yellow (max contrast) (customized)"*. This is a visual indicator that the visible colour set has diverged from the palette's canonical baseline.
+
+The custom colours themselves are preserved across `Save Preset` / `Load Preset`: the preset stores both the palette name and every per-component colour explicitly. When the preset is reloaded:
+
+1. The palette is applied first (sets all components to the palette baseline).
+2. The per-component colours from the preset are then applied on top (restoring any explicit overrides).
+3. The dropdown automatically re-detects that colours have diverged from the baseline and re-shows `(customized)`.
+
+To restore the palette baseline (i.e. undo all per-component edits in one go), simply re-select the same palette in the dropdown — re-applying a palette resets every slot to its baseline value and clears the `(customized)` tag.
 
 ### Adding a custom palette
 

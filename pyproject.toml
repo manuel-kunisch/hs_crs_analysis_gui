@@ -9,7 +9,7 @@ description = "Seeded multivariate analysis (NNMF / NNLS) of hyperspectral and m
 readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 authors = [
     { name = "Manuel Kunisch", email = "mkunisch@physik.uni-bielefeld.de" },
 ]
@@ -40,6 +40,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
@@ -59,11 +60,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# CPU-only PyTorch backend (NNMF multiplicative-updates + FISTA NNLS on CPU).
-# Users who want CUDA must install the matching torch wheel from
-# https://pytorch.org/get-started/locally/ themselves; PyPI hosts CPU torch
-# but not the CUDA variants.
-gpu = ["torch>=2.0"]
+# Optional PyTorch backend — adds the multiplicative-updates NNMF and
+# FISTA NNLS paths. PyPI only hosts CPU PyTorch, so on its own this extra
+# does NOT enable GPU acceleration; it just makes the PyTorch backend
+# available on CPU (useful for large fixed-H NNLS mosaics, where FISTA
+# vectorises across pixels and beats SciPy's per-pixel active-set solver).
+#
+# For real NVIDIA-CUDA GPU acceleration, do NOT use this extra. Instead,
+# install the CUDA-enabled torch wheel from PyTorch's index FIRST and
+# then `pip install hs-mosaic` (which has no hard torch dependency):
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#   pip install hs-mosaic
 torch = ["torch>=2.0"]
 dev = [
     "pyinstaller>=6.0",

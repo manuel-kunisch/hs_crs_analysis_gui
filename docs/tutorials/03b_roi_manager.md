@@ -57,7 +57,7 @@ Loads a result-viewer `.preset` file created from the result viewer with **Save 
 
 ![Load Lookup Table and Spectra Preset button in the ROI manager toolbar](../assets/images/03b_load_histogram_and_spectra_preset.png)
 
-This is the canonical way to replay a finalised analysis on a new FOV of the same sample. The `.preset` carries the colour scheme, the histogram levels, and the spectra used in the previous analysis. Loading it before running a new analysis means the next FOV starts from the same display state and the same spectral basis as the reference one, which is what makes results visually and quantitatively comparable across fields.
+This is the canonical way to replay a finalised analysis on a new FOV of the same sample. The `.preset` carries the color scheme, the histogram levels, and the spectra used in the previous analysis. Loading it before running a new analysis means the next FOV starts from the same display state and the same spectral basis as the reference one, which is what makes results visually and quantitatively comparable across fields.
 
 When the preset is loaded, the GUI asks how it should be applied:
 
@@ -67,6 +67,18 @@ When the preset is loaded, the GUI asks how it should be applied:
 Use `LUTs Only` when you already have the correct ROI/component setup and only want to reuse the visual style. Use `LUTs + ROIs` when the preset should also transfer spectral seeds into the ROI Manager.
 
 Spectra loaded from a `.preset` enter the table as **fixed dummy seeds** — they do not depend on any drawn region in the current image. If the saved spectral axis differs from the axis of the currently loaded dataset, the spectra are interpolated (and extrapolated at the edges) onto the current axis, so the same `.preset` can be reused across acquisitions with slightly different spectral windows.
+
+`Palette`
+
+Switches the **default component-color palette** for the current session. Four palettes ship out of the box — the default magenta-cyan-yellow trio (best contrast on dark composites), a high-contrast magenta-green palette, the color-blind-safe Okabe-Ito palette, and a legacy classic-RGB cycle. See [Default color palette](05_results_and_export.md#default-color-palette) in the results page for the full table of palettes and when to use each.
+
+The same dropdown also appears in the result-viewer toolbar (next to **Save Histogram and Spectra Preset**). The two selectors are **bidirectionally synced**: picking a palette in one updates the other instantly, because both read from the shared component-color manager. The selection is persisted in the application JSON preset (`Save Preset`) and restored on load.
+
+**Per-component color edits override the palette.** Clicking the color swatch in any ROI row's `Color` column (see [Table columns](#table-columns) below) opens a color picker. When the picked color differs from the palette's baseline value for that component, both **Palette** dropdowns append **`(customized)`** to the current entry, for example *"Magenta–Cyan–Yellow (max contrast) (customized)"*,  as a visual reminder that the visible color set has diverged from the palette default. The custom color itself is persisted in the application JSON preset alongside the palette name, so a customised palette round-trips through `Save Preset` / `Load Preset` correctly.
+
+To restore the palette baseline (i.e. undo every per-component color edit in one click), re-select the same palette in the dropdown. Re-applying the active palette resets all component colors to their baseline values and clears the `(customized)` tag in both selectors.
+
+Custom palettes can be added by editing the `PALETTES` and `PALETTE_LABELS` dictionaries in `hs_mosaic/widgets/color_manager.py. Your new palette then appears in both dropdowns automatically. See [Adding a custom palette](05_results_and_export.md#adding-a-custom-palette) for the recipe.
 
 ## Row types
 
@@ -100,7 +112,9 @@ The component/ROI label. This name is propagated to plots, result labels, and Fi
 
 `Color`
 
-The component color. This controls ROI display, spectrum plot color, result component color, composite colors, and exported LUT colors.
+The component color. This controls ROI display, spectrum plot color, result component color, composite colors, and exported LUT colors. Click the swatch to open a color picker for that one component; the change is applied immediately to every widget that uses the color.
+
+The initial value comes from the active **Palette** (see the *Palette* dropdown described under [Top buttons](#top-buttons)). Picking a color that differs from the palette's baseline for that component tags the current palette as `(customized)` in both palette dropdowns; the custom color is saved with the application JSON preset. Re-selecting the same palette in the dropdown resets every component's color back to the palette baseline.
 
 `Resonance`
 

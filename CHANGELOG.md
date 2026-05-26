@@ -21,22 +21,40 @@ this project uses [Semantic Versioning](https://semver.org/).
   palette* in the docs.
 
 ### Changed
-- **Default component-colour palette switched to High contrast (magenta-green).**
-  Fresh sessions and new analyses now use the new magenta/green/sky-blue
-  palette by default instead of red / green / blue. The choice prioritises
-  composite visibility on dark backgrounds while still providing the
-  colour-blind-friendly magenta + green colocalisation signal. Per-component
-  colour choices made with the colour pickers (and colours loaded from any
+- **Default component-colour palette switched to Magenta–Cyan–Yellow.**
+  Fresh sessions and new analyses now use the additive-secondary trio
+  (magenta + cyan + yellow) as components 1, 2, 3 by default, with five
+  supplementary colours filling slots 4–8. This palette gives the highest
+  three-way contrast on a black composite background of any three-colour
+  combination. The previous "High contrast" magenta-green palette and the
+  Okabe-Ito palette remain available in the dropdown. Per-component colour
+  choices made with the colour pickers (and colours loaded from any
   `.preset`) always override the palette and are not affected.
-- **Minimum Python requirement raised from 3.10 to 3.11.** Python 3.10 was
-  documented as supported in 0.9.2 but several runtime paths in the
-  application require 3.11 features. `pyproject.toml` now declares
-  `requires-python = ">=3.11"` and the 3.10 classifier has been removed.
+- **Palette dropdown now shows `(customized)` when colours diverge from the
+  active palette's baseline.** Modifying any component colour via the
+  picker tags the current palette in both dropdowns as e.g.
+  *"Magenta–Cyan–Yellow (max contrast) (customized)"*; switching palette
+  or re-applying the same palette resets the tag. The custom colour values
+  themselves persist through preset save/load via the existing ROI and
+  histogram serialisation, so a customised palette round-trips through
+  `Save Preset` / `Load Preset` correctly.
+- **Confirmed minimum Python version is 3.10.**
 - Renamed the Windows launcher from `hs_mosaic.bat` to `hs-mosaic.bat` for
   consistency with the PyPI package name (`hs-mosaic`) and the console-script
   command (`hs-mosaic`).
 - README and docs now use absolute URLs for embedded images and cross-links
   so they render correctly on the PyPI project page in addition to GitHub.
+- **Renamed the optional `[gpu]` install extra to `[torch]`.** The previous
+  name was misleading: PyPI only hosts CPU PyTorch, so `pip install
+  "hs-mosaic[gpu]"` never gave GPU acceleration — it just added the
+  PyTorch backend running on CPU. The new `[torch]` name reflects what is
+  actually installed. For real NVIDIA-CUDA GPU acceleration, the
+  recommended path is now to install CUDA-enabled torch from PyTorch's
+  index **first**, then `pip install hs-mosaic`; see the *CUDA-enabled
+  PyTorch* section of the installation docs. **Breaking change for v0.9.2
+  users who scripted `pip install "hs-mosaic[gpu]"`** — they need to
+  switch to `[torch]` or drop the extra entirely. A one-command recovery
+  path is documented in README → Install → PyPI.
 
 ### Backwards compatibility
 - Application JSON presets saved before v0.9.3 do **not** carry a

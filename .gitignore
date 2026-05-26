@@ -13,3 +13,23 @@ __pycache__/
 *.egg-info/
 *.egg
 /wheelhouse/
+
+# ── Local-only files not part of the project ─────────────────────────
+# Personal reference PDFs kept alongside the repo
+/github_pages_tutorial_setup.pdf
+/publication_documentation_strategy.pdf
+
+# Orphaned ad-hoc test script (never wired into a test suite)
+/test_roi_suggestion.py
+
+# Helper scripts produced during AI-assisted refactors
+# (delete these lines if you want to start tracking specific scripts;
+# you can also commit a single one with `git add -f <path>`)
+/scripts/
+
+# Claude Code session-local settings
+.claude/
+
+# Working / intermediate doc asset files (replaced by the .png/.gif versions)
+/docs/assets/images/03_seed_building_flow.pdf
+/docs/assets/images/03_seed_building_flow_fast_final.svg

@@ -1,5 +1,8 @@
 # HS-MOSAIC
 
+[![PyPI version](https://img.shields.io/pypi/v/hs-mosaic?label=PyPI)](https://pypi.org/project/hs-mosaic/)
+[![Python versions](https://img.shields.io/pypi/pyversions/hs-mosaic)](https://pypi.org/project/hs-mosaic/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20273076.svg)](https://doi.org/10.5281/zenodo.20273076)
 
 **HS-MOSAIC (HyperSpectral Multivariate Optical Analysis Components) is a GUI for fast reconstruction and unmixing of hyperspectral imaging data — PCA, seeded NNMF and fixed-H NNLS, with GPU-accelerated backends and reproducible presets.**
@@ -61,8 +64,17 @@ mkdocs serve
 The package is published on PyPI as `hs-mosaic`. Install in a virtual environment with pip:
 
 ```bash
-pip install hs-mosaic
+pip install hs-mosaic                    # CPU-only
+pip install "hs-mosaic[gpu]"             # adds CPU PyTorch (NNMF MU + FISTA-NNLS backends)
 ```
+
+For NVIDIA CUDA acceleration, install a matching CUDA-enabled PyTorch wheel from PyTorch's index *after* the package install — PyPI only hosts CPU torch:
+
+```bash
+pip install --upgrade --force-reinstall torch --index-url https://download.pytorch.org/whl/cu124
+```
+
+Replace `cu124` with the URL matching your driver (cu118, cu121, cu126, etc. per the [PyTorch selector](https://pytorch.org/get-started/locally/)).
 
 ### From source:
 Detailed installation guide and platform-specific notes: [docs/installation.md](docs/installation.md).

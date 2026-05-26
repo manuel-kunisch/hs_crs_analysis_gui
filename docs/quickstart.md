@@ -39,7 +39,15 @@ With the standalone Windows `.exe`, extract the whole portable zip and double-cl
 
 Keep the `.exe` next to its `_internal` folder.
 
-With a full Python installation, start from an activated environment after `pip install hs-mosaic` (or `pip install -e .` from a clone):
+With a full Python installation, install the package in an activated environment first:
+
+```bash
+pip install hs-mosaic                  # CPU-only
+pip install "hs-mosaic[gpu]"           # adds CPU PyTorch backends
+# pip install -e .                     # editable install from a clone
+```
+
+Then launch the GUI:
 
 ```bash
 hs-mosaic                    # console / shortcut launcher

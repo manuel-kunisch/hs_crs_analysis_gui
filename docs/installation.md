@@ -65,16 +65,14 @@ source .venv/bin/activate     # Linux / macOS
 
 Then install the package by one of two routes.
 
-### 3a. From PyPI (recommended — once published)
+### 3a. From PyPI (recommended)
 
 ```bash
 pip install hs-mosaic                 # CPU-only
 pip install "hs-mosaic[gpu]"          # adds CPU PyTorch (NNMF MU + FISTA-NNLS backends)
 ```
 
-!!! note "PyPI availability"
-    Publishing of `hs-mosaic` to PyPI is in progress. Until the first PyPI release is
-    live, install from a git clone (Option 3b) — the resulting environment is identical.
+The project page is at [pypi.org/project/hs-mosaic](https://pypi.org/project/hs-mosaic/). On macOS/zsh the quotes around `"hs-mosaic[gpu]"` are required (zsh treats `[` as a glob); on Windows and Linux/bash they are harmless.
 
 ### 3b. From a git clone
 

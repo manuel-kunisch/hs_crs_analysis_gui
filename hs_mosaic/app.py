@@ -555,7 +555,14 @@ class MainApplication(QtWidgets.QMainWindow):
             "histogram_states": self.result_viewer_widget.export_histogram_states_for_preset(
                 self.result_viewer_widget.histogram_states
             ),
-            "labels": self.result_viewer_widget.custom_labels
+            "labels": self.result_viewer_widget.custom_labels,
+
+            # Active component-colour palette name, e.g. "okabe_ito" (default
+            # since v0.9.3, color-blind safe) or "classic_rgb" (legacy).
+            # Legacy presets without this key are restored as "classic_rgb"
+            # so they keep their pre-v0.9.3 visual identity. See
+            # hs_mosaic.widgets.color_manager for the palette definitions.
+            "palette_name": self.color_manager.palette_name,
         }
 
         # open a file dialog to save the preset
@@ -574,6 +581,23 @@ class MainApplication(QtWidgets.QMainWindow):
             preset = json.load(f)
 
         # ---- ORDER MATTERS ----
+        # 0) Component-colour palette. Apply BEFORE any colour-bearing state
+        # (histograms, ROI colours, composite LUTs) so subsequent stages
+        # either accept the new palette or override it with their own saved
+        # colours, but never start from the wrong default palette.
+        #
+        # Legacy presets (pre v0.9.3) do not carry a `palette_name` key —
+        # those sessions ran on the saturated RGB cycle, so we restore that
+        # to keep their visual identity. New presets always serialise their
+        # palette name explicitly.
+        from hs_mosaic.widgets.color_manager import LEGACY_PRESET_PALETTE, PALETTES
+        palette_name = preset.get("palette_name", LEGACY_PRESET_PALETTE)
+        if palette_name in PALETTES:
+            try:
+                self.color_manager.set_palette(palette_name)
+            except Exception as exc:
+                logger.warning("Failed to apply preset palette %r: %s", palette_name, exc)
+
         # 1) load image (so n_frames/shape exist)
         image_loaded = self._try_load_preset_image(preset, path)
 

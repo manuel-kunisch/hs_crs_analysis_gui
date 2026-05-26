@@ -162,6 +162,11 @@ class ROIManager(QtCore.QObject):
         load_preset_button.setIcon(button_style.standardIcon(QtWidgets.QStyle.SP_FileIcon))
         load_preset_button.clicked.connect(self.load_presets)
 
+        # Palette selector — bidirectionally synced with the matching selector
+        # in the result-viewer toolbar
+        from hs_mosaic.widgets.color_manager import create_palette_selector
+        palette_label, palette_combobox = create_palette_selector(self.color_manager)
+
         # add buttons on top of the table
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addWidget(add_line_roi_button, alignment=QtCore.Qt.AlignCenter)
@@ -169,6 +174,12 @@ class ROIManager(QtCore.QObject):
         button_layout.addWidget(suggest_rois_button, alignment=QtCore.Qt.AlignCenter)
         button_layout.addWidget(load_spectra_button, alignment=QtCore.Qt.AlignCenter)
         button_layout.addWidget(load_preset_button, alignment=QtCore.Qt.AlignCenter)
+        palette_layout = QtWidgets.QHBoxLayout()
+        palette_layout.addWidget(palette_label, alignment=QtCore.Qt.AlignCenter)
+        palette_layout.addWidget(palette_combobox, alignment=QtCore.Qt.AlignCenter)
+        palette_widget = QtWidgets.QWidget()
+        palette_widget.setLayout(palette_layout)
+        button_layout.addWidget(palette_widget, alignment=QtCore.Qt.AlignCenter)
         button_widget = QtWidgets.QWidget()
         button_widget.setLayout(button_layout)
         self.roi_table_dock.addWidget(button_widget)

@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hs-mosaic"
-version = "0.9.2"
+version = "0.9.3"
 description = "Seeded multivariate analysis (NNMF / NNLS) of hyperspectral and multispectral microscopy data, with an interactive Qt GUI."
 readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "Manuel Kunisch", email = "mkunisch@physik.uni-bielefeld.de" },
 ]
@@ -40,7 +40,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Bio-Informatics",

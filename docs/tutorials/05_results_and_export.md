@@ -10,7 +10,64 @@ The composite image fuses component maps into a false-color overview. This is us
 
 Each component uses a color shared with the ROI manager. Changing the component color updates the composite and the corresponding spectral line.
 
-> Screenshot placeholder: result viewer composite overview with labeled components.
+### Default colour palette
+
+Since v0.9.3, new sessions inter alia provide the **Okabe-Ito** 8-colour palette for components 1–8. This palette is designed to remain distinguishable under the common forms of colour vision deficiency (protanopia, deuteranopia) (Wong, *Nat. Methods* **8**, 441 (2011)).
+
+![Palette dropdown in the result viewer toolbar (next to Save Histogram and Spectra Preset) and the matching dropdown in the ROI Manager — both stay in sync and switch the active component-colour palette](../assets/images/05_color_blind_preset.png)
+
+Another palette, called **High contrast (magenta–green, composite-optimised)**, is also available for cases where the composite has many overlapping components on a dark background and the colocalisation signal needs to pop. The classic RGB palette is still there as a legacy option.
+
+*The **Palette** dropdown shown above is bidirectionally synced via the shared component-colour manager. Switching one updates the other instantly, and the choice is saved into the application JSON preset.*
+
+Three palettes ship out of the box:
+
+| Palette | When to use |
+|---|---|
+| **Color-blind safe (Okabe-Ito)** — default | Publication figures, presentations, mixed audiences. Designed for protanopia and deuteranopia. |
+| **High contrast (magenta–green, composite-optimised)** | When the composite has multiple overlapping components on a dark background and you want the colocalisation signal (magenta + green → white) to pop. Brighter than Okabe-Ito but stays colour-blind aware. |
+| **Classic RGB (legacy)** | Backwards compatibility with HS-MOSAIC ≤ 0.9.2 and with audiences who specifically expect component 1 = red, 2 = green, 3 = blue. Not colour-blind safe. |
+
+To switch palette, use the **Palette** dropdown in the result-viewer toolbar (next to **Save Histogram and Spectra Preset**) or the matching dropdown in the **ROI Manager** (next to **Load Lookup Table and Spectra Preset**). Both selectors share the same underlying state — changing one updates the other automatically. The selection is saved with the application JSON preset (`Save Preset`) and restored on load.
+
+Per-component colour picks made through the colour buttons in the ROI Manager always override the palette default, so existing analyses that explicitly chose colours are unaffected when the palette is switched.
+
+### Adding a custom palette
+
+The palette registry is a plain Python dictionary in `hs_mosaic/widgets/color_manager.py`. Adding a new palette is a two-line edit — your palette then appears in both **Palette** dropdowns automatically, gets persisted in the application JSON preset, and round-trips through preset save/load like the built-in ones.
+
+Open `hs_mosaic/widgets/color_manager.py` and add an entry to the two top-level dicts:
+
+```python
+# 1. Define the colours (any number; the GUI cycles through them for
+#    components beyond the palette length).
+PALETTES: dict[str, list[str]] = {
+    "okabe_ito":   [ ... ],   # existing entry
+    "classic_rgb": [ ... ],   # existing entry
+    "my_lab_colors": [        # <-- your new palette
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+    ],
+}
+
+# 2. Give it a display label for the GUI dropdown.
+PALETTE_LABELS: dict[str, str] = {
+    "okabe_ito":     "Color-blind safe (Okabe-Ito)",
+    "classic_rgb":   "Classic RGB (legacy)",
+    "my_lab_colors": "My lab colours",   # <-- new label
+}
+```
+
+Restart HS-MOSAIC and **My lab colours** is in both palette dropdowns. Selecting it sets components 1–N to the listed hex colours, and `Save Preset` records `"palette_name": "my_lab_colors"` in the JSON so the choice survives across sessions and across machines that have the same `color_manager.py`.
+
+Notes:
+
+- Colour specs accept hex strings (`"#1f77b4"`), Qt named colours (`"orange"`), or RGB tuples — anything `QColor` can parse.
+- If you want your custom palette to be the default for new sessions on your machine, also change `DEFAULT_PALETTE = "my_lab_colors"` near the top of the same file.
+- Custom palettes do not need a code release — you can ship them as a small patch of `color_manager.py` to collaborators, or maintain a fork.
 
 ## Channel Preview
 

@@ -168,6 +168,14 @@ class CompositeImageViewWidget(QMainWindow):
         save_seed_mode_label = QLabel("Mode:")
         save_seeds_button.clicked.connect(lambda: self.save_preset(mode=save_seed_mode_combobox.currentText().lower()))
 
+        # Palette selector — switches the default component-colour palette.
+        # New default since v0.9.3 is Okabe-Ito (color-blind safe);
+        # "Classic RGB" is the legacy pre-v0.9.3 palette. Bidirectional sync
+        # with any other palette selector built from the same color_manager
+        # (e.g. the one in the ROI Manager) is handled inside the helper.
+        from hs_mosaic.widgets.color_manager import create_palette_selector
+        palette_label, palette_combobox = create_palette_selector(self.color_manager)
+
         promote_seed_button = QPushButton("Import Result")
         promote_seed_button.setToolTip("Import one NNMF result component into the ROI manager as a dummy seed ROI.")
         promote_seed_button.setEnabled(False)
@@ -298,6 +306,8 @@ class CompositeImageViewWidget(QMainWindow):
         composite_controls_layout.addWidget(save_seed_mode_label)
         composite_controls_layout.addWidget(save_seed_mode_combobox)
         composite_controls_layout.addStretch(1)
+        composite_controls_layout.addWidget(palette_label)
+        composite_controls_layout.addWidget(palette_combobox)
         composite_controls_layout.addWidget(reset_levels_button)
 
         import_seed_title = QLabel("Import Into ROI Manager")

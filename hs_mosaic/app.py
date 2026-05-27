@@ -573,6 +573,16 @@ class MainApplication(QtWidgets.QMainWindow):
             # so they keep their pre-v0.9.3 visual identity. See
             # hs_mosaic.widgets.color_manager for the palette definitions.
             "palette_name": self.color_manager.palette_name,
+
+            # Performance-column tunables (v0.9.4+). All three default to
+            # values that match pre-v0.9.4 numerical behaviour byte-for-byte,
+            # so legacy presets that lack these keys produce the exact same
+            # analysis result they did under v0.9.2 / v0.9.3.
+            "performance_settings": {
+                "w_seed_downsample_factor": int(self.analysis_manager.mv_analyzer.w_seed_downsample_factor),
+                "torch_nmf_patience":        int(self.analysis_manager.mv_analyzer.torch_nmf_patience),
+                "torch_nmf_use_compile":     bool(self.analysis_manager.mv_analyzer.torch_nmf_use_compile),
+            },
         }
 
         # open a file dialog to save the preset
@@ -607,6 +617,31 @@ class MainApplication(QtWidgets.QMainWindow):
                 self.color_manager.set_palette(palette_name)
             except Exception as exc:
                 logger.warning("Failed to apply preset palette %r: %s", palette_name, exc)
+
+        # 0b) Performance tunables (v0.9.4+). Apply BEFORE the analyzer is
+        # used so the loaded settings are in effect for any subsequent
+        # W-seed estimation or NMF runs in this session. Legacy presets
+        # that lack a `performance_settings` block fall back to the
+        # behavior-preserving defaults (downsample=1, patience=1,
+        # use_compile=False) so v0.9.2 / v0.9.3 presets reproduce
+        # byte-for-byte.
+        perf = preset.get("performance_settings", {})
+        mv = self.analysis_manager.mv_analyzer
+        try:
+            mv.set_w_seed_downsample_factor(int(perf.get("w_seed_downsample_factor", 1)))
+            mv.set_nnmf_patience(int(perf.get("torch_nmf_patience", 1)))
+            mv.set_nnmf_use_compile(bool(perf.get("torch_nmf_use_compile", False)))
+        except Exception as exc:
+            logger.warning("Failed to apply preset performance settings: %s", exc)
+        # Reflect the loaded values in the GUI spinboxes / checkbox so the
+        # user can see the active performance settings without re-opening
+        # the Analysis panel widgets.
+        try:
+            self.analysis_manager.w_seed_ds_spinbox.setValue(int(mv.w_seed_downsample_factor))
+            self.analysis_manager.nnmf_patience_spinbox.setValue(int(mv.torch_nmf_patience))
+            self.analysis_manager.nnmf_use_compile_check.setChecked(bool(mv.torch_nmf_use_compile))
+        except Exception:
+            pass  # widgets may not exist if analysis_manager wasn't fully built
 
         # 1) load image (so n_frames/shape exist)
         image_loaded = self._try_load_preset_image(preset, path)
@@ -725,15 +760,20 @@ class MainApplication(QtWidgets.QMainWindow):
         else:
             self.analysis_manager.mv_analyzer.set_nnmf_solver(nnmf_solver)
 
-        nnmf_backend = str(preset.get("nnmf_backend", "auto")).lower()
-        if nnmf_backend not in {"auto", "cpu", "gpu"}:
-            nnmf_backend = "auto"
+        nnmf_backend = str(preset.get("nnmf_backend", "gpu")).lower()
+        # 'auto' is a legacy alias from v0.9.3 and earlier where the
+        # backend dropdown had three items (Automatic, CPU only, Prefer GPU).
+        # Functionally identical to 'gpu', so it maps cleanly.
+        if nnmf_backend == "auto":
+            nnmf_backend = "gpu"
+        if nnmf_backend not in {"cpu", "gpu"}:
+            nnmf_backend = "gpu"
         if self.analysis_manager.nnmf_backend_dropdown is not None:
             backend_index = self.analysis_manager.nnmf_backend_dropdown.findData(nnmf_backend)
             if backend_index >= 0:
                 self.analysis_manager.nnmf_backend_dropdown.setCurrentIndex(backend_index)
             else:
-                self.analysis_manager.mv_analyzer.set_nnmf_backend_preference("auto")
+                self.analysis_manager.mv_analyzer.set_nnmf_backend_preference("gpu")
             self.analysis_manager._sync_nnmf_backend_controls()
         else:
             self.analysis_manager.mv_analyzer.set_nnmf_backend_preference(nnmf_backend)

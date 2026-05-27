@@ -58,7 +58,7 @@ In the GUI:
 
 1. Choose **NNMF**.
 2. Set **Solver** to **Multiplicative Updates (mu)**.
-3. Set **Backend** to **Automatic** or **Prefer GPU**.
+3. Set **Backend** to **Prefer GPU** (the default).
 4. Run the analysis.
 
 The **Coordinate Descent (cd)** solver always uses the scikit-learn CPU backend. This is expected behavior.
@@ -83,7 +83,7 @@ The `.exe` was moved away from its `_internal` folder, or an executable from the
 
 **The CUDA package opens but does not use the GPU.**
 
-Check that the computer has an NVIDIA GPU and a recent NVIDIA driver. In the GUI, use the **Multiplicative Updates (mu)** solver and **Automatic** or **Prefer GPU** backend. The **Coordinate Descent (cd)** solver is CPU-only.
+Check that the computer has an NVIDIA GPU and a recent NVIDIA driver. In the GUI, use the **Multiplicative Updates (mu)** solver and the **Prefer GPU** backend (default since v0.9.4). The **Coordinate Descent (cd)** solver is CPU-only regardless of backend setting.
 
 **The CUDA package is very large.**
 

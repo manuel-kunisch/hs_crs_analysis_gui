@@ -58,7 +58,12 @@ A shortened preset looks like this:
   "num_components": 3,
   "analysis_method": "Fixed-H NNLS",
   "nnmf_solver": "mu",
-  "nnmf_backend": "auto",
+  "nnmf_backend": "gpu",
+  "performance_settings": {
+    "w_seed_downsample_factor": 1,
+    "torch_nmf_patience": 1,
+    "torch_nmf_use_compile": false
+  },
   "seed_init_settings": {
     "w_seed_mode": "NNLS abundance map",
     "overwrite_existing_w_from_h": true,

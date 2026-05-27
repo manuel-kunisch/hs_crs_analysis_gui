@@ -145,6 +145,8 @@ def solve_nmf_multiplicative_updates(
         track_error_every: int = 10,
         normalize_w_columns: bool = False,
         seed: int = 0,
+        patience: int = 3,
+        use_compile: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     """
     Factorize X ≈ W @ H with W >= 0 and H >= 0 using multiplicative updates.
@@ -156,6 +158,31 @@ def solve_nmf_multiplicative_updates(
 
     This implementation uses dense matrix products and pointwise updates, so it
     can run on either CPU or CUDA through PyTorch.
+
+    Convergence
+    -----------
+    The reconstruction error is sampled every ``track_error_every`` iterations.
+    The solver declares convergence and stops early only after the relative
+    improvement has stayed at-or-below ``tol`` for ``patience`` *consecutive*
+    sampled iterations.
+
+    * ``patience=1`` (most aggressive): exits at the first below-tol check.
+      Fastest on smooth-converging data, but can exit prematurely on noisy
+      data where the relative-improvement curve dips below tol briefly and
+      then recovers.
+    * ``patience=3`` (default, robust): exits only after three consecutive
+      below-tol checks. A few iterations slower than ``patience=1`` on
+      well-behaved data, but immune to single-check noise dips.
+
+    Optional graph compilation
+    --------------------------
+    When ``use_compile=True``, the per-iteration W/H update body is wrapped in
+    ``torch.compile()`` to fuse the matmul + pointwise ops into single fused
+    kernels. Most beneficial on CUDA (~1.3-2x); modest on CPU (~1.2-1.5x);
+    inconsistent on MPS / XPU where PyTorch's compiler support is still
+    evolving. The first iteration pays a one-time compile cost (~5-10 s) that
+    amortises across all subsequent iterations and is well worth it for 4D
+    stacks where the same shape is processed many times.
     """
     if not torch_available():
         raise RuntimeError(f"PyTorch is not available: {_TORCH_IMPORT_ERROR}")
@@ -198,36 +225,78 @@ def solve_nmf_multiplicative_updates(
 
     history: list[float] = []
     prev_error = None
+    patience_hits = 0
     track_error_every = max(int(track_error_every), 1)
+    patience = max(int(patience), 1)
+
+    # Build the per-iteration update function. Wrapping in torch.compile fuses
+    # the matmul + pointwise ops into single kernels on supported backends.
+    # The first call pays a one-shot compile cost; subsequent calls are fast.
+    def _mu_step_eager(w_t, h_t, x_t, eps_v: float, do_w: bool, do_h: bool):
+        if do_w:
+            hht = h_t @ h_t.T
+            xht = x_t @ h_t.T
+            w_t = w_t * (xht / (w_t @ hht + eps_v))
+        if do_h:
+            wtw = w_t.T @ w_t
+            wtx = w_t.T @ x_t
+            h_t = h_t * (wtx / (wtw @ h_t + eps_v))
+        return w_t, h_t
+
+    _mu_step = _mu_step_eager
+    compiled = False
+    if use_compile:
+        compile_fn = getattr(torch, "compile", None)
+        if compile_fn is not None:
+            try:
+                _mu_step = compile_fn(_mu_step_eager, mode="reduce-overhead", dynamic=False)
+                compiled = True
+                logger.info("torch.compile registered for MU step (mode=reduce-overhead).")
+            except Exception as exc:
+                logger.info("torch.compile registration failed (%s); running eager MU.", exc)
+                _mu_step = _mu_step_eager
+        else:
+            logger.debug("use_compile=True but torch.compile is not available in this PyTorch.")
 
     logger.info(
-        "Starting PyTorch NMF MU on %s with data=%s, components=%s, max_iter=%s, update_w=%s, update_h=%s.",
+        "Starting PyTorch NMF MU on %s with data=%s, components=%s, max_iter=%s, update_w=%s, update_h=%s, patience=%s, compiled=%s.",
         dev,
         tuple(x.shape),
         n_components,
         max_iter,
         update_w,
         update_h,
+        patience,
+        compiled,
     )
 
     # Multiplicative updates for W and H. The reconstruction error is sampled
-    # every few iterations and used as the stopping criterion.
+    # every few iterations and used as the stopping criterion. Convergence is
+    # declared only after ``patience`` consecutive below-tolerance samples, so
+    # a single noisy iteration cannot trigger an early exit.
     # Note: MU naturally drives entries toward zero to expose sparsity, so we do
-    # NOT clamp W/H to >= eps after each update — that would bias the factors
+    # NOT clamp W/H to >= eps after each update, that would bias the factors
     # away from true zeros. The eps lift on init above is enough to avoid the
     # zero-stuck-zero startup degeneracy.
+    converged_iter = None
     for iteration in range(1, int(max_iter) + 1):
-        # Update W: W_ij *= (X @ H^T)_ij / (W @ H @ H^T)_ij
-        if update_w:
-            hht = h @ h.T
-            xht = x @ h.T
-            w = w * (xht / (w @ hht + eps))
-
-        # Update H: H_ij *= (W^T @ X)_ij / (W^T @ W @ H)_ij
-        if update_h:
-            wtw = w.T @ w
-            wtx = w.T @ x
-            h = h * (wtx / (wtw @ h + eps))
+        try:
+            w, h = _mu_step(w, h, x, eps, update_w, update_h)
+        except Exception as exc:
+            # torch.compile can raise at first execution (e.g. Triton missing
+            # on a CUDA PyTorch build that wasn't built with the Inductor /
+            # Triton backend). Fall back to eager mode for the rest of the
+            # run instead of crashing the analysis.
+            if compiled and iteration <= 2:
+                logger.warning(
+                    "torch.compile execution failed at iter %s (%s). Falling back to eager MU.",
+                    iteration, exc,
+                )
+                _mu_step = _mu_step_eager
+                compiled = False
+                w, h = _mu_step(w, h, x, eps, update_w, update_h)
+            else:
+                raise
 
         if normalize_w_columns:
             scale = torch.clamp(torch.sum(w, dim=0, keepdim=True), min=eps)
@@ -242,13 +311,17 @@ def solve_nmf_multiplicative_updates(
             if prev_error is not None:
                 rel_improvement = (prev_error - current_error) / max(prev_error, eps)
                 if rel_improvement <= tol:
-                    logger.info(
-                        "PyTorch NMF MU converged at iter=%s with error=%s and rel_improvement=%s.",
-                        iteration,
-                        current_error,
-                        rel_improvement,
-                    )
-                    break
+                    patience_hits += 1
+                    if patience_hits >= patience:
+                        converged_iter = iteration
+                        logger.info(
+                            "PyTorch NMF MU converged at iter=%s with error=%s, rel_improvement=%s "
+                            "(below tol=%s for %s consecutive checks).",
+                            iteration, current_error, rel_improvement, tol, patience,
+                        )
+                        break
+                else:
+                    patience_hits = 0
             prev_error = current_error
 
     # Return NumPy arrays for the rest of the analysis pipeline.
@@ -264,5 +337,8 @@ def solve_nmf_multiplicative_updates(
         "history": history,
         "update_w": bool(update_w),
         "update_h": bool(update_h),
+        "patience": int(patience),
+        "converged": converged_iter is not None,
+        "compiled": bool(compiled),
     }
     return w_out, h_out, info

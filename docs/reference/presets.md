@@ -15,7 +15,7 @@ The main JSON preset is the most complete snapshot of a GUI session. Save it wit
 | Data | `image_path`, `binning_factor`, `current_slice_index` |
 | Physical units | `fov`, `unit` (nm / um / mm) |
 | Spectral axis | `wavenumber_widget` (source mode, unit, pump/Stokes settings, custom values, custom labels), `wavenumbers` (derived array) |
-| Analysis settings | `num_components`, `analysis_method`, `custom_initialization`, `nnmf_solver` (mu / cd), `nnmf_backend` (Automatic / CPU only / Prefer GPU), `nnmf_max_iter`, `nnls_max_iter` |
+| Analysis settings | `num_components`, `analysis_method`, `custom_initialization`, `nnmf_solver` (mu / cd), `nnmf_backend` (Prefer GPU / CPU only; v0.9.3 also had Automatic, kept as an alias), `nnmf_max_iter`, `nnls_max_iter`, `performance_settings` (v0.9.4+: W-seed downsample factor, early-stop patience, torch.compile flag) |
 | Seed settings | `seed_init_settings` (`w_seed_mode`, `overwrite_existing_w_from_h`, `normalize_h_to_unity`, `seed_pixel_metric`, fixed-H and 4D fast-mode flags, result scaling flag) |
 | Resonance / spectral seeds | `resonance_settings` |
 | Stitching | `stitch_manager` (pattern, binning, overlaps) |
@@ -88,9 +88,12 @@ The main preset stores solver and backend choices. These affect how NNMF and NNL
 | Field | Values | Meaning |
 |---|---|---|
 | `nnmf_solver` | `mu`, `cd` | Multiplicative Update (default) or Coordinate Descent for NNMF. `mu` is usually more stable; `cd` can be faster on some data. |
-| `nnmf_backend` | `Automatic`, `CPU only`, `Prefer GPU` | GUI backend preference for multiplicative-update NNMF. `Automatic` uses the PyTorch/CUDA backend when CUDA is available and falls back to scikit-learn; `CPU only` uses the scikit-learn CPU backend; `Prefer GPU` requests PyTorch/CUDA and falls back to CPU if CUDA is unavailable. The preset stores these choices as `auto`, `cpu`, and `gpu`. |
+| `nnmf_backend` | `gpu`, `cpu` | GUI backend preference for multiplicative-update NNMF. `gpu` (default) tries the first available accelerator (CUDA, then MPS, then XPU) and falls back to CPU torch if none is present; `cpu` skips the PyTorch path entirely and runs the scikit-learn MU NMF on CPU (not torch CPU). The legacy value `auto` from v0.9.3 is still accepted and is treated as an alias for `gpu` since both had identical behavior. |
 | `nnmf_max_iter` | integer (default 1000) | Maximum NNMF iterations for the scikit-learn and PyTorch NNMF backends. |
 | `nnls_max_iter` | integer (default 1000) | Maximum NNLS iterations for fixed-H NNLS reconstruction. Used by the PyTorch/CUDA NNLS backend and passed to SciPy NNLS where supported. |
+| `performance_settings.w_seed_downsample_factor` | integer (default 1) | v0.9.4+. Spatial downsample factor for NNLS / selective-score W-seed estimation. 1 means full resolution (pre-v0.9.4 behavior). Recommended 2 or 4 for typical analyses, 8 for very large mosaics. Affects only W-seed initialization for NNMF runs; fixed-H NNLS always runs at full resolution. |
+| `performance_settings.torch_nmf_patience` | integer (default 1) | v0.9.4+. Consecutive below-tolerance error checks required before MU convergence is declared. 1 matches pre-v0.9.4 behavior (exit at first below-tol check). 2-3 adds noise robustness at the cost of a few extra iterations. |
+| `performance_settings.torch_nmf_use_compile` | boolean (default false) | v0.9.4+. Wrap the MU update body in `torch.compile()` for kernel fusion. Most effective on CUDA + Triton (~1.3-2x); modest on CPU (~1.2-1.5x); inconsistent on MPS / XPU. Safely falls back to eager mode when compile is unavailable. |
 
 These settings are also shown in the analysis panel and can be changed before each run.
 

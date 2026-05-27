@@ -15,13 +15,14 @@ The coordinate-descent NNMF solver uses the scikit-learn CPU backend.
 
 ## Backend Selection
 
-The analysis panel contains backend options for NNMF. Depending on the selected solver and backend preference, the app can:
+The analysis panel exposes a **Backend** dropdown for the PyTorch multiplicative-update NNMF path with two options (since v0.9.4):
 
-- automatically choose a backend,
-- force CPU-only behavior,
-- prefer GPU if available.
+- **Prefer GPU** (default): tries the first available accelerator in priority order CUDA > MPS > XPU. If no GPU is detected, falls back to CPU torch and logs the fallback.
+- **CPU only**: skips the PyTorch MU path entirely and runs the scikit-learn MU NMF on CPU (not torch CPU). Useful for benchmarking, reproducibility against the scikit-learn reference, or when the GPU is busy with another job.
 
-When GPU execution is not available or fails, the code logs the fallback and continues with a CPU backend where possible.
+The Coordinate Descent (cd) solver always runs on the scikit-learn CPU backend regardless of the Backend setting.
+
+The legacy **Automatic** item from v0.9.3 was removed in v0.9.4 because it had identical behavior to **Prefer GPU**. Presets saved as `"auto"` load as **Prefer GPU** automatically.
 
 > Screenshot placeholder: NNMF solver/backend dropdowns and iteration settings.
 

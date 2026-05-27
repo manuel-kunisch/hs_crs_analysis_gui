@@ -206,7 +206,7 @@ Fix:
 
 - Check that the `environment-pytorch.yml` environment is active.
 - Run `python -c "import torch; print(torch.cuda.is_available())"`. If `False`, the CUDA-enabled PyTorch build is missing.
-- In the analysis panel, check the backend dropdown is set to **Automatic** or **Prefer GPU**.
+- In the analysis panel, check the backend dropdown is set to **Prefer GPU** (the default since v0.9.4). If a v0.9.3 preset stored "Automatic", it loads correctly as "Prefer GPU" since both have always had identical behavior.
 - See the [GPU notes](installation.md#gpu-notes) for installation details.
 
 ### Seeded NNMF produces a result, but components look wrong

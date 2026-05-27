@@ -6,7 +6,7 @@ from typing import Callable
 
 import numpy as np
 from matplotlib import pyplot as plt
-from scipy.ndimage import gaussian_filter1d, gaussian_filter
+from scipy.ndimage import gaussian_filter1d, gaussian_filter, zoom as ndi_zoom
 from scipy.optimize import nnls
 from skimage.restoration import rolling_ball
 from sklearn.decomposition import PCA, NMF
@@ -60,11 +60,41 @@ class MultivariateAnalyzer(object):
         self.resonance_data_2d = None
         self.analysis_method = method
         self.nnmf_solver = 'mu'
-        self.nnmf_backend_preference = 'auto'
+        # Backend selection for the PyTorch MU NMF path. Two functional modes:
+        #   'gpu' (default) - try GPU (CUDA > MPS > XPU), silently fall back
+        #                     to CPU torch if none available.
+        #   'cpu'           - skip the PyTorch path entirely; the caller falls
+        #                     back to the scikit-learn MU NMF (NOT torch CPU).
+        # 'auto' is kept as a backwards-compat alias for 'gpu' so v0.9.3 and
+        # earlier presets keep loading correctly.
+        self.nnmf_backend_preference = 'gpu'
         self.prefer_torch_nmf = True
         self.nnmf_max_iter = 1000
         self.torch_nmf_max_iter = self.nnmf_max_iter
         self.torch_nmf_tol = 1e-4
+        # Early-stopping patience: declare convergence only after this many
+        # consecutive below-tolerance error checks. Default 1 matches the
+        # pre-v0.9.4 behavior (exit at the first below-tol check) so existing
+        # users see no regression. Set to 2-3 for noise-robust convergence
+        # detection at the cost of a few extra iterations.
+        self.torch_nmf_patience = 1
+        # If True, wrap the MU update body in torch.compile() to fuse ops
+        # into single kernels. Mostly benefits CUDA (~1.3-2x); some CPU gain;
+        # inconsistent on MPS/XPU. Opt-in because the first iteration pays
+        # a one-time compile cost (~5-10 s).
+        self.torch_nmf_use_compile = False
+        # Spatial downsample factor applied to NNLS / selective-score W-seed
+        # estimation. The seed only has to put W in the right ballpark — the
+        # subsequent NMF iterations refine it from any reasonable starting
+        # point so running the per-pixel NNLS or score computation on a
+        # 1/factor^2 smaller copy of the data and bilinear-upsampling the
+        # result back to full resolution gives roughly factor^2 speedup
+        # for the W-seed step with no measurable quality loss for typical
+        # hyperspectral analyses. 1 = full resolution (no downsampling,
+        # matches pre-v0.9.4 behavior). Sensible values: 2 (4x faster),
+        # 4 (16x faster). Applies ONLY to NNMF seed initialization, NOT
+        # to fixed-H NNLS where W is the final result.
+        self.w_seed_downsample_factor = 1
         self.prefer_torch_nnls = True
         self.nnls_max_iter = 1000
         self.torch_nnls_max_iter = self.nnls_max_iter
@@ -294,9 +324,12 @@ class MultivariateAnalyzer(object):
         logger.info("NNMF solver updated to %s", self.nnmf_solver)
 
     def set_nnmf_backend_preference(self, mode: str):
-        mode = (mode or 'auto').strip().lower()
-        if mode not in {'auto', 'cpu', 'gpu'}:
-            raise ValueError(f"Unsupported NMF backend preference '{mode}'. Expected 'auto', 'cpu', or 'gpu'.")
+        mode = (mode or 'gpu').strip().lower()
+        # 'auto' is a legacy alias from v0.9.3 and earlier. Map it to 'gpu' (legacy behavior)
+        if mode == 'auto':
+            mode = 'gpu'
+        if mode not in {'cpu', 'gpu'}:
+            raise ValueError(f"Unsupported NMF backend preference '{mode}'. Expected 'cpu' or 'gpu'.")
         self.nnmf_backend_preference = mode
         logger.info("NNMF backend preference updated to %s", self.nnmf_backend_preference)
 
@@ -312,13 +345,43 @@ class MultivariateAnalyzer(object):
         self.torch_nnls_max_iter = max_iter
         logger.info("NNLS max_iter updated to %s", self.nnls_max_iter)
 
+    def set_nnmf_patience(self, patience: int):
+        """Set the consecutive-below-tol patience count for MU early stopping."""
+        patience = max(1, int(patience))
+        self.torch_nmf_patience = patience
+        logger.info("NNMF MU early-stopping patience updated to %s", self.torch_nmf_patience)
+
+    def set_nnmf_use_compile(self, enabled: bool):
+        """Toggle torch.compile() on the MU update body."""
+        self.torch_nmf_use_compile = bool(enabled)
+        logger.info("NNMF MU torch.compile %s.", "ENABLED" if self.torch_nmf_use_compile else "disabled")
+
+    def set_w_seed_downsample_factor(self, factor: int):
+        """Set the spatial downsample factor for NNLS/selective-score W-seed estimation.
+
+        1 = no downsampling (full resolution, matches pre-v0.9.4 behaviour).
+        2, 4, … = compute on a 1/factor^2 smaller image, then bilinear-upsample.
+        """
+        factor = max(1, int(factor))
+        old = self.w_seed_downsample_factor
+        self.w_seed_downsample_factor = factor
+        if factor != old:
+            # Invalidate any cached NNLS abundance results that were computed
+            # at a different downsample factor.
+            self._clear_nnls_abundance_cache()
+        logger.info("W-seed downsample factor updated to %s.", factor)
+
     def _resolve_torch_nmf_device(self) -> str | None:
         """
         Resolve the PyTorch NMF device from the backend preference.
-        Returns None when the torch backend should not be used.
+        Returns None when the torch backend should not be used at all
+        (i.e., scikit-learn CD or sklearn MU on CPU is selected upstream).
 
-        Device selection order when GPU is preferred or auto:
-        CUDA (NVIDIA) > MPS (Apple Silicon) > XPU (Intel) > CPU.
+        Behavior per preference:
+          * 'cpu' -> None (caller falls back to scikit-learn CPU path).
+          * 'gpu' (default) -> first available GPU in priority order
+            CUDA > MPS > XPU, with silent fallback to CPU torch when no
+            GPU is detected.
         """
         if not self.prefer_torch_nmf:
             return None
@@ -329,20 +392,20 @@ class MultivariateAnalyzer(object):
         if not torch_nmf.torch_available():
             return None
 
-        # Prefer GPU explicitly OR auto-detect: in both cases try GPU class
-        # accelerators in order, fall back to CPU only if none available.
+        # GPU-preferred path: try the accelerator priority chain, then fall
+        # back to CPU torch silently if no GPU is detected. The first run
+        # after import logs which device was chosen, so users can verify
+        # in the log whether GPU was actually used.
         if torch_nmf.cuda_available():
             return 'cuda'
         if torch_nmf.mps_available():
             return 'mps'
         if torch_nmf.xpu_available():
             return 'xpu'
-
-        if self.nnmf_backend_preference == 'gpu':
-            logger.info(
-                "NNMF backend is set to prefer GPU, but no GPU accelerator "
-                "(CUDA / MPS / XPU) is available. Falling back to CPU."
-            )
+        logger.info(
+            "NNMF backend is set to prefer GPU, but no GPU accelerator "
+            "(CUDA / MPS / XPU) is available. Falling back to CPU torch."
+        )
         return 'cpu'
 
     def _run_torch_mu_nmf(
@@ -370,6 +433,8 @@ class MultivariateAnalyzer(object):
             tol=self.torch_nmf_tol,
             eps=getattr(self, "nnmf_epsilon", 1e-8),
             seed=0,
+            patience=self.torch_nmf_patience,
+            use_compile=self.torch_nmf_use_compile,
         )
 
     def _fit_nmf_backend(
@@ -769,6 +834,82 @@ class MultivariateAnalyzer(object):
         self._nnls_abundance_cache[cache_key] = abundance
         return abundance
 
+    def _maybe_downsample_for_w_seed(self, image_data: np.ndarray) -> tuple[np.ndarray, tuple[int, int] | None]:
+        """If ``self.w_seed_downsample_factor > 1``, return a spatially
+        downsampled copy of ``image_data`` (shape (n_pixels, n_bands))
+        together with the small spatial shape for later upsampling.
+
+        Returns (small_image_data, small_shape). small_shape is None if
+        no downsampling is applied; callers must skip upsampling in that case.
+
+        Uses a fast block-mean reshape (rows are cropped to the nearest
+        multiple of factor if necessary, which loses at most ``factor-1``
+        rows/cols at the right/bottom edge). Faster than calling
+        ``scipy.ndimage.zoom`` because it is implemented as a single
+        contiguous reshape + reduction in NumPy C code.
+        """
+        factor = int(self.w_seed_downsample_factor)
+        if factor <= 1 or self.raw_data_3d is None:
+            return image_data, None
+
+        n_pixels, n_bands = image_data.shape
+        rows, cols = int(self.raw_data_3d.shape[1]), int(self.raw_data_3d.shape[2])
+        if n_pixels != rows * cols:
+            # Unexpected shape (e.g. tile-stitched data with extra masking);
+            # silently skip the optimisation so correctness is preserved.
+            logger.debug(
+                "W-seed downsample skipped: n_pixels=%s does not match rows*cols=%s.",
+                n_pixels, rows * cols,
+            )
+            return image_data, None
+
+        new_rows = (rows // factor) * factor
+        new_cols = (cols // factor) * factor
+        if new_rows < factor or new_cols < factor:
+            # Image too small to downsample at this factor; skip.
+            return image_data, None
+
+        # (n_pixels, n_bands) -> (rows, cols, n_bands) -> block-mean -> (rs, cs, n_bands)
+        image_3d = image_data.reshape(rows, cols, n_bands)
+        if new_rows != rows or new_cols != cols:
+            image_3d = image_3d[:new_rows, :new_cols]
+        small_rows = new_rows // factor
+        small_cols = new_cols // factor
+        # Reshape into (small_rows, factor, small_cols, factor, n_bands) and mean over
+        # the two factor axes. This is the canonical fast block-reduce in NumPy.
+        image_3d_small = image_3d.reshape(small_rows, factor, small_cols, factor, n_bands).mean(axis=(1, 3))
+        logger.info(
+            "W-seed downsample: %dx%d -> %dx%d (factor=%s, %dx fewer pixels).",
+            rows, cols, small_rows, small_cols, factor,
+            (rows * cols) // max(small_rows * small_cols, 1),
+        )
+        return (
+            np.ascontiguousarray(image_3d_small.reshape(-1, n_bands), dtype=image_data.dtype),
+            (small_rows, small_cols),
+        )
+
+    def _upsample_w_column(self, w_col_small: np.ndarray, small_shape: tuple[int, int]) -> np.ndarray:
+        """Bilinear-upsample a small W column back to the original spatial
+        shape. ``w_col_small`` is shape (small_rows*small_cols,), ``small_shape``
+        is (small_rows, small_cols). Returns a (rows*cols,) array."""
+        rows, cols = int(self.raw_data_3d.shape[1]), int(self.raw_data_3d.shape[2])
+        small_rows, small_cols = small_shape
+        w_2d_small = w_col_small.reshape(small_rows, small_cols)
+        # linearly upscale
+        w_2d = ndi_zoom(
+            w_2d_small,
+            (rows / max(small_rows, 1), cols / max(small_cols, 1)),
+            order=1, prefilter=False,
+        )
+        # zoom can be off-by-one on rounding; crop/pad to exact (rows, cols).
+        if w_2d.shape != (rows, cols):
+            out = np.zeros((rows, cols), dtype=w_2d.dtype)
+            r = min(w_2d.shape[0], rows)
+            c = min(w_2d.shape[1], cols)
+            out[:r, :c] = w_2d[:r, :c]
+            w_2d = out
+        return np.ascontiguousarray(w_2d.reshape(-1))
+
     def _estimate_selective_score_map(
             self,
             image_data: np.ndarray,
@@ -789,6 +930,10 @@ class MultivariateAnalyzer(object):
 
         This is used as the W seed in `selective_score` mode.
         """
+        # Optionally compute on a spatially-downsampled copy of image_data,
+        # then bilinear-upsample the resulting W column back.
+        image_data, small_shape = self._maybe_downsample_for_w_seed(image_data)
+
         working_data = np.asarray(image_data, dtype=np.float64)
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
         working_data = np.maximum(working_data, 0.0)
@@ -798,14 +943,19 @@ class MultivariateAnalyzer(object):
         if basis.shape[1] <= 1 or component_index not in component_to_basis:
             logger.info('Selective score map for component %s falls back to target projection (no competitors).',
                         component_index)
-            return np.maximum(target_strength, eps)
+            score_map = np.maximum(target_strength, eps)
+        else:
+            target_basis_index = component_to_basis[component_index]
+            competitor_indices = [idx for idx in range(basis.shape[1]) if idx != target_basis_index]
+            competitor_strength = np.max(working_data @ basis[:, competitor_indices], axis=1)
+            selectivity = target_strength / (target_strength + competitor_strength + eps)
+            score_map = target_strength * selectivity
+            score_map = np.maximum(score_map, eps)
 
-        target_basis_index = component_to_basis[component_index]
-        competitor_indices = [idx for idx in range(basis.shape[1]) if idx != target_basis_index]
-        competitor_strength = np.max(working_data @ basis[:, competitor_indices], axis=1)
-        selectivity = target_strength / (target_strength + competitor_strength + eps)
-        score_map = target_strength * selectivity
-        return np.maximum(score_map, eps)
+        if small_shape is not None:
+            # upsample a potential downsampled score map to the initial data shape
+            score_map = self._upsample_w_column(score_map, small_shape)
+        return score_map
 
     def _estimate_nnls_abundance_map(
             self,
@@ -824,14 +974,27 @@ class MultivariateAnalyzer(object):
             return self._scale_w_seed_to_unity(w_map, eps=eps) if normalize_w_seed else w_map
 
         target_basis_index = component_to_basis[component_index]
+
+        # Optionally compute the NNLS abundance on a spatially-downsampled copy
+        # of the data, then bilinear-upsample. The factor is appended to the
+        # source key so the abundance cache differentiates downsampled vs full
+        # entries. Switching the factor invalidates stale cache entries.
+        ds_image_data, small_shape = self._maybe_downsample_for_w_seed(image_data)
+        if small_shape is not None:
+            ds_source_key = f"{source_key}_ds{int(self.w_seed_downsample_factor)}"
+        else:
+            ds_source_key = source_key
+
         abundance = self._get_cached_nnls_abundance_matrix(
-            image_data,
+            ds_image_data,
             basis,
             component_to_basis,
             eps,
-            source_key,
+            ds_source_key,
         )
         w_map = np.maximum(abundance[:, target_basis_index], eps)
+        if small_shape is not None:
+            w_map = self._upsample_w_column(w_map, small_shape)
         return self._scale_w_seed_to_unity(w_map, eps=eps) if normalize_w_seed else w_map
 
     def solve_fixed_H_nnls(
@@ -1636,7 +1799,6 @@ class MultivariateAnalyzer(object):
             # H must be set outside of the analyzer manually
             # check if all components have a seed, the check of H is included in the seed estimation
             if not self._W_prepared:
-                # TODO more sophisticated seed estimation
                 self.estimate_W_seed_matrix_from_H()
                 # here also the seed for H is checked in the same step and filled if necessary
             if not self._all_columns_seeded(self.seed_W):

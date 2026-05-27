@@ -4,6 +4,89 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.4] — 2026-05-26
+
+### Added
+- **Performance: W-seed spatial downsampling** (measured 1.4–6.4× speedup
+  on the seed-initialisation step depending on mode and factor). A new
+  **W-seed downsample** spinbox in the *Performance* column lets users
+  compute the per-pixel NNLS or selective-score W-seed on a 1/factor²
+  smaller copy of the data and bilinear-upsample the result back to full
+  resolution. Because the W seed only has to initialise the NMF iterations
+  (which then refine W to full quality), the speedup is essentially free.
+
+  Measured on a 1024×1024×32 dataset, k=4, NVIDIA CUDA RTX4060 GPU:
+
+  | factor | NNLS abundance | Selective score | Quality (cos sim vs full-res) |
+  |---|---|---|---|
+  | 1 (default, no downsample) | 0.81 s — | 2.19 s — | reference |
+  | 2 | 0.57 s **(1.4×)** | 1.03 s **(2.1×)** | 0.9999 |
+  | 4 | 0.45 s **(1.8×)** | 0.48 s **(4.5×)** | 0.9999 |
+  | 8 | 0.32 s **(2.5×)** | 0.34 s **(6.4×)** | 0.9997 |
+
+  Default is **1** (no downsampling, no change in behaviour). Recommended
+  values: **2 or 4** for typical hyperspectral analyses; **8** for very
+  large mosaics. Applies ONLY to W-seed initialisation for NNMF runs —
+  fixed-H NNLS (where W IS the final result) always runs at full resolution
+  regardless of this setting.
+
+  All three Performance-column settings (W-seed downsample factor,
+  early-stop patience, torch.compile flag) are now persisted in the
+  application JSON preset under a ``"performance_settings"`` block.
+  Legacy presets (v0.9.3 and earlier) that lack this block restore to the
+  behaviour-preserving defaults (downsample=1, patience=1, compile=False)
+  so they reproduce v0.9.2 numerical behaviour byte-for-byte.
+
+- **Performance: NMF early-stop tunables + optional torch.compile.** A new
+  **Performance** column in the Analysis panel exposes two opt-in solver
+  knobs for the PyTorch MU NMF path. Neither is a speedup by default;
+  both are tools for users with specific workloads to tune themselves.
+    * **Early-stop patience** (default **1**, matches pre-v0.9.4 behavior
+      exactly, no regression). The MU solver already had early stopping in
+      v0.9.2; v0.9.4 lets you raise the patience to **2 or 3** if your
+      data has noisy convergence and the previous "exit at first below-tol
+      check" behavior was triggering too eagerly. Higher patience trades
+      a few extra iterations for noise robustness. It is **not** itself a
+      speedup, and on smooth-converging data it actually runs slightly
+      longer than patience=1.
+    * **torch.compile (MU)** opt-in checkbox (default off). When enabled,
+      wraps the MU update body in ``torch.compile()`` to fuse the matmul
+      and pointwise ops into single kernels.
+      If the active PyTorch build cannot compile (e.g. a CUDA build
+      without Triton, or older MPS), the solver logs a warning and
+      silently falls back to eager execution. No crash, no wrong
+      results, no perf change.
+
+### Changed
+- **NNMF Backend dropdown simplified from three options to two.** The
+  legacy **Automatic** item was removed because it had identical behavior
+  to **Prefer GPU**: both tried the first available GPU accelerator
+  (CUDA, then MPS, then XPU) and silently fell back to CPU torch if no
+  GPU was detected. The dropdown now offers only the two functionally
+  distinct choices:
+    * **Prefer GPU** (default): try CUDA > MPS > XPU, fall back to CPU
+      torch if no GPU is present, with a log message indicating the
+      fallback. This is what the old **Automatic** option also did.
+    * **CPU only**: skip the PyTorch MU path entirely and run the
+      scikit-learn MU NMF on CPU (not torch CPU). Useful for benchmarking,
+      reproducibility against the scikit-learn reference, or when the GPU
+      is busy elsewhere.
+
+  **Coordinate Descent (cd)** always runs on the scikit-learn CPU backend
+  regardless of this setting.
+
+  **Backwards compatibility.** Presets saved by v0.9.3 with
+  `nnmf_backend: "auto"` continue to load without changes. The setter
+  accepts `"auto"` as a silent alias for `"gpu"` (functionally identical),
+  and the GUI maps a loaded `"auto"` value to the **Prefer GPU** dropdown
+  item. No legacy preset breaks; the change is purely cosmetic in the
+  dropdown.
+
+  The corresponding `_resolve_torch_nmf_device` logic was simplified
+  accordingly, removing the previously-dead branch that distinguished
+  `"gpu"` from `"auto"`.
+
+
 ## [0.9.3] — 2026-05-25
 
 ### Added

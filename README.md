@@ -31,7 +31,7 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 - **3D and 4D stacks**: per-slice or fast multislice (NNMF on a reference slice → NNLS everywhere else) for time series and z-stacks.
 - **Optional GPU acceleration** via PyTorch with CPU fallback (scikit-learn NMF, SciPy NNLS).
 - **Reproducible by construction**: presets save the full analysis state, ROI configuration, and seed choices. Reload the same TIFF, reload the preset, get the same result.
-- **Publication-friendly export**: Fiji/ImageJ-compatible TIFFs, CSV spectra, and scale-bar metadata that survive into downstream figures.
+- **Publication-friendly export**: Fiji/ImageJ-compatible TIFFs, CSV spectra, LUT presets, and scale-bar metadata that survive into downstream figures.
 
 ## Documentation
 

@@ -1,7 +1,7 @@
 # HS-MOSAIC
 
-[![PyPI version](https://img.shields.io/pypi/v/hs-mosaic?label=PyPI)](https://pypi.org/project/hs-mosaic/)
-[![Python versions](https://img.shields.io/pypi/pyversions/hs-mosaic)](https://pypi.org/project/hs-mosaic/)
+[![PyPI version](https://img.shields.io/pypi/v/hs-mosaic?label=PyPI&cacheSeconds=300&v=2)](https://pypi.org/project/hs-mosaic/)
+[![Python versions](https://img.shields.io/pypi/pyversions/hs-mosaic?cacheSeconds=300&v=2)](https://pypi.org/project/hs-mosaic/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20273076.svg)](https://doi.org/10.5281/zenodo.20273076)
 
@@ -82,6 +82,15 @@ pip install hs-mosaic
 
 > [!IMPORTANT]
 > **PyPI does not host CUDA-enabled or XPU-enabled PyTorch wheels** — only CPU torch (and CPU+MPS on macOS). For the NVIDIA and Intel variants you must install GPU-enabled torch from PyTorch's own index **before** `pip install hs-mosaic`. The order is **not optional**: doing it in reverse downloads ~150 MB of CPU torch that gets immediately replaced. Apple Silicon does NOT have this issue because PyPI's macOS torch already includes MPS. This is a property of the whole Python packaging ecosystem (every GPU-accelerated package has the same constraint), not of HS-MOSAIC.
+
+> [!WARNING]
+> **Apple Silicon users: check your Python architecture before installing.** If your Python is the legacy x86_64 (Intel) build running under Rosetta 2, `pip install hs-mosaic torch` will silently pin `torch` at the last x86_64 macOS wheel (`2.2.2`, NumPy-1-era) while installing NumPy 2.x alongside, producing an `_ARRAY_API not found` error on launch. **Run this check before installing:**
+>
+> ```bash
+> python -c "import platform; print(platform.machine())"
+> ```
+>
+> `arm64` = native, good to go. `x86_64` = Rosetta'd Intel Python — install a native arm64 Python (Miniforge or the arm64 Anaconda installer) first; the telltale path for the wrong build is `/Users/<you>/opt/anaconda3/`. See [docs/installation.md → Apple Silicon (MPS)](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/#apple-silicon-mps) for the full diagnostic, the fix, and a one-line `numpy<2` workaround if you can't reinstall conda right now.
 
 For NVIDIA, pick the `cu124` URL to match your CUDA driver — `cu118`, `cu121`, `cu124`, `cu126`, etc. — using the [PyTorch selector](https://pytorch.org/get-started/locally/).
 

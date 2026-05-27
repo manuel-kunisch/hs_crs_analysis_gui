@@ -208,13 +208,68 @@ pip install hs-mosaic torch
 
 (no PyTorch-index step is needed; PyPI's macOS torch wheel already includes the Metal/MPS backend.)
 
-Verify MPS is detected:
+!!! danger "Important your Python must be a native arm64 build, not an x86_64 build running under Rosetta"
+    The single most common Apple Silicon install failure is silently running an x86_64 Python under Apple's Rosetta 2 translation layer instead of the native arm64 build. The symptoms look like a NumPy bug but are actually a Python-architecture problem:
+
+    * pip can only resolve `torch` up to **2.2.2** the last x86_64 macOS wheel PyTorch ever shipped. (Modern arm64 macOS torch is 2.3+, currently ~2.12.)
+    * That `torch==2.2.2` wheel was compiled against NumPy 1.x, but pip installs NumPy 2.x alongside.
+    * On launch you get:
+      ```
+      UserWarning: Failed to initialize NumPy: _ARRAY_API not found
+      A module that was compiled using NumPy 1.x cannot be run in NumPy 2.x
+      ```
+      raised from `torch/nn/modules/transformer.py`.
+
+    **Why it's so easy to miss:** the Intel Anaconda installer (the default download up until a few years ago) installs to `/Users/<you>/opt/anaconda3/`. The `opt/` in the path is the giveaway — it's the legacy Intel layout. Many Apple Silicon users still have this from a years-old install and don't realise their Python is being translated through Rosetta on every launch.
+
+    **Check before you install** (one command, takes a second):
+
+    ```bash
+    python -c "import platform; print(platform.machine())"
+    ```
+
+    | Output | Verdict |
+    |---|---|
+    | `arm64` | ✅ Native Apple Silicon Python — proceed with `pip install hs-mosaic torch` below. |
+    | `x86_64` | ❌ Rosetta'd Intel Python — `pip install hs-mosaic torch` will silently install the broken `torch==2.2.2` + NumPy 2 combo. Fix this **before** installing — see "Fixing it" below. |
+
+    **Fixing it (recommended):** install a native arm64 Python distribution. Either:
+
+    * **Miniforge** (lightweight, conda-compatible) — download from <https://github.com/conda-forge/miniforge>; the `Miniforge3-MacOSX-arm64.sh` installer is the one you want.
+    * **Anaconda for Apple Silicon** — at <https://www.anaconda.com/download>; pick the arm64 / Apple Silicon installer explicitly (the default page may still serve the Intel build first).
+
+    Then create a fresh environment from the arm64 base and `pip install hs-mosaic torch` inside it. With native arm64 Python, pip resolves a modern torch wheel built against NumPy 2 and everything works — bonus: MPS acceleration becomes available automatically (it isn't on Rosetta'd torch).
+
+    **Quick workaround if you can't reinstall conda right now:** pin NumPy below 2 so the ABI matches the old torch 2.2.2 wheel:
+
+    ```bash
+    pip install "numpy<2" --force-reinstall
+    ```
+
+    This keeps you on `torch==2.2.2` without GPU acceleration (the x86_64 torch wheels never had MPS), but it removes the `_ARRAY_API not found` error so the application launches. Not recommended long-term — fix the Python architecture properly when you can.
+
+**Verify the install worked** (run this from your activated env):
 
 ```bash
-python -c "import torch; print('MPS available:', torch.backends.mps.is_available() and torch.backends.mps.is_built())"
+python -c "import platform, numpy, torch; print('arch:', platform.machine()); print('numpy:', numpy.__version__); print('torch:', torch.__version__); print('mps available:', torch.backends.mps.is_available())"
 ```
 
-`True` → HS-MOSAIC's PyTorch NNMF and NNLS backends run on the GPU; you'll see `torch-mps` as the backend label in the fit summary. Requires macOS 12.3 or newer and PyTorch ≥ 2.0.
+Expected output on a healthy native arm64 install:
+
+```
+arch: arm64
+numpy: 2.x        (e.g. 2.4.6)
+torch: 2.3+        (e.g. 2.12.0)
+mps available: True
+```
+
+If you see `arch: x86_64` or `torch: 2.2.2`, you are on the broken Rosetta'd combo — return to "Fixing it" above. Otherwise launch the app:
+
+```bash
+hs-mosaic
+```
+
+It should start without any `_ARRAY_API not found` warning or NumPy ABI error. Requires macOS 12.3 or newer for MPS. The fit-summary `backend` field will read `torch-mps` once you run an analysis.
 
 ### Intel Arc (XPU)
 

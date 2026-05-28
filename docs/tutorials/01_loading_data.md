@@ -237,4 +237,4 @@ If the image is very large, use binning before analysis to reduce memory and run
 
 **`wavelength.json` not detected**:
 
-- The file must be named exactly `wavelength.json` (lowercase) and placed in the **same folder** as the TIFF file, not a parent folder. See [Spectral axis and wavelength.json](reference/spectral_axis_and_wavelength_json.md).
+- The file must be named exactly `wavelength.json` (lowercase) and placed in the **same folder** as the TIFF file, not a parent folder. See [Spectral axis and wavelength.json](../reference/spectral_axis_and_wavelength_json.md).

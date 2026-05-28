@@ -73,7 +73,7 @@ Spectra loaded from a `.preset` enter the table as **fixed dummy seeds** — the
 
 `Palette`
 
-Switches the **default component-color palette** for the current session. Four palettes ship out of the box — the default magenta-cyan-yellow trio (best contrast on dark composites), a high-contrast magenta-green palette, the color-blind-safe Okabe-Ito palette, and a legacy classic-RGB cycle. See [Default color palette](05_results_and_export.md#default-color-palette) in the results page for the full table of palettes and when to use each.
+Switches the **default component-color palette** for the current session. Four palettes ship out of the box — the default magenta-cyan-yellow trio (best contrast on dark composites), a high-contrast magenta-green palette, the color-blind-safe Okabe-Ito palette, and a legacy classic-RGB cycle. See [Default color palette](05_results_and_export.md#default-colour-palette) in the results page for the full table of palettes and when to use each.
 
 The same dropdown also appears in the result-viewer toolbar (next to **Save Histogram and Spectra Preset**). The two selectors are **bidirectionally synced**: picking a palette in one updates the other instantly, because both read from the shared component-color manager. The selection is persisted in the application JSON preset (`Save Preset`) and restored on load.
 

@@ -114,6 +114,13 @@ pip install -r docs-requirements.txt
 mkdocs serve
 ```
 
+
+## At a glance
+
+![Auto-suggested ROIs on synthetic microbead data — spatial detection followed by Ward hierarchical clustering on spectral fingerprints](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/gifs/03_suggest_rois_beads.gif)
+
+The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset. The same GUI handles seed building, NNMF/NNLS analysis, and result export. See [docs/tutorials/03c_suggest_rois.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/03c_suggest_rois/) for the algorithm and settings reference.
+
 ## Install
 
 ###  PyPI:
@@ -225,11 +232,7 @@ hs-mosaic.bat
 
 A pre-built standalone Windows executable is described in [docs/standalone_windows.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/standalone_windows/).
 
-## At a glance
 
-![Auto-suggested ROIs on synthetic microbead data — spatial detection followed by Ward hierarchical clustering on spectral fingerprints](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/gifs/03_suggest_rois_beads.gif)
-
-The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset. The same GUI handles seed building, NNMF/NNLS analysis, and result export. See [docs/tutorials/03c_suggest_rois.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/03c_suggest_rois/) for the algorithm and settings reference.
 
 ## Repository layout
 

@@ -69,7 +69,7 @@ class MultivariateAnalyzer(object):
         # earlier presets keep loading correctly.
         self.nnmf_backend_preference = 'gpu'
         self.prefer_torch_nmf = True
-        self.nnmf_max_iter = 1000
+        self.nnmf_max_iter = 500
         self.torch_nmf_max_iter = self.nnmf_max_iter
         self.torch_nmf_tol = 1e-4
         # Early-stopping patience: declare convergence only after this many
@@ -96,7 +96,7 @@ class MultivariateAnalyzer(object):
         # to fixed-H NNLS where W is the final result.
         self.w_seed_downsample_factor = 1
         self.prefer_torch_nnls = True
-        self.nnls_max_iter = 1000
+        self.nnls_max_iter = 500
         self.torch_nnls_max_iter = self.nnls_max_iter
         self.torch_nnls_tol = 1e-4
         self.torch_nnls_chunk_size = 32768

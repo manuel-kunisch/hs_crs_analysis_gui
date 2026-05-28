@@ -51,7 +51,7 @@ Quickest entry points:
 - [Workflow checklist](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/07_workflow_checklist/) — single-page reminder for a publication-grade run
 - [Troubleshooting](https://manuel-kunisch.github.io/hs_crs_analysis_gui/troubleshooting/) — known issues and their fixes
 
-To build the docs locally:
+To build the docs locally in a virtual environment, install the `docs-requirements.txt` dependencies and run the MkDocs server:
 
 ```bash
 pip install -r docs-requirements.txt
@@ -61,12 +61,14 @@ mkdocs serve
 ## Install
 
 ###  PyPI:
+Recommended platform-independent install method. **Prerequisites**: A (virtual) python environment with Python ≥ 3.10 on Windows, Linux, or macOS. Optionally a supported GPU for PyTorch acceleration: NVIDIA (CUDA), Apple Silicon (MPS), Intel Arc (XPU), or AMD on Linux (ROCm).
 The package is published on PyPI as `hs-mosaic`. Install in a virtual environment with pip.
 
 **Recommended — GPU install (the right one for your hardware):**
 
 Hyperspectral NNMF and fixed-H NNLS are heavy: typical fields of view (~10⁶ pixels × tens of channels) run in seconds on a GPU and in minutes on a CPU, with 4D z- and t-stacks multiplying the cost. Since v0.9.3 HS-MOSAIC supports three GPU backends — pick the one matching your hardware:
 
+Open a terminal, activate your virtual python environment, and install the right torch variant for your GPU **before** installing `hs-mosaic`:
 ```bash
 # NVIDIA CUDA GPU — install CUDA torch from PyTorch's index FIRST, then hs-mosaic.
 pip install torch --index-url https://download.pytorch.org/whl/cu124

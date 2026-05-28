@@ -281,7 +281,7 @@ class AnalysisManager(QtCore.QObject):
         method_layout = QtWidgets.QVBoxLayout(method_panel)
         method_layout.setContentsMargins(0, 0, 0, 0)
         method_layout.setSpacing(4)
-        method_layout.addWidget(_make_section_title("Method"))
+        method_layout.addWidget(_make_section_title("Method"), alignment=QtCore.Qt.AlignTop)
 
         method_buttons = QtWidgets.QHBoxLayout()
         method_buttons.setContentsMargins(0, 0, 0, 0)
@@ -349,7 +349,7 @@ class AnalysisManager(QtCore.QObject):
         options_layout.setContentsMargins(0, 0, 0, 0)
         options_layout.setSpacing(4)
         options_title = _make_section_title("NNMF Options")
-        options_layout.addWidget(options_title)
+        options_layout.addWidget(options_title, alignment=QtCore.Qt.AlignTop)
 
         options_form = QtWidgets.QFormLayout()
         options_form.setContentsMargins(0, 0, 0, 0)
@@ -442,7 +442,7 @@ class AnalysisManager(QtCore.QObject):
         perf_layout = QtWidgets.QVBoxLayout(perf_panel)
         perf_layout.setContentsMargins(0, 0, 0, 0)
         perf_layout.setSpacing(4)
-        perf_layout.addWidget(_make_section_title("Performance"))
+        perf_layout.addWidget(_make_section_title("Performance"), alignment=QtCore.Qt.AlignTop)
 
         perf_form = QtWidgets.QFormLayout()
         perf_form.setContentsMargins(0, 0, 0, 0)
@@ -515,10 +515,10 @@ class AnalysisManager(QtCore.QObject):
         )
         self.nnmf_use_compile_check.setChecked(bool(self.mv_analyzer.torch_nmf_use_compile))
         self.nnmf_use_compile_check.toggled.connect(self.mv_analyzer.set_nnmf_use_compile)
-        perf_form.addRow("", self.nnmf_use_compile_check)
 
         perf_layout.addLayout(perf_form)
         perf_layout.addStretch(1)
+        perf_layout.addWidget(self.nnmf_use_compile_check)
         analysis_layout.addWidget(perf_panel)
         analysis_layout.addWidget(_make_divider())
 
@@ -528,7 +528,8 @@ class AnalysisManager(QtCore.QObject):
         seed_layout.setContentsMargins(0, 0, 0, 0)
         seed_layout.setSpacing(4)
         seed_title = _make_section_title("Seed Initialization")
-        seed_layout.addWidget(seed_title)
+        seed_layout.addWidget(seed_title, alignment=QtCore.Qt.AlignTop)
+        # seed_layout.addStretch(1)
 
         w_seed_mode_row = QtWidgets.QHBoxLayout()
         w_seed_mode_row.setContentsMargins(0, 0, 0, 0)
@@ -602,8 +603,9 @@ class AnalysisManager(QtCore.QObject):
         self.w_seed_mode_dropdown.setCurrentIndex(0)
         self.mv_analyzer.set_W_seed_mode(self.w_seed_mode_dropdown.itemData(0))
 
+        seed_layout.addStretch(1)
         analysis_layout.addWidget(seed_panel)
-        analysis_layout.addStretch(1)
+        # analysis_layout.addStretch(1)
 
         self._nnmf_option_widgets = [
             options_title,

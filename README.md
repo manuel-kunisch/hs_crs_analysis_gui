@@ -33,6 +33,62 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 - **Reproducible by construction**: presets save the full analysis state, ROI configuration, and seed choices. Reload the same TIFF, reload the preset, get the same result.
 - **Publication-friendly export**: Fiji/ImageJ-compatible TIFFs, CSV spectra, LUT presets, and scale-bar metadata that survive into downstream figures.
 
+## How HS-MOSAIC unmixes a hyperspectral stack
+
+A hyperspectral stack is a 3D cube (or 4D, with z or time): for every spatial pixel you have one full spectrum across many channels. HS-MOSAIC reorganizes that cube into a small number of **components**: a *spatial map* plus the matching *spectrum* that you can actually interpret as chemistry etc..
+
+All four analysis modes operate on the same factorization: the cube is reshaped to a 2D matrix `X` (pixels × channels) and the algorithm looks for
+
+```
+X  ≈  W · H
+```
+
+where `W` (pixels × components) holds the per-pixel **abundance maps** and `H` (components × channels) holds the **component spectra**. Each column of `W` is reshaped back into an image, and each row of `H` is plotted as a spectrum. The four modes differ only in *what is held fixed* and *what is being learned*:
+
+| Mode | What `H` is                                        | What `W` is | When to use                                                                                                       |
+|---|----------------------------------------------------|---|-------------------------------------------------------------------------------------------------------------------|
+| **PCA** | Variance-maximizing orthogonal directions (signed) | Pixel scores along those directions (signed) | First look at an unknown dataset; diagnostic only, **not** a non-negative abundance.                              |
+| **Random NNMF** | Learned from data, non-negative                    | Learned from data, non-negative | No prior spectra exist yet; exploratory parts-based decomposition.                                                |
+| **Seeded NNMF** | Initialized from user ROIs / spectra, then refined | Initialized from `H` via NNLS / selective-score, then refined | **The main workflow.** You have a rough idea of the components and want the algorithm to refine both `W` and `H`. |
+| **Fixed-H NNLS** | **Locked** to the user spectra                     | Solved per pixel, non-negative | The spectra are trusted; only the per-pixel amounts vary. Most stable mode for 4D / cross-FOV.                    |
+
+### NNMF — non-negative matrix factorization
+
+NNMF minimizes the reconstruction error under non-negativity:
+$$
+W, H = \arg\min_{W \ge 0,\; H \ge 0} \left\| X - W H \right\|_F^2
+$$
+resp.
+```
+min_{W, H ≥ 0}  ‖X − W H‖_F²
+```
+
+Because both `W` and `H` are non-negative, the model is **purely additive**. There is no sign cancellation, which makes the components interpretable as physical contributions. The cost is non-convex in `W` and `H` jointly, so the initial guess (the **seed**) determines which local minimum the solver lands in. That is why HS-MOSAIC's seeded NNMF is the mode that actually works on hard data: the seed picks the basin of attraction.
+
+The GUI ships two solvers: **multiplicative updates (`mu`, default)** — the classic Lee–Seung rule, optionally accelerated on GPU via PyTorch — and **coordinate descent (`cd`)** from scikit-learn, useful when MU's zero-stuck-zero property is inconvenient.
+
+### Fixed-H NNLS — non-negative least squares per pixel
+
+Once you trust the spectra, you stop letting them drift. Fixed-H NNLS solves in pseudo code the per-pixel abundance maps `W` resp. for each map `w`  given locked spectra `H_seed`:
+
+```
+for every pixel p:
+    w_p  =  argmin_{w ≥ 0}  ‖x_p − w · H_seed‖²
+```
+
+with `H_seed` locked. That is the **pure abundance** problem: how much of each known spectrum is present in each pixel? It is the cleanest mode for 4D z- or t-stacks (every slice gets fitted against the same spectral basis) and for cross-FOV comparison.
+
+The GUI runs NNLS through SciPy's classical Lawson–Hanson active-set solver on CPU, and through a vectorized projected-gradient + FISTA backend on PyTorch / GPU for large mosaics.
+
+### Why seeds are the scientific decision
+
+For both seeded NNMF and fixed-H NNLS, the **seed** — the initial `W₀` and `H₀` matrices are where you encode prior knowledge: ROI-averaged spectra, imported reference spectra, Gaussian resonance models, or a `W` seed built from one of the H-driven modes (`nnls`, `selective_score`, `h_weighted`, `average`, `empty`).
+
+> [!IMPORTANT]
+> For a reproducible run across a similar sample, the order is: pick the components, build the seeds in the ROI Manager, save a preset, then run **seeded NNMF** (or **fixed-H NNLS** if your spectra are already trusted). Reload the preset to reproduce the same result on the same data, or on a different field of view with matching components.
+
+For the full mathematical treatment — exact convergence criteria, the MU init `eps` lift, scale ambiguity, the H-seed unity-scaling option, and the NNLS / FISTA convergence test see the dedicated [NNMF and NNLS methods page](https://manuel-kunisch.github.io/hs_crs_analysis_gui/methods/nnmf_nnls_modes/).
+
 ## Documentation
 
 Full documentation, including tutorials and worked examples:

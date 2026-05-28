@@ -74,27 +74,12 @@ class MultivariateAnalyzer(object):
         self.torch_nmf_tol = 1e-4
         # Early-stopping patience: declare convergence only after this many
         # consecutive below-tolerance error checks. Default 1 matches the
-        # pre-v0.9.4 behavior (exit at the first below-tol check) so existing
-        # users see no regression. Set to 2-3 for noise-robust convergence
-        # detection at the cost of a few extra iterations.
+        # pre-v0.9.4 behavior (exit at the first below-tol check)
         self.torch_nmf_patience = 1
         # If True, wrap the MU update body in torch.compile() to fuse ops
-        # into single kernels. Mostly benefits CUDA (~1.3-2x); some CPU gain;
-        # inconsistent on MPS/XPU. Opt-in because the first iteration pays
-        # a one-time compile cost (~5-10 s).
+        # into single kernels.
         self.torch_nmf_use_compile = False
-        # Spatial downsample factor applied to NNLS / selective-score W-seed
-        # estimation. The seed only has to put W in the right ballpark — the
-        # subsequent NMF iterations refine it from any reasonable starting
-        # point so running the per-pixel NNLS or score computation on a
-        # 1/factor^2 smaller copy of the data and bilinear-upsampling the
-        # result back to full resolution gives roughly factor^2 speedup
-        # for the W-seed step with no measurable quality loss for typical
-        # hyperspectral analyses. 1 = full resolution (no downsampling,
-        # matches pre-v0.9.4 behavior). Sensible values: 2 (4x faster),
-        # 4 (16x faster). Applies ONLY to NNMF seed initialization, NOT
-        # to fixed-H NNLS where W is the final result.
-        self.w_seed_downsample_factor = 1
+        self.w_seed_downsample_factor = 4
         self.prefer_torch_nnls = True
         self.nnls_max_iter = 500
         self.torch_nnls_max_iter = self.nnls_max_iter
@@ -344,6 +329,28 @@ class MultivariateAnalyzer(object):
         self.nnls_max_iter = max_iter
         self.torch_nnls_max_iter = max_iter
         logger.info("NNLS max_iter updated to %s", self.nnls_max_iter)
+
+    def set_nnmf_tol(self, tol: float):
+        """Set the relative-improvement tolerance for the PyTorch MU NMF solver.
+
+        Smaller values run more iterations before declaring convergence;
+        larger values stop sooner. Default 1e-4. Affects only the PyTorch
+        backend; the scikit-learn NMF path uses its own internal tol.
+        """
+        tol = max(0.0, float(tol))
+        self.torch_nmf_tol = tol
+        logger.info("PyTorch MU NMF tolerance updated to %g", self.torch_nmf_tol)
+
+    def set_nnls_tol(self, tol: float):
+        """Set the relative-step tolerance for the PyTorch FISTA NNLS solver.
+
+        Smaller values run more iterations per pixel chunk; larger values
+        stop sooner. Default 1e-4. Affects only the PyTorch backend; the
+        SciPy NNLS path has no tol parameter.
+        """
+        tol = max(0.0, float(tol))
+        self.torch_nnls_tol = tol
+        logger.info("PyTorch FISTA NNLS tolerance updated to %g", self.torch_nnls_tol)
 
     def set_nnmf_patience(self, patience: int):
         """Set the consecutive-below-tol patience count for MU early stopping."""
@@ -1265,6 +1272,13 @@ class MultivariateAnalyzer(object):
         if image_data is None or image_data.size == 0:
             return None
 
+        # Reuse the W-seed spatial downsampling to speed up the residual NNLS
+        # below on large full-frame data. The residual seed is a spectrum (the
+        # spatial axis is collapsed by the top-k averaging), so no upsampling
+        # is needed and block-mean preserves the spectral axis.
+        image_data, small_shape = self._maybe_downsample_for_w_seed(image_data)
+        downsampled = small_shape is not None
+
         working_data = np.asarray(image_data, dtype=np.float64)
         working_data = np.nan_to_num(working_data, nan=0.0, posinf=0.0, neginf=0.0)
         working_data = np.maximum(working_data, 0.0)
@@ -1315,7 +1329,11 @@ class MultivariateAnalyzer(object):
         candidate = np.maximum(candidate, eps)
         reference_scale = self._get_reference_H_seed_scale(
             exclude_component=component_index,
-            fallback_pixels=top_indices,
+            # top_indices index the (possibly downsampled) pixel array, but
+            # _get_reference_H_seed_scale indexes full-res self.data_2d — so
+            # only pass them when no downsampling was applied. (This fallback
+            # only fires when there are no other seeds; unlikely for residual fallback)
+            fallback_pixels=None if downsampled else top_indices,
             eps=eps,
         )
         candidate = candidate * reference_scale / max(float(np.mean(candidate, axis=None)), eps)

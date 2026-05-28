@@ -89,6 +89,9 @@ Open the **ROI Manager** panel. Draw one or more ROIs on regions in the image th
 
 Repeat for each expected component. If you have known reference spectra, use **Load Spectrum** to import them instead of drawing ROIs (see [Loading custom seed spectra](tutorials/03a_loading_custom_seed_spectra.md)).
 
+!!! important "Seeds are the scientific decision"
+    The quality of a seeded NNMF (or fixed-H NNLS) result is dominated by the **seeds**, not by the solver settings. Spend the time here: draw ROIs in genuinely spectrally distinct regions, sanity-check each ROI-averaged spectrum, and add a dedicated background ROI if the dataset has a slowly varying baseline. Defaults are correct for almost everything in the Analysis panel; the seeds are the part you defend.
+
 ## Step 5: Run the analysis
 
 In the **Analysis** panel:

@@ -38,6 +38,9 @@ $$
 X \approx W H
 $$
 
+!!! important "The one equation behind every analysis mode"
+    All four modes (PCA, random NNMF, seeded NNMF, fixed-H NNLS) solve a variant of `X ≈ WH`. The differences are only **what is held fixed** and **what constraint is applied**. PCA allows signed values; the three NMF/NNLS modes enforce non-negativity. Random NNMF discovers both `W` and `H`; seeded NNMF starts from user-provided seeds and refines both; fixed-H NNLS locks `H` and solves only `W`. Internalizing this matrix picture is the single most important step for getting good results.
+
 where:
 
 - \(X\) is the data matrix, shape `(n_pixels, n_channels)`,
@@ -115,6 +118,11 @@ The two main user-facing analysis modes differ in one important way:
 **Fixed-H NNLS**: the H matrix is locked to the provided seeds. Only W is fitted. The result maps are the best non-negative abundance coefficients for those fixed spectra.
 
 Use seeded NNMF when you want the algorithm to adapt and refine the spectral estimates. Use fixed-H NNLS when the spectra are already trusted and must stay stable.
+
+!!! tip "Which mode for which job?"
+    * **First look at an unknown sample** → PCA or random NNMF.
+    * **You have ROIs / reference spectra and want clean unmixing** → seeded NNMF. This is the main publication-grade workflow.
+    * **The spectra are already trusted and you want stable maps across slices / time points / FOVs** → fixed-H NNLS. Strictest mode; most comparable results across 4D.
 
 This distinction matters for scaling. In fixed-H NNLS, W is the fitted result, not just a starting seed. The usual NNMF scale ambiguity is no longer a free normalization choice: because H is fixed, rescaling W alone changes \(W H\) and therefore changes the reconstruction error. Preserving the same product would require inverse rescaling of H, which fixed-H mode deliberately does not allow. The internal W coefficients are therefore kept on the scale required to reconstruct \(X\) from the fixed H spectra. Display or export can still rescale maps for visualization, but the fixed-H NNLS fit itself should not normalize W to unit maximum.
 

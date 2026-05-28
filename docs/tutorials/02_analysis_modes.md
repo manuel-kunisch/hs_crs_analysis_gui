@@ -32,7 +32,6 @@ The GUI exposes `PCA` and `NNMF` as the main method buttons. The practical NNMF 
 | Fixed-H NNLS | Select **NNMF**, enable **Custom initialization** and **Fixed-H NNLS mode**, then **Run Analysis**. | A valid final H basis. Missing components can be residual-filled, but should be previewed carefully. |
 | 4D hybrid NNMF/NNLS | For 4D data, select **NNMF**, enable **Custom initialization**, enable **4D: NNMF ref slice, NNLS others**, then **Run Analysis**. | Seeds for the reference slice; the fitted H is reused across other slices. |
 
-> Screenshot placeholder: Analysis panel with **PCA**, **NNMF**, **Custom initialization**, **Fixed-H NNLS mode**, **W map from H**, backend, solver, iteration limits, component count, and **Run Analysis** labeled.
 
 ## Why different modes exist
 
@@ -87,7 +86,6 @@ For most datasets, the practical sequence is:
 4. Run **Seeded NNMF** for the main guided analysis.
 5. Once the spectral basis looks stable, switch to **Fixed-H NNLS** for cross-slice comparison or 4D workflows.
 
-> Flowchart placeholder: mode-selection path from unknown dataset -> PCA/random NNMF -> seeds -> seeded NNMF -> fixed-H NNLS for stable comparison.
 
 ## Advanced settings
 
@@ -96,7 +94,7 @@ The analysis panel exposes several settings that affect how NNMF and NNLS run in
 | Setting | What it controls | Default | Practical effect |
 |---|---|---|---|
 | **NNMF solver** | Update rule for the NMF fit: *Multiplicative Update (mu)* or *Coordinate Descent (cd)*. | `mu` | `mu` is reliable and enforces non-negativity at every step. `cd` can be faster on some datasets but is less commonly needed. MU custom inits are lifted to a small `eps` internally just before the solve to avoid zero-stuck-zero; CD does not need this. See [MU init eps lift](../methods/nnmf_nnls_modes.md#non-negativity-exact-zeros-and-the-mu-init-eps-lift). |
-| **Backend** | Where the NMF MU solver runs: *Prefer GPU* or *CPU only*. | Prefer GPU | *Prefer GPU* tries the first available accelerator (CUDA, then MPS, then XPU) and falls back to CPU torch if no GPU is detected, logging the fallback. *CPU only* skips the PyTorch path entirely and runs the scikit-learn MU NMF on CPU (not torch CPU). Coordinate Descent always uses the scikit-learn CPU backend regardless of this setting. The legacy *Automatic* item from v0.9.3 was removed in v0.9.4 because it had identical behavior to *Prefer GPU*; old presets that stored `"auto"` load as *Prefer GPU* automatically. See [GPU acceleration](02a_gpu_acceleration.md). |
+| **Backend** | Where the NMF MU solver runs: *Prefer GPU* or *CPU only*. | Prefer GPU | *Prefer GPU* tries the first available accelerator (CUDA, then MPS, then XPU) and falls back to CPU torch if no GPU is detected, logging the fallback. *CPU only* skips the PyTorch path entirely and runs the scikit-learn MU NMF on CPU (not torch CPU). If PyTorch is not installed, the dropdown is locked to *CPU only*. Coordinate Descent always uses the scikit-learn CPU backend regardless of this setting. The legacy *Automatic* item from v0.9.3 was removed in v0.9.4 because it had identical behavior to *Prefer GPU*; old presets that stored `"auto"` load as *Prefer GPU* automatically. See [GPU acceleration](02a_gpu_acceleration.md). |
 | **NNMF max iterations** | Maximum iteration count for the NMF solver. | 1000 | Raise if the fit summary shows the solver did not converge; lower to speed up exploratory runs. |
 | **NNLS max iterations** | Maximum iteration count for the NNLS solver (used by fixed-H NNLS and W-seed estimation). | 1000 | Same logic as above. See [Convergence criteria](../methods/nnmf_nnls_modes.md#convergence-criteria) — the PyTorch MU criterion samples the residual every 10 iterations, worth knowing when comparing against other implementations. |
 | **Custom initialization** | Forces NNMF to use the seeded W and H matrices without any rescaling beforehand. | Off | Enable when seeds are already on the right amplitude scale and you do not want the initializer to modify them. Required for the Seeded NNMF and Fixed-H NNLS practical modes. |
@@ -105,16 +103,42 @@ The analysis panel exposes several settings that affect how NNMF and NNLS run in
 
 ## Performance column *(v0.9.4+)*
 
-A fourth column in the Analysis panel groups three opt-in solver tunables. **All three default to values that match v0.9.2 / v0.9.3 numerical behaviour exactly**, so an unchanged installation behaves identically to the older release. The settings are saved in the application JSON preset under a `"performance_settings"` block; legacy presets that lack this key restore to the v0.9.2-compat defaults automatically.
+A fourth column in the Analysis panel groups the opt-in solver tunables. **All settings default to values that match v0.9.2 / v0.9.3 numerical behaviour exactly**, so an unchanged installation behaves identically to the older release. The settings are saved in the application JSON preset under a `"performance_settings"` block; legacy presets that lack this key restore to the v0.9.2-compat defaults automatically.
 
 | Setting | Default | What it does | Practical effect |
 |---|---|---|---|
-| **W-seed downsample** | 1 (off) | Spatial factor by which the data is downsampled before the per-pixel NNLS / selective-score W-seed estimation, then bilinear-upsampled back. | **Real measured speedup.** On a 1024×1024 × 32 dataset with k=4 components, factor=4 gave ~1.8× faster NNLS-mode and ~4.5× faster selective-score-mode W-seed estimation, with cosine similarity 0.9999 vs the full-resolution W seed. Recommended starting value is **2 or 4** for typical analyses; **8** for very large mosaics. Applies *only* to W-seed initialisation for NNMF runs — fixed-H NNLS (where W is the final result) always runs at full resolution. |
+| **W-seed downsample** | **4** | Spatial factor by which the data is downsampled before the per-pixel NNLS / selective-score W-seed estimation, then bilinear-upsampled back. It also accelerates residual-fallback H-seed estimation (the per-pixel NNLS used to build a seed for components with no ROI/file/Gaussian spectrum). | **Real measured speedup.** On a 1024×1024 × 32 dataset with k=4 components, factor=4 gave ~1.8× faster NNLS-mode and ~4.5× faster selective-score-mode W-seed estimation (cosine similarity 0.9999 vs full-res); factor=8 gave ~2.5×/~6.4× at 0.9997. The residual-seed path shows the same near-1.0 cosine similarity. **Fresh sessions now default to 4.** Set **1** (no downsampling) to reproduce pre-v0.9.4 seeds exactly, or raise to **8** for very large mosaics (the factor auto-skips when the image is too small). Applies to W-seed *and* residual-fallback H-seed initialisation for NNMF runs. In **Fixed-H NNLS** mode the W maps are the final result but are built through this same path, so the factor blurs them too — the GUI warns and offers to reset to 1 on a fixed-H run with a factor > 1. |
 | **Early-stop patience** | 1 (matches v0.9.2) | Convergence is declared only after the per-iteration error improvement stays at or below `tol` for this many *consecutive* sampled iterations. | A **robustness** knob, not a speedup. The default of 1 matches pre-v0.9.4 behaviour (exit at first below-tol check). Raise to 2 or 3 if you observe the solver exiting prematurely on noisy data — at the cost of a few extra iterations. Setting 5+ is very conservative. |
+| **NNMF tolerance** | 1e-4 | Relative-improvement tolerance for the PyTorch MU NMF solver, sampled every 10 iterations. The solver stops at the first sample where the relative drop is at or below this value (and patience is satisfied). | **Tighten** to 1e-5 / 1e-6 for publication-grade fits when the fit summary shows the error is still visibly decreasing at the iteration cap. **Loosen** to 1e-3 for fast exploration on CPU. Affects only the PyTorch MU backend — the scikit-learn NMF path keeps its own internal tol of 1e-4. The control is an editable dropdown with the preset ladder `1e-1 … 1e-7`; type any custom value (e.g. `5e-5`) and press Enter to apply. |
+| **NNLS tolerance** | 1e-4 | Relative-step tolerance for the PyTorch FISTA NNLS solver, checked every 10 iterations on each pixel chunk. Convergence: `‖aₖ₊₁ − aₖ‖ / (‖aₖ‖ + ε) ≤ tol`. | **Tighten** to 1e-5 / 1e-6 for fixed-H NNLS publication runs where abundance maps must be at the KKT optimum. **Loosen** to 1e-3 for fast exploration on CPU. Affects only the PyTorch FISTA backend — SciPy's Lawson–Hanson NNLS has no `tol` parameter. Same editable-dropdown control as the NNMF tolerance. |
 | **Use torch.compile (MU)** | Off | Wraps the multiplicative-update step in `torch.compile()` to fuse the matmul + pointwise ops into single kernels. | **Typical CUDA + Triton:** 1.3–2× on the inner loop. **CPU:** ~1.2–1.5×. **MPS / XPU:** inconsistent — `torch.compile` support on these backends is still evolving in PyTorch. If the active PyTorch build cannot compile (e.g. a CUDA build without Triton, or older MPS), the solver logs a warning and silently falls back to eager mode. First iteration pays a one-shot compile cost (~5–10 s) that equalizes across all subsequent iterations and is well worth it for 4D z/t stacks where the same shape is processed many times. |
 
 Tldr: leave the three Performance controls at their defaults unless there is a specific reason (bad convergence...) to tune them.
-The "free speedup" is **W-seed downsample at factor=2 or 4**, which costs essentially nothing in quality (cosine similarity 0.9999) and gives a real 2–4× wall-clock saving on the seed-init step.
+**W-seed downsample now defaults to 4**, so the seed-init speedup is already on out of the box (cosine similarity ~0.9999 to the full-resolution seed). Raise it to **8** for very large mosaics, or drop to **1** to reproduce pre-v0.9.4 seeds exactly. Note that in **Fixed-H NNLS** mode the W maps are the final result and are built through the same downsampling path, so set the factor to **1** there for sharp maps (the GUI prompts you).
+
+## Recommended iteration settings — GPU vs CPU
+
+The Analysis-panel defaults are tuned for a GPU. Whether you are on GPU or CPU determines whether the defaults are right, and whether you should be running an *exploratory* pass or a *quality* pass.
+
+!!! important "Recommended Analysis-panel settings — GPU vs CPU"
+    | Setting | GPU (default) | CPU — exploration | CPU — final quality run |
+    |---|---|---|---|
+    | **Spatial binning** *(data area)* | 1 | **≥ 2** | 1 (or whatever the science needs) |
+    | **W-seed downsample** *(Performance column)* | 4 (default) | 8 (or higher) | 1 (full-res; also use 1 for Fixed-H NNLS) |
+    | **NNMF max iterations** | 500 | **250** | 500 |
+    | **NNLS max iterations** | 500 | **250** | 500 |
+    | **NNMF tolerance** | 1e-4 | 1e-3 | 1e-5 / 1e-6 if `n_iter` is at the cap |
+    | **NNLS tolerance** | 1e-4 | 1e-3 | 1e-5 / 1e-6 for fixed-H NNLS at the KKT optimum |
+    | **Early-stop patience** | 1 | 1 | 2–3 if noisy convergence |
+    | **Use torch.compile (MU)** | On if Triton present, off otherwise | Off | Off (or on if Triton present) |
+
+    **Workflow on a CPU-only machine.** Use the *exploration* column to pick seeds, palette, component count, and W-seed mode — each run finishes in seconds to tens of seconds at those reduced settings. Once the layout is what you want, raise binning / downsample / iterations back to the *quality* column and do **one** final reconstruction. A single full-resolution CPU run can take several minutes per field of view, and that is fine because it is the only one that has to.
+
+    **Workflow on GPU.** Defaults are already optimal — **W-seed downsample defaults to 4**, so the seed-init speedup (cosine similarity ~0.9999 to full resolution) is on by default; raise to 8 for very large mosaics, or drop to 1 for exact pre-v0.9.4 reproduction (and for sharp Fixed-H NNLS maps). `torch.compile` gives 1.3–2× on the MU inner loop on CUDA when Triton is available, ~1.2–1.5× on CPU torch, and is inconsistent on MPS / XPU.
+
+    **Backend dropdown.** Set to **Prefer GPU** to let the priority chain CUDA → MPS → XPU → CPU-torch pick the best device. Set to **CPU only** to skip the PyTorch path entirely and run the scikit-learn MU NMF on CPU (not torch CPU) — useful for benchmarking or reproducibility against the scikit-learn reference.
+
+For a per-platform install matrix (CUDA / MPS / XPU / CPU) and the matching `pip install` commands, see [Installation](../installation.md).
 
 ## What to read next
 

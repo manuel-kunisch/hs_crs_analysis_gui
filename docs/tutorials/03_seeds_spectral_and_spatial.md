@@ -2,7 +2,34 @@
 
 ![Seed estimation pipeline — flow of H and W seeds for a single slice, wrapped by the per-slice 4D loop](../assets/images/03_seed_building_flow.png)
 
-Seeds are the main way to guide the analysis. The GUI supports both spectral seeds and spatial seeds.
+Seeds are the main way to guide the analysis. The GUI supports both spectral seeds (**H**) and spatial seeds (**W**). The two are linked: in the most common workflow you provide *one* region of interest (ROI) per component, and the GUI derives both seeds from it.
+
+## Setting Seeds In The GUI: The ROI Workflow
+
+In practice, the most common way to seed a component is to **draw a region of interest (ROI) on the image**. A single ROI feeds the analysis in two linked ways:
+
+- its **mean spectrum** becomes the component's **H seed** (the spectral fingerprint), and
+- that H seed is then used to estimate the component's **W seed** (the spatial abundance map) via the chosen W-seed mode.
+
+So one ROI placed on a representative region is usually enough to seed a whole component. You do **not** set H and W separately — drawing the ROI gives the H seed directly, and the W seed is derived from it.
+
+### Step by step
+
+1. **Load an image** and open the **ROI Manager** next to the raw image viewer.
+2. **Draw a ROI** over a region that looks representative of one component. The mean spectrum inside the box appears immediately in the ROI average plot — that curve *is* the H seed for the component.
+3. **Assign the ROI to a component** (component index, colour, and label) in the ROI table. Several ROIs assigned to the same component are averaged into one H seed.
+4. **Refine the ROI** by dragging it to move, or dragging its handles to resize. The mean spectrum updates live as you move or resize, so you can watch the seed spectrum change and settle the box where the fingerprint looks cleanest (strong component signal, little background).
+5. **Add a ROI for each remaining component**, one representative region each.
+6. **Press Test seeds** to preview the resulting H spectra and W maps before committing to the full run.
+
+![Setting two ROIs on a CARS microbead mixture: drawing each ROI, then moving and resizing it while the mean spectrum (the H seed) updates live in the ROI average plot](../assets/gifs/03_roi_draw_resize_beads.gif)
+
+*Two ROIs placed on a CARS microbead mixture. Each ROI's spectrum becomes the H seed for its component; dragging and resizing the box updates that spectrum live, so you can settle each ROI where its fingerprint is cleanest.*
+
+!!! important "One ROI seeds both H and W"
+    Drawing a single ROI provides the **H seed** (its mean spectrum) directly, and the **W seed** is then estimated from that H seed via the W-seed mode. You rarely set W by hand — pick a good region, check the spectrum, and let the W-seed step build the spatial map. Fixed W maps (imported results or background projections) are the exception, covered under [Dummy ROIs and Fixed W Seeds](#dummy-rois-and-fixed-w-seeds).
+
+For the full reference on every ROI Manager button, row type, and table column, see [ROI Manager in detail](03b_roi_manager.md). The rest of this page explains what each seed type *is* and the other ways to supply them (files, Gaussian models, imported results).
 
 ## H Seeds: Spectral Information
 
@@ -39,9 +66,11 @@ The residual fallback works as follows:
 
 If no stable residual candidate can be built, the legacy random smooth fallback is still used. In fixed-H NNLS setup this means a missing component can still be filled before the `W` maps are solved. The seed-audit warning may appear because the component was missing at the start; choosing **Continue anyway** lets the residual fallback try to fill it, but the resulting seed should still be previewed and checked.
 
-In the ROI table, these appear as normal ROI rows or dummy ROI rows. A dummy ROI does not need to correspond to a drawn spatial region; it can carry a spectrum or a fixed W map.
+![Residual fallback on a three-component CARS microbead mixture: two bead types are seeded from ROIs while the third (polystyrene, shown cyan) has no spectrum; the GUI recovers its spectrum from the unexplained residual and fills the missing component automatically](../assets/gifs/03_residual_seed_beads.gif)
 
-> GIF placeholder: drawing a ROI and seeing its spectrum appear in the ROI average plot.
+*A three-kind CARS microbead mixture with only two components seeded from ROIs. The third type (polystyrene, cyan) is left without a spectrum; the residual fallback fits the two known spectra, takes the strongest unexplained-residual pixels, and recovers the missing polystyrene spectrum — filling the third component without a drawn ROI.*
+
+In the ROI table, these appear as normal ROI rows or dummy ROI rows. A dummy ROI does not need to correspond to a drawn spatial region; it can carry a spectrum or a fixed W map.
 
 ## W Seeds: Spatial Information
 
@@ -56,6 +85,9 @@ In the ROI table, these appear as normal ROI rows or dummy ROI rows. A dummy ROI
 | `empty` | Near-zero homogeneous map. Use this when a component should be discovered entirely from the data without a spatial prior. |
 
 **Rule of thumb:** components live in different pixels → `nnls`; components share pixels by design → `selective_score`. If unsure, try `nnls` first and look at the W maps — if they come out implausibly clean and disjoint compared to what you would expect from the sample, switch to `selective_score`. This only affects the *seed*; seeded NNMF can still recover mixed pixels because both `W` and `H` are updated during the fit. See [Picking nnls vs selective_score](../methods/nnmf_nnls_modes.md#picking-nnls-vs-selective_score) for the longer reasoning.
+
+!!! important "The W-seed mode is the most consequential single setting after the H seeds"
+    `nnls` and `selective_score` push the analysis toward opposite assumptions — one-component-per-pixel vs many-components-per-pixel. Picking the wrong one usually shows up as either over-separated, implausibly-clean maps (`nnls` on co-localised samples) or smudgy, mixed maps where everything looks similar (`selective_score` on spatially distinct chemistries). If the W maps look wrong, this is the first knob to flip.
 
 If an `H` seed is missing for a component, the residual fallback (described above) builds an `H0` first, and then the selected W-seed mode produces the spatial map from that `H0`. Fixed W maps can also be attached to dummy ROIs — useful for background components or for importing spatial maps from previous results.
 
@@ -147,6 +179,9 @@ The GUI offers three distinct mechanisms for handling sample background, and the
 | **Use subtracted data** flag (per component) | Resonance / spectral-info table | For one component, controls whether seed estimation reads from the **raw** stack or the **Processed** (subtracted) view. | When most components fit better on the subtracted data, but one — typically the background itself — must still see the raw signal. |
 
 Concretely: a background component (`Background` flag) lives inside the unmixed result; a subtracted spectrum (`Subtract` flag) is removed *before* analysis sees it; the **Use subtracted data** flag decides which of those two views each individual component looks at when its seed is built.
+
+!!! warning "Three different "background" mechanisms — easy to confuse"
+    The same word covers three distinct interventions: a background **component** (kept in the model), a background **subtraction** (removed before fitting), and a per-component **Use subtracted data** flag (which view a single component reads from). When debugging an analysis where weak components look contaminated, check which of the three you actually have enabled — it is common to think the subtraction is on when only the flag is set, or vice versa.
 
 ### Background as a model component
 

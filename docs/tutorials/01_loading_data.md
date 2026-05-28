@@ -108,6 +108,9 @@ When a TIFF is opened, the loader first converts the input array into the GUI's 
 
 This means that unusual TIFF types such as `float32`, `float64`, `int32`, or `uint32` can be loaded, but their original absolute numeric scale is not preserved automatically. The loader maps them into the GUI's 16-bit working range.
 
+!!! warning "Float / 32-bit TIFFs are remapped. The original numeric scale is not preserved"
+    If your input is a `float32`/`float64` TIFF whose values are relevant on an absolute scale (counts per second, calibrated reflectance, etc.), HS-MOSAIC's 16-bit working range will rescale them globally before analysis. The relative structure (which pixels are bright, which spectra are which) is preserved, but the absolute numeric value of `W` afterward is in working-scale units, not in the original physical units. If absolute scale matters for downstream quantification, record the global scale factor used at load time (see the fit summary) and apply it on export.
+
 ### Normalization after loading
 
 By default, newly loaded images are normalized once more to the full 16-bit display range:
@@ -230,3 +233,8 @@ If the spectral axis appears wrong, check:
 - whether a preset from a different dataset was loaded.
 
 If the image is very large, use binning before analysis to reduce memory and runtime.
+
+
+**`wavelength.json` not detected**:
+
+- The file must be named exactly `wavelength.json` (lowercase) and placed in the **same folder** as the TIFF file, not a parent folder. See [Spectral axis and wavelength.json](reference/spectral_axis_and_wavelength_json.md).

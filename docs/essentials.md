@@ -2,7 +2,9 @@
 
 Six features that are easy to miss when you just click around, but that change how productive HS-MOSAIC is once you know them. Each section is a TL;DR with a screenshot or GIF and a link into the full documentation.
 
-If you read only one page in this docs site, this is the one.
+!!! tip "If you read only one page in this docs site, this is the one."
+    These items try to guide you to find the best seeds for your data, consequently the best results, as quickly as possible!
+    These six items account for the vast majority of "why didn't I know about this earlier?" feedback. Each one of them is a multiplier on the time you spend in the GUI. Skim the headlines, then come back to the sections that match what you actually do.
 
 ---
 
@@ -83,7 +85,8 @@ Concrete fluorescence case: a fluorophore that only emits in channel 0. Set up a
 
 ![Delta-peak Gaussian seeds (vanishing FWHM) shown next to ROI-derived seeds in the spectral plot, with mixed seeds combined in the ROI manager](assets/images/delta_peaks_with_rois_mixed_spectra.png)
 
-*Two Gaussian dummy seeds with vanishing width — effectively delta peaks at single channels — sit alongside ROI-derived spectra in the ROI manager. The mixed seed set is what gets passed to the analysis.*
+*Two Gaussian dummy seeds (cyan and green) with vanishing width, effectively delta peaks at single channels, sit alongside ROI-derived spectra in the ROI manager. In this example of fluorescence data mixing, 
+the component represents a "clean" channel.*
 
 → Full reference: [Gaussian Resonance Seeds](tutorials/03_seeds_spectral_and_spatial.md#gaussian-resonance-seeds)
 
@@ -91,9 +94,9 @@ Concrete fluorescence case: a fluorophore that only emits in channel 0. Set up a
 
 ## 6. Save Histogram and Spectra Preset — reproducibility across FOVs
 
-The most undervalued button in the GUI. After you have a finalised analysis on a representative field of view (colours look right, spectra are clean, ROIs are good), press **Save Histogram and Spectra Preset** in the result viewer. The `.preset` file captures:
+After you have a finalized analysis on a representative field of view (colors look right, spectra are clean, ROIs are good), press **Save Histogram and Spectra Preset** in the result viewer. The `.preset` file captures:
 
-- the component colours and histogram levels,
+- the component colors and histogram levels,
 - the spectra in use (Results or Seeds, selectable via the mode dropdown),
 - the spectral axis at save time.
 

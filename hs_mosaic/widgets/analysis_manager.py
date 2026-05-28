@@ -29,6 +29,39 @@ from hs_mosaic.widgets.spectral_axis import (
 from hs_mosaic.widgets.color_manager import ComponentColorManager
 from hs_mosaic.widgets.hs_image_view import ColorButton
 
+
+def _make_tolerance_combo(
+    current: float,
+    on_change: Callable[[float], None],
+    tooltip: str,
+) -> QtWidgets.QComboBox:
+    """Build an editable QComboBox for a solver tolerance.
+
+    Pre-fills the logarithmic ladder ``1e-1 ... 1e-7``, accepts any user-typed
+    value through the editable line edit, and forwards parsed floats to
+    ``on_change``. Unparseable input is ignored, so the active tolerance just
+    stays at its previous value until valid text is entered.
+    """
+    combo = QtWidgets.QComboBox()
+    combo.setEditable(True)
+    combo.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+    for value in (1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7):
+        combo.addItem(f"{value:.0e}", value)
+    combo.setCurrentText(f"{float(current):.0e}")
+    combo.setToolTip(tooltip)
+    combo.setFixedWidth(90)
+
+    def _emit(text: str) -> None:
+        try:
+            parsed = float(text.strip())
+        except (TypeError, ValueError):
+            return
+        on_change(parsed)
+
+    combo.currentTextChanged.connect(_emit)
+    return combo
+
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('Hyperspectral Analysis')
 logger.setLevel(logging.INFO)
@@ -384,6 +417,8 @@ class AnalysisManager(QtCore.QObject):
             "• CPU only: skips the PyTorch path entirely and runs the scikit-learn\n"
             "  MU NMF on CPU (not torch CPU). Useful for benchmarking, reproducibility\n"
             "  against the scikit-learn reference, or when the GPU is busy elsewhere.\n\n"
+            "If PyTorch is not installed, this dropdown is locked to CPU only\n"
+            "(there is no torch/GPU path to choose).\n\n"
             "The Coordinate Descent (cd) solver always runs on the scikit-learn CPU\n"
             "backend regardless of this setting."
         )
@@ -486,9 +521,14 @@ class AnalysisManager(QtCore.QObject):
             "  factor=2     0.57 s (1.4x)      1.03 s (2.1x)         0.9999\n"
             "  factor=4     0.45 s (1.8x)      0.48 s (4.5x)         0.9999\n"
             "  factor=8     0.32 s (2.5x)      0.34 s (6.4x)         0.9997\n\n"
-            "Default 1 = no downsampling. Recommended 2–4 for typical analyses;\n"
-            "8 for very large mosaics. Applies ONLY to W-seed initialisation;\n"
-            "fixed-H NNLS (where W is the final result) always runs at full resolution."
+            "Default 4 (fast, ~0.9999 cosine similarity to the full-res seed).\n"
+            "Set 1 = no downsampling to reproduce pre-v0.9.4 seed behavior\n"
+            "exactly; raise to 8 for very large mosaics. The downsample\n"
+            "auto-skips when the image is too small for the factor. Applies to\n"
+            "W-seed AND residual-fallback H-seed initialization. In Fixed-H NNLS\n"
+            "mode the W maps are the final result and are built via this same\n"
+            "path, so the factor affects them too — the GUI warns you and offers\n"
+            "to reset to 1 when you start a fixed-H run with a factor > 1."
         )
         self.w_seed_ds_spinbox = QtWidgets.QSpinBox()
         self.w_seed_ds_spinbox.setRange(1, 16)
@@ -497,6 +537,54 @@ class AnalysisManager(QtCore.QObject):
         self.w_seed_ds_spinbox.setToolTip(w_seed_ds_label.toolTip())
         self.w_seed_ds_spinbox.valueChanged.connect(self.mv_analyzer.set_w_seed_downsample_factor)
         perf_form.addRow(w_seed_ds_label, self.w_seed_ds_spinbox)
+
+        # NNMF MU tolerance (PyTorch backend)
+        nmf_tol_label = QtWidgets.QLabel("NNMF tolerance:")
+        nmf_tol_label.setToolTip(
+            "Relative-improvement tolerance for the PyTorch MU NNMF solver.\n\n"
+            "The solver samples the Frobenius residual every 10 iterations and\n"
+            "stops at the first sample where the relative drop falls at or below\n"
+            "this value (and patience is satisfied). Smaller = more iterations,\n"
+            "tighter fit; larger = exits sooner.\n\n"
+            "• Default: 1e-4 (matches v0.9.2 / v0.9.3 numerical behaviour).\n"
+            "• Tighten to 1e-5 / 1e-6 for publication-grade fits when the fit\n"
+            "  summary shows the error is still visibly decreasing at the cap.\n"
+            "• Loosen to 1e-3 for fast exploration on CPU.\n\n"
+            "Pick from the dropdown ladder or type any value (e.g. 5e-5).\n\n"
+            "Affects only the PyTorch MU backend. The scikit-learn NMF path\n"
+            "(used for the CPU-only backend and the cd solver) keeps its own\n"
+            "internal tol of 1e-4."
+        )
+        self.nnmf_tol_combo = _make_tolerance_combo(
+            current=float(self.mv_analyzer.torch_nmf_tol),
+            on_change=self.mv_analyzer.set_nnmf_tol,
+            tooltip=nmf_tol_label.toolTip(),
+        )
+        perf_form.addRow(nmf_tol_label, self.nnmf_tol_combo)
+
+        # NNLS FISTA tolerance (PyTorch backend)
+        nnls_tol_label = QtWidgets.QLabel("NNLS tolerance:")
+        nnls_tol_label.setToolTip(
+            "Relative-step tolerance for the PyTorch FISTA NNLS solver.\n\n"
+            "Each pixel chunk is checked every 10 iterations; a chunk converges\n"
+            "when ||a^(k+1) − a^(k)|| / (||a^(k)|| + eps) falls at or below this\n"
+            "value. Smaller = more iterations per chunk, tighter fit; larger =\n"
+            "exits sooner per chunk.\n\n"
+            "• Default: 1e-4.\n"
+            "• Tighten to 1e-5 / 1e-6 for fixed-H NNLS publication runs where the\n"
+            "  abundance maps must be at the KKT optimum.\n"
+            "• Loosen to 1e-3 for fast exploration on CPU.\n\n"
+            "Pick from the dropdown ladder or type any value.\n\n"
+            "Affects only the PyTorch FISTA NNLS backend. The SciPy NNLS path\n"
+            "(Lawson–Hanson active-set) has no tol parameter — it either reaches\n"
+            "the exact KKT optimum within max_iter or returns the best iterate."
+        )
+        self.nnls_tol_combo = _make_tolerance_combo(
+            current=float(self.mv_analyzer.torch_nnls_tol),
+            on_change=self.mv_analyzer.set_nnls_tol,
+            tooltip=nnls_tol_label.toolTip(),
+        )
+        perf_form.addRow(nnls_tol_label, self.nnls_tol_combo)
 
         # torch.compile toggle for the MU step
         self.nnmf_use_compile_check = QtWidgets.QCheckBox("Use torch.compile (MU)")
@@ -935,6 +1023,11 @@ class AnalysisManager(QtCore.QObject):
                 if not self._confirm_component_seed_audit(fixed_h_mode=True):
                     self._finish_analysis_progress()
                     return
+                # In fixed-H NNLS the W maps ARE the final result, so a non-1
+                # W-seed downsample factor produces blurry upsampled maps.
+                if not self._confirm_fixed_h_full_resolution():
+                    self._finish_analysis_progress()
+                    return
                 fill_missing_h = self._analysis_series_4d is not None
                 self._prepare_fixed_h_seed_template(show_seeds=True, fill_missing_h=fill_missing_h)
                 if not fill_missing_h and not self.mv_analyzer.has_complete_H_seed_set():
@@ -1340,6 +1433,51 @@ class AnalysisManager(QtCore.QObject):
             self.fast_multislice_nnmf_check.setEnabled(
                 self.nnmf_radio.isChecked() and not fixed_h_mode and self._analysis_series_4d is not None
             )
+
+    def _confirm_fixed_h_full_resolution(self) -> bool:
+        """Warn before a fixed-H NNLS run when W-seed downsampling is active.
+
+        In fixed-H NNLS the W abundance maps are the FINAL result, not a seed
+        that NMF later refines. A W-seed downsample factor > 1 therefore makes
+        the GUI compute those maps on a 1/factor² copy of the data and
+        bilinear-upsample them back, so they come out visibly blurry. Offer to
+        reset the factor to 1 for full-resolution maps.
+
+        Returns False only if the user chooses to cancel the run.
+        """
+        factor = int(getattr(self.mv_analyzer, "w_seed_downsample_factor", 1))
+        if factor <= 1:
+            return True
+
+        box = QtWidgets.QMessageBox(self.analysis_widget)
+        box.setIcon(QtWidgets.QMessageBox.Warning)
+        box.setWindowTitle("W-seed downsample active in Fixed-H NNLS")
+        box.setText(
+            f"The W-seed downsample factor is set to {factor}.\n\n"
+            "In Fixed-H NNLS mode the W abundance maps are the final result, "
+            "not just a seed for NMF to refine. With this factor they are "
+            f"computed on a 1/{factor}²-resolution copy of the data and "
+            "bilinear-upsampled back, so the maps will look blurry."
+        )
+        box.setInformativeText("Set the W-seed downsample to 1 for full-resolution maps?")
+        set_btn = box.addButton("Set to 1 (recommended)", QtWidgets.QMessageBox.AcceptRole)
+        keep_btn = box.addButton(f"Keep {factor} (blurry)", QtWidgets.QMessageBox.DestructiveRole)
+        cancel_btn = box.addButton(QtWidgets.QMessageBox.Cancel)
+        box.setDefaultButton(set_btn)
+        box.exec_()
+
+        clicked = box.clickedButton()
+        if clicked is cancel_btn:
+            return False
+        if clicked is set_btn:
+            # Update via the spinbox so the GUI and the analyzer stay in sync;
+            # the valueChanged signal forwards to set_w_seed_downsample_factor.
+            if getattr(self, "w_seed_ds_spinbox", None) is not None:
+                self.w_seed_ds_spinbox.setValue(1)
+            else:
+                self.mv_analyzer.set_w_seed_downsample_factor(1)
+        # "Keep" falls through and proceeds with the downsampled maps.
+        return True
 
     def _set_overwrite_W_from_H(self, state, force_checkbox: bool = False):
         self._overwrite_existing_W_from_H = bool(state)
@@ -1989,25 +2127,47 @@ class AnalysisManager(QtCore.QObject):
         in_nnmf_mode = self.nnmf_radio.isChecked()
         torch_mu_in_use = self.mv_analyzer.nnmf_solver == "mu" and in_nnmf_mode
 
-        # Backend dropdown is meaningful only when the torch MU path is in
-        # use. The "Prefer GPU" option is NOT disabled when no GPU is present
-        # because it gracefully falls back to CPU torch (and Reads the log
-        # for visibility). Disabling it would force users to pick CPU only,
-        # which is a stricter choice since CPU torch can still be offered.
-        self.nnmf_backend_dropdown.setEnabled(torch_mu_in_use)
-
-        # Performance-column controls: align with the backend dropdown.
+        # The backend dropdown only matters for the PyTorch MU NMF path, so it
+        # is enabled only when that path could actually run: PyTorch installed
+        # AND in NNMF mode with the mu solver. If PyTorch is not installed at
+        # all there is no torch/GPU path to choose, so the dropdown is locked
+        # to "CPU only" (the scikit-learn MU path). A GPU-less machine that
+        # does have PyTorch keeps the choice enabled, because "Prefer GPU"
+        # still gives a working torch-CPU run there.
         torch_installed = torch_nmf.torch_available()
-        perf_active = torch_mu_in_use and torch_installed
+        self.nnmf_backend_dropdown.setEnabled(torch_installed and torch_mu_in_use)
+        if not torch_installed:
+            self.nnmf_backend_dropdown.setCurrentIndex(1)  # lock to "CPU only"
+
+
+        # The MU-specific torch tunables (patience, torch.compile, NNMF
+        # tolerance) only have an effect when the MU path actually runs on
+        # torch — i.e. in NNMF mode, mu solver, torch installed, AND the
+        # backend is not forced to the scikit-learn CPU path.
+        mu_uses_torch = (
+            torch_mu_in_use
+            and torch_installed
+            and self.mv_analyzer.nnmf_backend_preference != "cpu"
+        )
         if getattr(self, "nnmf_patience_spinbox", None) is not None:
-            self.nnmf_patience_spinbox.setEnabled(perf_active)
+            self.nnmf_patience_spinbox.setEnabled(mu_uses_torch)
         if getattr(self, "nnmf_use_compile_check", None) is not None:
-            self.nnmf_use_compile_check.setEnabled(perf_active)
+            self.nnmf_use_compile_check.setEnabled(mu_uses_torch)
+        # NNMF tolerance: PyTorch MU only, same gate as patience.
+        if getattr(self, "nnmf_tol_combo", None) is not None:
+            self.nnmf_tol_combo.setEnabled(mu_uses_torch)
 
         # W-seed downsample only depends on being in NNMF mode (W-seed
         # estimation runs whether the solver is mu or cd).
         if getattr(self, "w_seed_ds_spinbox", None) is not None:
             self.w_seed_ds_spinbox.setEnabled(in_nnmf_mode)
+
+        # NNLS tolerance: PyTorch FISTA NNLS is used both by fixed-H NNLS and
+        # by the NNLS-mode W-seed init (regardless of mu/cd). Enable whenever
+        # PyTorch is installed; the value is stored otherwise and has no
+        # effect on the SciPy NNLS path.
+        if getattr(self, "nnls_tol_combo", None) is not None:
+            self.nnls_tol_combo.setEnabled(torch_installed)
 
     def get_analysis_data(self) -> (np.ndarray, np.ndarray):
         if self._analysis_result_spectra is not None and self._analysis_result_images is not None:

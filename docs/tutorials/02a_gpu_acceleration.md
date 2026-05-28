@@ -20,6 +20,8 @@ The analysis panel exposes a **Backend** dropdown for the PyTorch multiplicative
 - **Prefer GPU** (default): tries the first available accelerator in priority order CUDA > MPS > XPU. If no GPU is detected, falls back to CPU torch and logs the fallback.
 - **CPU only**: skips the PyTorch MU path entirely and runs the scikit-learn MU NMF on CPU (not torch CPU). Useful for benchmarking, reproducibility against the scikit-learn reference, or when the GPU is busy with another job.
 
+If PyTorch is not installed, the Backend dropdown is locked to **CPU only** — there is no torch/GPU path to choose, so the multiplicative-update NMF runs on scikit-learn. A machine that has PyTorch but no GPU keeps the dropdown enabled: **Prefer GPU** then runs a torch-CPU fit.
+
 The Coordinate Descent (cd) solver always runs on the scikit-learn CPU backend regardless of the Backend setting.
 
 The legacy **Automatic** item from v0.9.3 was removed in v0.9.4 because it had identical behavior to **Prefer GPU**. Presets saved as `"auto"` load as **Prefer GPU** automatically.

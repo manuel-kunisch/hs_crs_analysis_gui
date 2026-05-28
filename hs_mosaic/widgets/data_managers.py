@@ -119,10 +119,11 @@ class ImageLoader(QtWidgets.QWidget):
         # Provide StitchManager with a per-run, thread-safe tile preprocessor
         self.stitch_manager.set_tile_preprocess_factory(self._rb_tile_preprocess_factory)
 
-        # Add physical units tab
+        # Add physical units tab. The widget pins its own content to the
+        # top-left via internal stretches, so let it expand to fill the tab
         self.physical_units_manager = PhysicalUnitsManager()
         physical_units_tab = self.physical_units_manager.widget
-        self.physical_units_manager.widget.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        self.physical_units_manager.widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         tab_widget.addTab(physical_units_tab, "Physical Units")
 
     def _rb_tile_preprocess_factory(self):

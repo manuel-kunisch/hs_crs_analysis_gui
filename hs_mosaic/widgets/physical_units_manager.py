@@ -2,80 +2,260 @@ import logging
 
 from PyQt5 import QtCore
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QCheckBox, QGridLayout, \
-    QComboBox, QSpinBox
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLabel,
+    QLineEdit, QCheckBox, QComboBox, QSpinBox, QSizePolicy,
+)
 
 logger = logging.getLogger(__name__)
+
 
 class PhysicalUnitsWidget(QWidget):
     fov_change_signal = pyqtSignal(tuple, str)
     options_changed = pyqtSignal(dict)
 
+    # Conversion factors from each supported unit to micrometres.
+    _TO_UM = {"nm": 1e-3, "µm": 1.0, "mm": 1e3}
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self.unit = "µm"
-        self.image_shape = None  # to be set externally
-        self.pixel_size = .28   # default pixel size in µm
+        self.image_shape = None  # to be set externally, as (height, width)
+        self.pixel_size = .28    # default pixel size in µm
 
-        main_layout = QVBoxLayout(self)
-        grid_layout = QGridLayout()
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
 
-        # Title
-        title_label = QLabel("<b>Physical Units Manager</b>")
-        title_label.setAlignment(QtCore.Qt.AlignCenter)
-        main_layout.addWidget(title_label)
+        # --- Header -------------------------------------------------------
+        title_label = QLabel("Physical Units")
+        title_label.setStyleSheet("font-size: 15px; font-weight: 600;")
+        root.addWidget(title_label)
 
-        # === Row 0: Unit Dropdown ===
-        grid_layout.addWidget(QLabel("Unit:"), 0, 0)
+        subtitle = QLabel(
+            "Calibrate pixel size and field of view, and configure the scale "
+            "bar used for on-screen display and exported figures."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("color: palette(mid);")
+        root.addWidget(subtitle)
+
+        # The form sits in a fixed-width column on the left so the controls
+        # don't stretch across the whole (often very wide) tab. A trailing
+        # horizontal stretch keeps it left-aligned; a trailing vertical
+        # stretch (added at the end) keeps everything pinned to the top.
+        content_row = QHBoxLayout()
+        content_row.setSpacing(16)
+        form_col = QVBoxLayout()
+        form_col.setSpacing(12)
+
+        form_col.addWidget(self._build_calibration_group())
+        form_col.addWidget(self._build_scale_bar_group())
+        form_col.addWidget(self._build_details_group())
+
+        form_container = QWidget()
+        form_container.setLayout(form_col)
+        form_container.setMaximumWidth(520)
+        form_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+
+        content_row.addWidget(form_container)
+        content_row.addStretch(1)
+        root.addLayout(content_row)
+        root.addStretch(1)
+
+        # Keep the derived "Image Details" panel in sync whenever the
+        # calibration controls change.
+        self.unit_dropdown.currentTextChanged.connect(self._on_unit_changed)
+        self.pixel_size_input.textChanged.connect(self.refresh_image_details)
+        self.fov_input.textChanged.connect(self.refresh_image_details)
+
+        self.refresh_image_details()
+
+    # ------------------------------------------------------------------ UI
+    def _build_calibration_group(self) -> QGroupBox:
+        group = QGroupBox("Calibration")
+        form = QFormLayout(group)
+        form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+
+        # Unit
         self.unit_dropdown = QComboBox()
         self.unit_dropdown.addItems(["nm", "µm", "mm"])
         self.unit_dropdown.setCurrentText(self.unit)
+        self.unit_dropdown.setToolTip("Physical length unit used for pixel size, field of view, and the scale bar.")
         self.unit_dropdown.currentTextChanged.connect(self.emit_fov_change)
-        grid_layout.addWidget(self.unit_dropdown, 0, 1)
+        form.addRow("Unit:", self.unit_dropdown)
 
-        # === Row 1: Pixel Size ===
-        grid_layout.addWidget(QLabel("Pixel Size:"), 1, 0)
+        # Pixel size (+ live unit suffix)
         self.pixel_size_input = QLineEdit()
-        self.pixel_size_input.setPlaceholderText("e.g. 0.2")
+        self.pixel_size_input.setPlaceholderText("e.g. 0.28")
         self.pixel_size_input.setText(str(self.pixel_size))
+        self.pixel_size_input.setToolTip("Physical size of one pixel. Editing this recomputes the field of view.")
         self.pixel_size_input.textChanged.connect(self.update_fov_from_pixel_size)
-        grid_layout.addWidget(self.pixel_size_input, 1, 1)
+        self.pixel_size_suffix = QLabel(f"{self.unit} / px")
+        self.pixel_size_suffix.setStyleSheet("color: palette(mid);")
+        px_row = QHBoxLayout()
+        px_row.setContentsMargins(0, 0, 0, 0)
+        px_row.setSpacing(6)
+        px_row.addWidget(self.pixel_size_input, 1)
+        px_row.addWidget(self.pixel_size_suffix)
+        px_widget = QWidget()
+        px_widget.setLayout(px_row)
+        form.addRow("Pixel size:", px_widget)
 
-        # === Row 2: FOV ===
-        grid_layout.addWidget(QLabel("Field of View:"), 2, 0)
+        # Field of view (+ live unit suffix)
         self.fov_input = QLineEdit()
         self.fov_input.setPlaceholderText("e.g. 512, 512")
+        self.fov_input.setToolTip("Physical width and height of the image, as 'width, height'. Editing this recomputes the pixel size.")
         self.fov_input.textChanged.connect(self.update_pixel_size_from_fov)
-        grid_layout.addWidget(self.fov_input, 2, 1)
+        self.fov_suffix = QLabel(self.unit)
+        self.fov_suffix.setStyleSheet("color: palette(mid);")
+        fov_row = QHBoxLayout()
+        fov_row.setContentsMargins(0, 0, 0, 0)
+        fov_row.setSpacing(6)
+        fov_row.addWidget(self.fov_input, 1)
+        fov_row.addWidget(self.fov_suffix)
+        fov_widget = QWidget()
+        fov_widget.setLayout(fov_row)
+        form.addRow("Field of view:", fov_widget)
 
-        # === Row 3: Image Shape (read-only) ===
-        grid_layout.addWidget(QLabel("Image Shape:"), 3, 0)
-        self.image_shape_label = QLabel("not set")
-        grid_layout.addWidget(self.image_shape_label, 3, 1)
+        return group
 
-        # === Row 4: Scale Bar length ===
-        grid_layout.addWidget(QLabel("Scale Bar Length:"), 4, 0)
+    def _build_scale_bar_group(self) -> QGroupBox:
+        group = QGroupBox("Scale Bar")
+        form = QFormLayout(group)
+        form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+
         self.scale_bar_length_spinbox = QSpinBox()
         self.scale_bar_length_spinbox.setRange(1, 1000)
         self.scale_bar_length_spinbox.setValue(50)
-        grid_layout.addWidget(self.scale_bar_length_spinbox, 4, 1)
+        self.scale_bar_length_spinbox.setToolTip("Length of the scale bar drawn on the image, in the selected unit.")
+        self.scale_bar_suffix = QLabel(self.unit)
+        self.scale_bar_suffix.setStyleSheet("color: palette(mid);")
+        sb_row = QHBoxLayout()
+        sb_row.setContentsMargins(0, 0, 0, 0)
+        sb_row.setSpacing(6)
+        sb_row.addWidget(self.scale_bar_length_spinbox)
+        sb_row.addWidget(self.scale_bar_suffix)
+        sb_row.addStretch(1)
+        sb_widget = QWidget()
+        sb_widget.setLayout(sb_row)
+        form.addRow("Length:", sb_widget)
 
-        # === Row 5: Options ===
-        self.show_scalebar_checkbox = QCheckBox("Show scalebar")
+        self.show_scalebar_checkbox = QCheckBox("Show scale bar")
+        self.show_scalebar_checkbox.setToolTip("Overlay the scale bar on the displayed image.")
         self.use_physical_units_checkbox = QCheckBox("Use physical units")
+        self.use_physical_units_checkbox.setToolTip("Label axes and exports in physical units instead of pixels.")
         self.show_scalebar_checkbox.stateChanged.connect(self.emit_options_changed)
         self.use_physical_units_checkbox.stateChanged.connect(self.emit_options_changed)
-        grid_layout.addWidget(self.show_scalebar_checkbox, 5, 0)
-        grid_layout.addWidget(self.use_physical_units_checkbox, 5, 1)
+        form.addRow("", self.show_scalebar_checkbox)
+        form.addRow("", self.use_physical_units_checkbox)
 
-        # Final assembly
-        main_layout.addLayout(grid_layout)
-        self.setLayout(main_layout)
+        return group
 
+    def _build_details_group(self) -> QGroupBox:
+        group = QGroupBox("Image Details")
+        form = QFormLayout(group)
+        form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+
+        # image_shape_label is part of the public API (set elsewhere); keep it.
+        self.image_shape_label = QLabel("not set")
+        self.detail_megapixels = QLabel("—")
+        self.detail_fov = QLabel("—")
+        self.detail_pixel = QLabel("—")
+        self.detail_area = QLabel("—")
+
+        form.addRow("Dimensions:", self.image_shape_label)
+        form.addRow("Resolution:", self.detail_megapixels)
+        form.addRow("Field of view:", self.detail_fov)
+        form.addRow("Pixel size:", self.detail_pixel)
+        form.addRow("Imaged area:", self.detail_area)
+
+        return group
+
+    # -------------------------------------------------------------- helpers
+    def _on_unit_changed(self, unit: str):
+        """Update the inline unit suffixes, then refresh the details panel."""
+        self.unit = unit
+        for label in (
+            getattr(self, "fov_suffix", None),
+            getattr(self, "scale_bar_suffix", None),
+        ):
+            if label is not None:
+                label.setText(unit)
+        if getattr(self, "pixel_size_suffix", None) is not None:
+            self.pixel_size_suffix.setText(f"{unit} / px")
+        self.refresh_image_details()
+
+    def _current_pixel_size(self):
+        try:
+            value = float(self.pixel_size_input.text())
+            return value if value > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def _format_pixel_size(self, px: float, unit: str) -> str:
+        px_nm = px * self._TO_UM[unit] * 1e3
+        if unit == "nm":
+            return f"{px:g} nm / px"
+        return f"{px:g} {unit} / px  ({px_nm:.1f} nm)"
+
+    def _format_area(self, fov_w: float, fov_h: float, unit: str) -> str:
+        area = fov_w * fov_h
+        primary = f"{area:,.1f} {unit}²"
+        area_um2 = area * (self._TO_UM[unit] ** 2)
+        if area_um2 >= 1e6:
+            secondary_val, secondary_unit = area_um2 / 1e6, "mm²"
+        elif area_um2 < 1.0:
+            secondary_val, secondary_unit = area_um2 * 1e6, "nm²"
+        else:
+            secondary_val, secondary_unit = area_um2, "µm²"
+        if secondary_unit == f"{unit}²":
+            return primary
+        return f"{primary}  ({secondary_val:.4g} {secondary_unit})"
+
+    def refresh_image_details(self, *_):
+        """Recompute the read-only Image Details panel from the current
+        image shape and calibration controls. Safe to call at any time."""
+        unit = self.unit_dropdown.currentText()
+        px = self._current_pixel_size()
+        shape = self.image_shape
+
+        if shape is None or len(shape) < 2:
+            self.detail_megapixels.setText("—")
+            self.detail_fov.setText("—")
+            self.detail_pixel.setText("—" if px is None else self._format_pixel_size(px, unit))
+            self.detail_area.setText("—")
+            return
+
+        height, width = int(shape[0]), int(shape[1])
+        self.detail_megapixels.setText(f"{width * height / 1e6:.2f} MP  ({width:,} × {height:,} px)")
+
+        if px is None:
+            self.detail_fov.setText("— (set a pixel size)")
+            self.detail_pixel.setText("—")
+            self.detail_area.setText("—")
+            return
+
+        fov_w, fov_h = width * px, height * px
+        self.detail_fov.setText(f"{fov_w:.2f} × {fov_h:.2f} {unit}")
+        self.detail_pixel.setText(self._format_pixel_size(px, unit))
+        self.detail_area.setText(self._format_area(fov_w, fov_h, unit))
+
+    # ----------------------------------------------------------- public API
     def set_image_shape(self, shape: tuple):
         self.image_shape = shape
-        self.image_shape_label.setText(str(shape))
+        if shape is not None and len(shape) >= 2:
+            self.image_shape_label.setText(f"{int(shape[1]):,} × {int(shape[0]):,} px")
+        else:
+            self.image_shape_label.setText("not set")
+        self.refresh_image_details()
 
     def update_fov_from_pixel_size(self):
         if self.image_shape is None:
@@ -114,6 +294,7 @@ class PhysicalUnitsWidget(QWidget):
         except ValueError:
             pass
 
+
 class PhysicalUnitsManager:
     def __init__(self):
         self.unit = 'µm'
@@ -145,7 +326,9 @@ class PhysicalUnitsManager:
             self.widget.fov_input.setText(f"{self.fov[0]:.2f}, {self.fov[1]:.2f}")
         else:
             logger.warning("Image shape is not set. Cannot compute FOV.")
-        self.widget.image_shape_label.setText(str(self.image_shape))
+        # Route through the widget so the formatted dimensions label AND the
+        # derived Image Details panel both stay in sync.
+        self.widget.set_image_shape(self.image_shape)
 
     def update_unit(self, unit: str):
         self.unit = unit
@@ -173,6 +356,9 @@ class PhysicalUnitsManager:
         self.widget.unit_dropdown.blockSignals(True)
         self.widget.unit_dropdown.setCurrentText(unit)
         self.widget.unit_dropdown.blockSignals(False)
+        # The dropdown signal is blocked above, so refresh the inline unit
+        # suffixes manually to match the new unit.
+        self.widget._on_unit_changed(unit)
 
         self.widget.pixel_size_input.blockSignals(True)
         self.widget.pixel_size_input.setText(f"{self.pixel_size:.6g}")
@@ -185,6 +371,8 @@ class PhysicalUnitsManager:
             self.widget.fov_input.blockSignals(False)
             self.dimensions_updated()
 
+        # Refresh the read-only details even when signals were blocked above.
+        self.widget.refresh_image_details()
 
     def dimensions_updated(self):
         self.widget.fov_change_signal.emit(self.fov, self.unit)
@@ -208,6 +396,7 @@ class PhysicalUnitsManager:
         self.widget.pixel_size_input.setText(f"{self.pixel_size:.4f}")
         self.dimensions_updated()
         self.widget.pixel_size_input.blockSignals(False)
+        self.widget.refresh_image_details()
 
     def update_fov_from_str(self, fov_str: str):
         try:

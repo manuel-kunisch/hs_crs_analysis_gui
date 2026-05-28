@@ -31,6 +31,9 @@ For hyperspectral or multispectral tiles, choose the correct **Input image order
 
 The table preview is the most important diagnostic. If the grid looks wrong before stitching, the stitched image will usually also be wrong.
 
+!!! important "Always sanity-check the table preview before clicking Stitch now"
+    Almost every stitching failure (mirrored rows, missing tiles, wrong overlap orientation, gaps in the grid) is already visible in the preview table, the actual stitch then just renders that wrong layout. Inspect the preview, fix the regex / scan direction / input order until the table makes sense, and only then run the stitch.
+
 ## When to use stitching
 
 Use the stitching workflow when:

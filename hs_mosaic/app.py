@@ -582,6 +582,11 @@ class MainApplication(QtWidgets.QMainWindow):
                 "w_seed_downsample_factor": int(self.analysis_manager.mv_analyzer.w_seed_downsample_factor),
                 "torch_nmf_patience":        int(self.analysis_manager.mv_analyzer.torch_nmf_patience),
                 "torch_nmf_use_compile":     bool(self.analysis_manager.mv_analyzer.torch_nmf_use_compile),
+                # v0.9.4+: convergence tolerances for the PyTorch backends.
+                # Legacy presets without these keys load as 1e-4 each (the
+                # behaviour-preserving default that earlier releases used).
+                "torch_nmf_tol":             float(self.analysis_manager.mv_analyzer.torch_nmf_tol),
+                "torch_nnls_tol":            float(self.analysis_manager.mv_analyzer.torch_nnls_tol),
             },
         }
 
@@ -623,14 +628,26 @@ class MainApplication(QtWidgets.QMainWindow):
         # W-seed estimation or NMF runs in this session. Legacy presets
         # that lack a `performance_settings` block fall back to the
         # behavior-preserving defaults (downsample=1, patience=1,
-        # use_compile=False) so v0.9.2 / v0.9.3 presets reproduce
-        # byte-for-byte.
+        # use_compile=False) so v0.9.2 / v0.9.3 presets reproduce their
+        # original seed byte-for-byte. NOTE: this fallback downsample=1
+        # intentionally differs from the fresh-session default (4) — a
+        # loaded legacy preset reproduces what it produced before, while a
+        # brand-new session gets the faster downsampled seed.
         perf = preset.get("performance_settings", {})
         mv = self.analysis_manager.mv_analyzer
+        # Behavior-preserving defaults used when the loaded preset is from
+        # an older release that did not store these keys.
+        default_nmf_tol = float(getattr(mv, "torch_nmf_tol", 1e-4))
+        default_nnls_tol = float(getattr(mv, "torch_nnls_tol", 1e-4))
         try:
             mv.set_w_seed_downsample_factor(int(perf.get("w_seed_downsample_factor", 1)))
             mv.set_nnmf_patience(int(perf.get("torch_nmf_patience", 1)))
             mv.set_nnmf_use_compile(bool(perf.get("torch_nmf_use_compile", False)))
+            # NNMF / NNLS tolerances (v0.9.4+). Legacy presets without these
+            # keys restore to the in-code defaults (1e-4 each), which is what
+            # earlier releases used unconditionally.
+            mv.set_nnmf_tol(float(perf.get("torch_nmf_tol", default_nmf_tol)))
+            mv.set_nnls_tol(float(perf.get("torch_nnls_tol", default_nnls_tol)))
         except Exception as exc:
             logger.warning("Failed to apply preset performance settings: %s", exc)
         # Reflect the loaded values in the GUI spinboxes / checkbox so the
@@ -640,6 +657,12 @@ class MainApplication(QtWidgets.QMainWindow):
             self.analysis_manager.w_seed_ds_spinbox.setValue(int(mv.w_seed_downsample_factor))
             self.analysis_manager.nnmf_patience_spinbox.setValue(int(mv.torch_nmf_patience))
             self.analysis_manager.nnmf_use_compile_check.setChecked(bool(mv.torch_nmf_use_compile))
+            # Refresh the tolerance dropdowns to match the loaded values.
+            # The widgets are editable QComboBoxes (avoid SIP virtual-override
+            # crashes that hit the earlier spinbox subclass on Windows);
+            # they take text, not a float.
+            self.analysis_manager.nnmf_tol_combo.setCurrentText(f"{float(mv.torch_nmf_tol):.0e}")
+            self.analysis_manager.nnls_tol_combo.setCurrentText(f"{float(mv.torch_nnls_tol):.0e}")
         except Exception:
             pass  # widgets may not exist if analysis_manager wasn't fully built
 

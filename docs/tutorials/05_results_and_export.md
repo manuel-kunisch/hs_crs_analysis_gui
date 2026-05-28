@@ -127,6 +127,9 @@ The result viewer is primarily a visualization layer. It does not assume that ev
 
 ### Why W can exceed 16-bit values
 
+!!! important "`W` values are *fitted abundance coefficients*, not pixel intensities"
+    NNMF and fixed-H NNLS solve `X ≈ W H`. The numbers in `W` are the **coefficients of the spectra `H`** needed to reconstruct each pixel. They have no fixed upper bound. A 16-bit input TIFF can perfectly well produce a `W` map with values in the millions, especially if one component carries most of the signal. Treat the 16-bit cap as a *display* convenience (`Scale results to 16-bit`), not a property of the data.
+
 For NNMF and fixed-H NNLS, the spatial maps `W` are abundance coefficients. They are fitted numbers, not copies of the raw detector counts. Because of that, a valid `W` map can easily contain values above `65535` even if the original input TIFF was 16-bit.
 
 This is especially common when:
@@ -301,13 +304,10 @@ For publication workflows, it is therefore useful to save:
 - the exported H spectra CSV,
 - and, if relevant, a short note on whether `Scale results to 16-bit` was enabled.
 
-> GIF placeholder: exporting a composite TIFF and opening it in Fiji.
 
 ## Component Labels
 
 Component labels from the ROI manager are propagated to the result viewer and to Fiji/ImageJ export metadata. This makes exported files easier to interpret later.
-
-> Screenshot placeholder: result viewer with renamed components, final colors, adjusted histogram levels, and visible export controls.
 
 Before exporting, check that:
 

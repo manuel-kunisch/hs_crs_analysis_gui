@@ -170,6 +170,9 @@ Fix: open the spectral-axis widget and either:
 
 ## Analysis problems
 
+!!! important "Most "wrong-looking" analyses are seed problems, not solver problems"
+    Before reaching for solver settings (max iterations, tolerance, backend), check the seeds: are the ROIs in genuinely spectrally distinct regions, are the ROI-averaged spectra what you expect, and is the component count consistent with the data's actual rank? The default solver settings are correct for almost every dataset; the seed setup is where most analyses succeed or fail.
+
 ### Analysis produces all-zero or all-identical component maps
 
 Possible causes:

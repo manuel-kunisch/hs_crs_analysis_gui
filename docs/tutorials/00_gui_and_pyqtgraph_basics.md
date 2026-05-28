@@ -6,7 +6,6 @@ The GUI uses pyqtgraph for image views, histograms, line plots, ROI overlays, an
 
 ![Recentering the view](../assets/gifs/00_gui_recentering_view.gif)
 
-> GIF placeholder: right-clicking a pyqtgraph plot, setting exact axis ranges, adjusting a histogram, and exporting a plot.
 
 ## Right-Click Context Menu
 
@@ -22,13 +21,9 @@ Common context-menu actions:
 
 This is useful when the mouse wheel gives an approximate view, but you need reproducible plot limits for presentations, screenshots, or paper figures.
 
-> Screenshot placeholder: pyqtgraph right-click context menu with axis and export entries.
-
 ## Image Views
 
 Image views are used for the raw data, the channel preview, W seed previews, and the composite result image.
-
-> Screenshot placeholder: image view with the visible image area, axes, ROI overlay, channel/component slider, and auto-range control labeled.
 
 Common interactions:
 

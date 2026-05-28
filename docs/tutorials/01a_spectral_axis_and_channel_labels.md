@@ -21,7 +21,9 @@ The result is a Raman axis in:
 cm^-1
 ```
 
-> GIF placeholder: changing pump/stokes settings and watching the spectral axis update.
+![Spectral-axis widget in calculated pump/Stokes mode: entering the tuned and fixed wavelengths produces a Raman-shift axis in cm⁻¹ for the microbead CARS dataset](../assets/images/01a_pump_spectral_axis.png)
+
+*Calculated mode on the CARS microbead dataset: the pump/Stokes wavelengths are converted to a Raman-shift axis in cm⁻¹.*
 
 ## Wavelength Axis In nm
 
@@ -44,7 +46,9 @@ The custom axis can contain:
 
 Numeric values are used as the x-axis values in plots. Text labels are shown as channel labels, and the internal x-axis becomes a simple channel index.
 
-> Screenshot placeholder: custom spectral axis dialog with numeric wavelength values.
+![Spectral-axis widget in custom mode on a multi-channel fluorescence dataset: each channel is given a text label (DAPI, ...) shown as the channel label, with the internal x-axis falling back to a channel index](../assets/images/01a_custom_spectral_axis.png)
+
+*Custom mode on a multi-channel fluorescence dataset: labels describe the dye captured for each channel and are shown as channel labels, while the internal x-axis becomes a simple channel index. Numeric values can be entered instead (or alongside) when the channels have known wavelengths.*
 
 ## wavelength.json
 

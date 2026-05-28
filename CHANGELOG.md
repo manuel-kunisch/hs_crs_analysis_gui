@@ -4,7 +4,7 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
-## [0.9.4] — 2026-05-26
+## [0.9.4] — 2026-05-28
 
 ### Added
 - **Performance: W-seed spatial downsampling** (measured 1.4–6.4× speedup
@@ -19,23 +19,36 @@ this project uses [Semantic Versioning](https://semver.org/).
 
   | factor | NNLS abundance | Selective score | Quality (cos sim vs full-res) |
   |---|---|---|---|
-  | 1 (default, no downsample) | 0.81 s — | 2.19 s — | reference |
+  | 1 (no downsample) | 0.81 s — | 2.19 s — | reference |
   | 2 | 0.57 s **(1.4×)** | 1.03 s **(2.1×)** | 0.9999 |
-  | 4 | 0.45 s **(1.8×)** | 0.48 s **(4.5×)** | 0.9999 |
+  | 4 (default) | 0.45 s **(1.8×)** | 0.48 s **(4.5×)** | 0.9999 |
   | 8 | 0.32 s **(2.5×)** | 0.34 s **(6.4×)** | 0.9997 |
 
-  Default is **1** (no downsampling, no change in behaviour). Recommended
-  values: **2 or 4** for typical hyperspectral analyses; **8** for very
-  large mosaics. Applies ONLY to W-seed initialisation for NNMF runs —
-  fixed-H NNLS (where W IS the final result) always runs at full resolution
-  regardless of this setting.
+  Default is **4** (fast; ~0.9999 cosine similarity to the full-resolution
+  seed). Set **1** for no downsampling to reproduce the pre-v0.9.4 seed
+  exactly; raise to **8** for very large mosaics. The downsample auto-skips
+  when the image is too small for the factor. Applies to W-seed
+  initialization **and** to residual-fallback
+  H-seed estimation (the per-pixel NNLS used to build a seed for components
+  with no ROI / file / Gaussian spectrum) for NNMF runs — same factor,
+  same ~0.9999 cosine similarity to the full-resolution seed, spectral axis
+  preserved by the block-mean, and component-masked / non-full-frame data
+  automatically skips the optimization to preserve correctness. The GUI's
+  Fixed-H NNLS reconstruction also builds its W maps through this W-seed
+  path, so the factor affects those *final* maps too (they are upsampled
+  and therefore look blurry); the GUI warns and offers to reset the factor
+  to 1 when you start a Fixed-H NNLS run with a factor > 1. The low-level
+  ``solve_fixed_H_nnls`` used in 4D-hybrid mode always runs at full
+  resolution.
 
   All three Performance-column settings (W-seed downsample factor,
   early-stop patience, torch.compile flag) are now persisted in the
   application JSON preset under a ``"performance_settings"`` block.
   Legacy presets (v0.9.3 and earlier) that lack this block restore to the
-  behaviour-preserving defaults (downsample=1, patience=1, compile=False)
-  so they reproduce v0.9.2 numerical behaviour byte-for-byte.
+  behaviour-preserving fallback (downsample=**1**, patience=1, compile=False)
+  so they reproduce v0.9.2 numerical behaviour byte-for-byte — note this
+  fallback intentionally keeps downsample=1 even though a fresh session now
+  defaults to 4, so a shared legacy preset reproduces its original seed.
 
 - **Performance: NMF early-stop tunables + optional torch.compile.** A new
   **Performance** column in the Analysis panel exposes two opt-in solver
@@ -56,6 +69,23 @@ this project uses [Semantic Versioning](https://semver.org/).
       without Triton, or older MPS), the solver logs a warning and
       silently falls back to eager execution. No crash, no wrong
       results, no perf change.
+
+- **Performance: NNMF and NNLS convergence-tolerance controls.** The
+  *Performance* column also exposes two editable dropdowns — **NNMF
+  tolerance** and **NNLS tolerance** — pre-filled with the ladder
+  ``1e-1 … 1e-7`` (type any custom value, e.g. ``5e-5``). They set the
+  relative-improvement tolerance of the PyTorch MU NNMF solver and the
+  relative-step tolerance of the PyTorch FISTA NNLS solver, respectively.
+  Tighten to 1e-5 / 1e-6 for publication-grade fits; loosen to 1e-3 for
+  fast CPU exploration. Both default to **1e-4**, matching pre-v0.9.4
+  numerical behaviour, and are persisted in the application JSON preset
+  under ``performance_settings.torch_nmf_tol`` and
+  ``performance_settings.torch_nnls_tol``. Legacy presets that lack these
+  keys restore to 1e-4. The controls affect only the PyTorch backends; the
+  scikit-learn NMF path and SciPy Lawson–Hanson NNLS path are unchanged.
+  (Implemented as editable ``QComboBox`` widgets rather than a custom
+  ``QDoubleSpinBox`` subclass, which segfaulted on Windows + Python 3.12 +
+  PyQt5 through SIP's virtual dispatch.)
 
 ### Changed
 - **NNMF Backend dropdown simplified from three options to two.** The
@@ -85,6 +115,12 @@ this project uses [Semantic Versioning](https://semver.org/).
   The corresponding `_resolve_torch_nmf_device` logic was simplified
   accordingly, removing the previously-dead branch that distinguished
   `"gpu"` from `"auto"`.
+
+- **Physical Units tab redesigned.** The previously sparse tab is now
+  organised into *Calibration*, *Scale Bar*, and a new read-only *Image
+  Details* panel (dimensions, megapixels, field of view, pixel size in nm,
+  and imaged area), with live unit suffixes and top-left layout alignment.
+  No change to calibration behaviour or the preset format.
 
 
 ## [0.9.3] — 2026-05-25

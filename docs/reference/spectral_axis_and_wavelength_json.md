@@ -65,8 +65,6 @@ For custom/manual axes, provide `custom_values`, `custom_labels`, or both. For c
 
 The number of values or labels must match the number of spectral channels in the loaded image. A mismatch generates a warning and the axis falls back to channel indices.
 
-> Screenshot placeholder: file browser or folder view showing a TIFF stack and matching `wavelength.json` side by side.
-
 ### Example: numeric wavelength axis
 
 ```json

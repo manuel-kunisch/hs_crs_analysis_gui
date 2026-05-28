@@ -25,6 +25,9 @@ component number in ROI Manager -> component index in analysis/result viewer
 
 If a row is assigned to component 3, its spectrum, color, label, and optional W seed are treated as information for analysis component 3.
 
+!!! important "The component-number column is the single source of truth"
+    Two ROIs assigned to component 1 are averaged together to build that component's H seed. A typo in the component number (e.g. assigning a background ROI to component 2 instead of 4) silently produces wrong seeds because nothing else in the UI cross-checks it. Glance at the component column whenever the analysis result surprises you — it is by far the most common preventable mistake.
+
 ## Top buttons
 
 The top buttons create or load ROI Manager entries.
@@ -187,6 +190,10 @@ H0[component, :] = mean(X[pixels, :], axis=0)
 ```
 
 Use this when the ROI contains a region that is visually dominated by one component.
+
+![Two spatial ROIs on a CARS microbead mixture: each row's H seed is the mean spectrum of the pixels inside the box, and with Live Update enabled the plotted spectrum tracks the ROI as it is moved and resized](../assets/gifs/03_roi_draw_resize_beads.gif)
+
+*Each spatial ROI row's H seed is exactly the mean spectrum above. With the row's **`Live Update`** column enabled, that mean is recomputed continuously while the ROI is dragged or resized, so the plotted seed follows the box in real time. Drag it onto the cleanest region for the component and watch the fingerprint settle. (Disable `Live Update` on very large stacks if interaction becomes slow.)*
 
 ## Multiple rows for one component
 

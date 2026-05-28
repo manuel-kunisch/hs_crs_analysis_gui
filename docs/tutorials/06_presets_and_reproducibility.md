@@ -60,9 +60,11 @@ A shortened preset looks like this:
   "nnmf_solver": "mu",
   "nnmf_backend": "gpu",
   "performance_settings": {
-    "w_seed_downsample_factor": 1,
+    "w_seed_downsample_factor": 4,
     "torch_nmf_patience": 1,
-    "torch_nmf_use_compile": false
+    "torch_nmf_use_compile": false,
+    "torch_nmf_tol": 1e-4,
+    "torch_nnls_tol": 1e-4
   },
   "seed_init_settings": {
     "w_seed_mode": "NNLS abundance map",
@@ -143,9 +145,10 @@ The `.preset` file stores:
 
 It does not replace the full JSON application preset because it does not capture the entire GUI state, ROI geometry, physical units, 4D slice selection, solver settings, or all preprocessing choices.
 
-> Screenshot placeholder: ROI Manager prompt for loading a result-viewer `.preset`, showing the `LUTs Only` and `LUTs + ROIs` choices.
 
-> GIF placeholder: loading a result-viewer `.preset` as `LUTs Only` and as `LUTs + ROIs`.
+![Loading a result-viewer .preset from the ROI Manager: the GUI prompts for how to apply it, reusing the saved component colors and histogram/LUT settings on the current result](../assets/gifs/06_load_result_preset.gif)
+
+*Loading a result-viewer `.preset` from the ROI Manager. The saved component colors and histogram/LUT levels are applied to the current components and their spectra are loaded.*
 
 ## Reusing A Preset On Another Field Of View
 
@@ -162,6 +165,9 @@ A typical reuse workflow is:
 If the new dataset has a different number of spectral channels, check the spectral-axis warning carefully before continuing.
 
 ## Publication Recommendation
+
+!!! important "What to archive for a reproducible publication"
+    For a paper, the minimal reproducibility bundle is **(1) the input TIFF (or a representative crop), (2) the main JSON preset, (3) the exported result TIFF + H spectra CSV, and (4) the exact HS-MOSAIC release tag or commit hash you ran**. The first three together let a reader rerun the analysis; the version tag pins the algorithmic behavior. Archive them so the analysis stays inspectable even after future GUI versions change defaults.
 
 For a paper, provide:
 

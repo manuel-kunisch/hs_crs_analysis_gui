@@ -5,6 +5,7 @@ HS-MOSAIC ships as a regular Python package on PyPI. **For almost every user the
 !!! tip "TL;DR — pick one"
     * **Any platform, you have Python ≥ 3.10**: `pip install hs-mosaic` into a venv. Important: add CUDA / XPU torch *before* `hs-mosaic` if you have an NVIDIA or Intel Arc GPU. See [Default install: pip](#default-install-pip) below.
     * **Windows, you do not want to install Python at all, and you have an NVIDIA GPU**: download the pre-built [Standalone Windows .exe (CUDA build)](standalone_windows.md). One zip, double-click to run, GPU acceleration included.
+    * **Apple Silicon Mac, you do not want to install Python**: download the pre-built [Standalone macOS .dmg](#standalone-macos-apple-silicon-dmg). Metal/MPS GPU acceleration included.
     * **You prefer Conda / Mamba**: see [Alternative: Conda](#alternative-conda) below. The pip route works inside a Conda env too.
 
 ## Choose Your Install Route
@@ -13,8 +14,26 @@ HS-MOSAIC ships as a regular Python package on PyPI. **For almost every user the
 |---|---|---:|---|
 | **pip install hs-mosaic** *(default)* | Any platform with Python ≥ 3.10 — Windows, Linux, macOS, Apple Silicon, Intel Arc | Yes | This page, [Default install: pip](#default-install-pip) |
 | **Standalone Windows .exe** | Windows users who do not want to install Python; CUDA build available | No | [Standalone Windows .exe](standalone_windows.md) |
+| **Standalone macOS .dmg** | Apple Silicon Mac users who do not want to install Python; Metal/MPS GPU included | No | This page, [Standalone macOS](#standalone-macos-apple-silicon-dmg) |
 | **Conda** | Users who already manage scientific Python environments via Conda / Mamba | Yes | This page, [Alternative: Conda](#alternative-conda) |
 | **From source (editable install)** | Developers, contributors, anyone modifying the code | Yes | This page, [From a git clone](#from-a-git-clone-for-development) |
+
+## Standalone macOS (Apple Silicon) .dmg
+
+Apple Silicon Macs (M1/M2/M3/M4) have a pre-built download for users who do not want to install Python: `HS_MOSAIC_AppleSilicon_v0.9.5.dmg`. Open the DMG and drag **HS-MOSAIC** into **Applications**. GPU acceleration via Metal (MPS) is included; no Python or PyTorch setup is required.
+
+### First launch: "Apple could not verify..." / "unidentified developer"
+
+The app is not signed with a paid Apple Developer ID, so on the **first** launch macOS Gatekeeper blocks it with a message such as *"HS-MOSAIC.app cannot be opened because Apple cannot check it for malicious software"* (or *"unidentified developer"*). This is expected for an unsigned app and does not mean anything is wrong with it. To run it:
+
+1. In **Applications**, **Control-click HS-MOSAIC** and choose **Open**.
+2. In the dialog that appears, click **Open** again to confirm.
+
+You only need to do this once. After the first time, double-clicking launches the app normally.
+
+If the **Open** option does not appear on a newer macOS version, open **System Settings → Privacy & Security**, scroll to the **Security** section, and click **Open Anyway** next to the HS-MOSAIC message, then confirm.
+
+Requires macOS 12.3 or newer (for the Metal/MPS GPU backend). If you would rather not use the standalone build, `pip install hs-mosaic torch` gives the same MPS acceleration on Apple Silicon.
 
 ## Prerequisites
 

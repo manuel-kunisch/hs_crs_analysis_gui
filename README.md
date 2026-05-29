@@ -123,7 +123,14 @@ The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset.
 
 ## Install
 
-###  PyPI:
+
+### Option A: No Python installation required: run the GUI from a standalone executable
+The GUI is built with PyInstaller into standalone executables that include a Python interpreter and all dependencies. This is the recommended way to run the GUI for users who do not want to set up a Python environment. The standalone executables are available for Windows and macOS from the release downloads resp. the [Zenodo DOI](https://doi.org/10.5281/zenodo.20273076). See the documentation for installation instructions:
+
+A pre-built standalone Windows executable is described in [docs/standalone_windows.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/standalone_windows/).
+
+A pre-built standalone macOS app for Apple Silicon (`HS_MOSAIC_AppleSilicon_*.dmg`, Metal/MPS GPU included) is available from the release downloads. Because it is not signed with a paid Apple Developer ID, the first launch needs a one-time right-click → **Open**; see [docs/installation.md → Standalone macOS](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/#standalone-macos-apple-silicon-dmg).
+###  Option B: PyPI
 Recommended platform-independent install method. **Prerequisites**: A (virtual) python environment with Python ≥ 3.10 on Windows, Linux, or macOS. Optionally a supported GPU for PyTorch acceleration: NVIDIA (CUDA), Apple Silicon (MPS), Intel Arc (XPU), or AMD on Linux (ROCm).
 The package is published on PyPI as `hs-mosaic`. Install in a virtual environment with pip.
 
@@ -177,7 +184,7 @@ pip install hs-mosaic
 
 > A `[torch]` extra also exists for users who want the PyTorch FISTA-NNLS backend on CPU (sometimes faster than SciPy's per-pixel solver for very large fixed-H NNLS mosaics). It does **not** provide GPU acceleration on its own. See [docs/installation.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/) for the full comparison table and for the v0.9.2 → v0.9.3 `[gpu]` → `[torch]` rename recovery instructions.
 
-### From source:
+### Option C: From source with a Python environment
 Detailed installation guide and platform-specific notes: [docs/installation.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/).
 
 **Prerequisites** — Python ≥ 3.10 on Windows, Linux, or macOS. Optionally a supported GPU for PyTorch acceleration: NVIDIA (CUDA), Apple Silicon (MPS), Intel Arc (XPU), or AMD on Linux (ROCm).
@@ -229,8 +236,6 @@ On Windows you can also use the bundled launcher (which calls `python -m hs_mosa
 ```bash
 hs-mosaic.bat
 ```
-
-A pre-built standalone Windows executable is described in [docs/standalone_windows.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/standalone_windows/).
 
 
 

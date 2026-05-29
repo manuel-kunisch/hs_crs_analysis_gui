@@ -4,6 +4,18 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.5] — 2026-05-29
+
+### Changed
+- **Faster composite-image generation and smoother level adjustment.** The
+  false-color composite is now built with a vectorized two-stop LUT blend
+  instead of a per-pixel `np.interp` pass; the output is numerically
+  identical. Histogram level and LUT changes are also coalesced through a
+  short single-shot timer, so a level drag (or the burst of signals emitted
+  while a result is being set up) triggers one composite recompute instead
+  of many. No change to composite appearance or exported images.
+
+
 ## [0.9.4] — 2026-05-28
 
 ### Added

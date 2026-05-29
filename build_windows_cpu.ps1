@@ -1,7 +1,7 @@
 param(
     [switch]$SkipInstall,
     [switch]$NoZip,
-    [string]$Version = "0.9.4"
+    [string]$Version = "0.9.5"
 )
 
 $ErrorActionPreference = "Stop"

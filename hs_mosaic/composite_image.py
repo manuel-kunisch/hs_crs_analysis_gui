@@ -7,7 +7,7 @@ import pyqtgraph as pg
 import tifffile
 from PyQt5 import QtGui
 from PyQt5.Qt import QObject
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPointF, QRect, QRectF, QSizeF, QMarginsF
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal, QPointF, QRect, QRectF, QSizeF, QMarginsF
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QHBoxLayout, QSpinBox, QComboBox,
@@ -82,6 +82,12 @@ class CompositeImageViewWidget(QMainWindow):
         self.export_scalebar_visible = False
         self.update_thread = QThread()
         self.timeout_callbacks = False
+
+        # Short update timer to prevent excessive level updates
+        self._levels_refresh_timer = QTimer(self)
+        self._levels_refresh_timer.setSingleShot(True)
+        self._levels_refresh_timer.setInterval(16)
+        self._levels_refresh_timer.timeout.connect(self._on_levels_refresh_timeout)
 
 
         # %% GUI setup
@@ -481,10 +487,12 @@ class CompositeImageViewWidget(QMainWindow):
             self.update_image(self.img)
 
 
-        # Connect the slot function to histogram level sliders' valueChanged signals
-        self.channel_view.getHistogramWidget().item.sigLevelsChanged.connect(self.update_channel_and_composite_levels)
+        # Connect the slot function to histogram level sliders' valueChanged signals.
+        # Routed through a throttle so rapid drags / setup bursts bundle into one
+        # composite recompute (see _schedule_levels_refresh).
+        self.channel_view.getHistogramWidget().item.sigLevelsChanged.connect(self._schedule_levels_refresh)
         # Monitor manual LUT changes
-        self.channel_view.getHistogramWidget().item.sigLookupTableChanged.connect(self.update_channel_and_composite_levels)
+        self.channel_view.getHistogramWidget().item.sigLookupTableChanged.connect(self._schedule_levels_refresh)
         # hide the gradient ticks
         self.channel_view.getHistogramWidget().gradient.showTicks(True)
         # self.lock_bottom_tick()
@@ -2116,28 +2124,67 @@ class CompositeImageViewWidget(QMainWindow):
             ticks = self._sorted_gradient_ticks(histogram_state)
             positions = np.array([tick[0] for tick in ticks], dtype=np.float32)
             colors = np.array([tick[1][:3] for tick in ticks], dtype=np.float32) / 255.0
-            flat_norm = norm.reshape(-1)
-            mapped_rgb = np.empty((flat_norm.size, 3), dtype=np.float32)
-            for c in range(3):
-                mapped_rgb[:, c] = np.interp(
-                    flat_norm,
-                    positions,
-                    colors[:, c],
-                    left=colors[0, c],
-                    right=colors[-1, c],
-                )
-            rgb_image += mapped_rgb.reshape((*norm.shape, 3))
+
+            # RGB calculations
+            if len(ticks) == 2:
+                # Fast path for the common two-stop gradient (e.g. black -> color):
+                # a vectorized linear interpolation on the straight defining the color gradient
+                # with slope t
+                p0, p1 = float(positions[0]), float(positions[1])
+                if p1 > p0:
+                    t = np.clip((norm - p0) / (p1 - p0), 0.0, 1.0)
+                else:
+                    t = (norm >= p1).astype(np.float32)
+                rgb_image += colors[0] + t[..., None] * (colors[1] - colors[0])
+            else:
+                # General multi-stop gradient: per-channel interpolation.
+                flat_norm = norm.reshape(-1)
+                mapped_rgb = np.empty((flat_norm.size, 3), dtype=np.float32)
+                for c in range(3):
+                    mapped_rgb[:, c] = np.interp(
+                        flat_norm,
+                        positions,
+                        colors[:, c],
+                        left=colors[0, c],
+                        right=colors[-1, c],
+                    )
+                rgb_image += mapped_rgb.reshape((*norm.shape, 3))
 
         # Clip the final RGB image to [0, 1] and scale to 16-bit
         rgb_image = np.clip(rgb_image, 0, 1)
         rgb_uint16 = (rgb_image * 65535).astype(np.uint16)
         return rgb_uint16
 
+    def _schedule_levels_refresh(self, *args):
+        """Throttled entry point for histogram level / LUT signals.
+
+        Saves the current channel's histogram state immediately (cheap, and must
+        not be lost if the user switches channels), single-shot timer triggers only one
+        get_rgba()
+        """
+        if self.img is None:
+            return
+        channel_index = self._channel_idx
+        try:
+            self.histogram_states[channel_index] = self.channel_view.getHistogramWidget().saveState()
+        except Exception:
+            return
+        self._levels_refresh_timer.start()
+
+    def _on_levels_refresh_timeout(self):
+        if self.img is None:
+            return
+        self._refresh_composite_from_histogram_states()
+        self._sync_color_button_to_gradient()
+
     def update_channel_and_composite_levels(self, *args, composite_levels=None):
         """
         Update the composite image and channel view levels based on the current channel's histogram state.
-        Returns:
 
+        Synchronous full refresh, used by direct callers that need the composite
+        updated immediately (e.g. result-slice changes that must preserve exact
+        levels). Interactive level / LUT signals go through
+        `_schedule_levels_refresh` instead so they are throttled.
         """
         # Get the current channel index
         if self.img is None:

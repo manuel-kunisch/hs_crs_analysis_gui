@@ -27,12 +27,13 @@ This checklist is an extra page for avoiding common mistakes before running or p
 - Check ROI component assignments.
 - Check loaded external spectra.
 - Check Gaussian seed rows.
-- Check fixed W/background seeds.
+- Check fixed W/background seeds in the ROI manager.
 - Preview seeds before running NNMF or fixed-H NNLS.
 - For fixed-H NNLS, confirm that every component has a valid final H seed. If any seed was residual-filled, inspect it before trusting the result.
 
 ## After Analysis
 
+- **Check if the iteration converged** (via iteration count and/or final error).
 - Inspect the composite image.
 - Inspect each individual W map.
 - Compare final H spectra with seed spectra.

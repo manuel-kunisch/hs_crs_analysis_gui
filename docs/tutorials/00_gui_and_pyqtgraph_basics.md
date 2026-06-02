@@ -2,7 +2,6 @@
 
 The GUI uses pyqtgraph for image views, histograms, line plots, ROI overlays, and result plots. This page summarizes the interactions that are used repeatedly throughout the app.
 
-> Screenshot placeholder: annotated pyqtgraph GUI anatomy showing the image view, histogram/LUT controls, channel or component slider, ROI overlay, spectral plot, and right-click context menu area.
 
 ![Recentering the view](../assets/gifs/00_gui_recentering_view.gif)
 
@@ -41,7 +40,6 @@ For exact image view limits, use the right-click context menu on the image view 
 
 The histogram panel controls how image intensities are displayed. It does not change the underlying data unless the image is explicitly exported as a rendered PNG.
 
-> Screenshot placeholder: histogram/LUT panel with the lower and upper level handles, color gradient, and selected component/channel label annotated.
 
 There are two related but different concepts:
 
@@ -136,8 +134,6 @@ If exact plot limits are required, right-click the plot, open the x-axis or y-ax
 
 ROIs are pyqtgraph graphics items. Their exact behavior depends on the ROI type, but the common interactions are:
 
-> Screenshot placeholder: image view with one selected ROI, resize handles, and the matching ROI Manager table row highlighted.
-
 - Drag inside the ROI to move it.
 - Drag ROI handles to resize it.
 - Click an ROI or its table row to select it.
@@ -148,8 +144,6 @@ The ROI average plot updates from the selected ROI spectra. If custom channel la
 ## Spectral Plots
 
 Spectral plots are used for:
-
-> Screenshot placeholder: spectral plot showing ROI average spectra or fitted H components, with axis labels, legend, curve colors, and right-click export area annotated.
 
 - ROI average spectra;
 - loaded seed spectra;
@@ -184,7 +178,7 @@ Use TIFF export for quantitative work and Fiji-compatible downstream analysis. U
 
 Pyqtgraph itself also has a right-click **Export** action for many image and plot widgets. This is useful for quick screenshots or debugging. For final composite images, prefer the app's **Export Composite** button because it knows about component LUTs, labels, physical pixel size, and optional scale bars.
 
-> Screenshot placeholder: result viewer export controls showing **Export Composite**, rendered PNG/TIFF choice, scale-bar options, and final composite preview.
+![Export Composite](../assets/images/00_export_composite.png)
 
 ## Exporting Spectral Plots
 
@@ -194,6 +188,8 @@ Supported formats:
 
 - PNG for raster figure panels.
 - PDF for vector-style plot output.
+
+![Export Spectra](../assets/images/05_save_spectra.png)
 
 The export dialog asks for a maximum width and height. The app preserves the plot aspect ratio, so the final PNG may be smaller than the requested bounding box in one dimension. This avoids distorted text and avoids large blank margins.
 

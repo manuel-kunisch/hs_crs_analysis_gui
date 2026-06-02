@@ -2,7 +2,7 @@
 
 Use the stitching workflow when one field of view was acquired as a grid of partially overlapping image tiles. The goal is to convert many tile TIFFs into one spectral stack that can be loaded and analyzed like a normal image.
 
-> GIF placeholder: select a tile folder, parse filenames, preview the grid, and stitch.
+![Stitching workflow overview](../assets/images/01b_stitching.png)
 
 ## Expected input
 
@@ -131,7 +131,6 @@ Here, the first table index is assigned to `y` and the second to `x`. This is al
 
 Use **IGNORECASE** when filename capitalization is inconsistent.
 
-> GIF placeholder: use the regex helper and show the preview table updating.
 
 ## Settings reference
 

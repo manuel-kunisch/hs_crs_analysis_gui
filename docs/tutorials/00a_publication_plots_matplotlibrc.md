@@ -2,15 +2,12 @@
 
 The GUI uses pyqtgraph for interactive plotting. For quick figures, use **Export Spectra** or **Export Composite** directly in the GUI. For publication figures, it is often better to send a plot to Matplotlib and let Matplotlib handle fonts, line widths, vector export, and final layout.
 
+![Export option for sending any pyqtgraph plot or image to maptlotlib or as a different data type for external modifications](../assets/images/00a_mpl_export_dialog.png)
+
+*Simply right-click any pyqtgraph plot and choose **Export** to for further options*
+
 This page shows how to set useful Matplotlib defaults with a `matplotlibrc` file. The goal is that every Matplotlib figure starts with readable labels, sensible tick marks, and export settings that work for papers and presentations.
 
-> Screenshot placeholder: pyqtgraph plot right-click menu with **Export** highlighted.
-
-> Screenshot placeholder: pyqtgraph export dialog with **Matplotlib** selected.
-
-> Screenshot placeholder: Matplotlib figure window after export, showing the toolbar save button.
-
-> Screenshot placeholder: Matplotlib **Figure options** dialog opened from the toolbar, showing the **Axes** and **Curves** tabs.
 
 ## When To Use This
 
@@ -185,9 +182,6 @@ This is useful when the analysis result is correct but the exported plot still n
 
 The legend refresh step is easy to miss. If you rename curves, change which lines should appear in the legend, or edit legend-related settings, tick **Regenerate legend** before pressing **Apply**. Without this, Matplotlib may keep the old legend even though the curve settings were changed.
 
-> Screenshot placeholder: Matplotlib toolbar with the **Figure options** button highlighted.
-
-> Screenshot placeholder: Matplotlib **Curves** tab showing curve label, line style, color, marker, and legend-related edits.
 
 ## Common Problems
 

@@ -2,7 +2,7 @@
 
 This reference summarizes the row types and table columns in the ROI Manager. For the guided tutorial, see [03b ROI Manager in detail](../tutorials/03b_roi_manager.md).
 
-> Screenshot placeholder: ROI Manager reference screenshot with each row type and important table columns labeled.
+![ROI Manager interface with example rows](../assets/images/roi_manager.png)
 
 ## Row types
 

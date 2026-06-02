@@ -26,7 +26,7 @@ The Coordinate Descent (cd) solver always runs on the scikit-learn CPU backend r
 
 The legacy **Automatic** item from v0.9.3 was removed in v0.9.4 because it had identical behavior to **Prefer GPU**. Presets saved as `"auto"` load as **Prefer GPU** automatically.
 
-> Screenshot placeholder: NNMF solver/backend dropdowns and iteration settings.
+![Backend dropdown in the analysis panel with options for GPU acceleration: Prefer GPU (tries CUDA > MPS > XPU, falls back to CPU if no GPU) and CPU only (skips PyTorch path, runs scikit-learn on CPU)](../assets/images/02a.png)
 
 ## CUDA Requirements
 

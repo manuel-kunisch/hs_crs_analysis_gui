@@ -20,7 +20,7 @@ Supported display units are:
 
 When a TIFF contains Fiji/ImageJ pixel-size metadata, the GUI can read it and update the physical-unit fields automatically.
 
-> Screenshot placeholder: physical-units panel after loading a TIFF with pixel-size metadata.
+![Physical units panel](../assets/images/04_physical_units_panel.png)
 
 ## Scale bars and Fiji export
 

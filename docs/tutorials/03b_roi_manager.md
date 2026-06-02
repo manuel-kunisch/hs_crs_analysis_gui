@@ -2,8 +2,8 @@
 
 The ROI Manager is the central place where spatial ROIs, spectral seeds, fixed W seeds, labels, colors, and component assignments are organized. It is not only a drawing tool. It defines how the analysis interprets user input.
 
-> GIF placeholder: add a ROI, rename it, assign a component, plot the ROI spectrum, and run seeded NNMF.
-
+![ROI Manager overview](../assets/gifs/03_roi_draw_resize_beads.gif)
+*Demo of the ROI manager with a hyperspectral CARS microbead dataset.* 
 ## What the ROI Manager controls
 
 The ROI Manager connects four things:
@@ -168,8 +168,6 @@ Centers the image view on a spatial ROI. If the row stores a fixed W seed, this 
 
 Deletes the row and its associated ROI or dummy seed.
 
-> Screenshot placeholder: ROI table with examples of a spatial ROI row, loaded spectrum dummy row, Gaussian/model row, W-only row, and imported H+W result row.
-
 ## H seeds from spatial ROIs
 
 For a spatial ROI, the H seed is the average spectrum of the pixels inside the ROI:
@@ -314,4 +312,3 @@ The result-viewer `.preset` is different:
 8. Run analysis.
 9. Save the application preset.
 
-> GIF placeholder: complete ROI Manager workflow from seed creation to preset save.

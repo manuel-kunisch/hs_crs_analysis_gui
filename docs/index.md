@@ -74,14 +74,10 @@ The rest of the tutorial is dedicated to handling results, exporting data, and e
 
 ## Examples
 
-The example section is for complete data-specific workflows. The synthetic quickstart is the canonical end-to-end check for a fresh install; the other pages are planning outlines for upcoming worked examples.
+The example section is for complete data-specific workflows. The synthetic quickstart is the canonical end-to-end check for a fresh install.
 
 - [Examples overview](examples/index.md)
 - [Synthetic quickstart](examples/synthetic_quickstart.md) — runnable end-to-end check
-- [Stitching and preprocessing](examples/stitching_and_preprocessing.md) — *WIP*
-- [CARS/SRS label-free data](examples/cars_srs_label_free.md) — *WIP*
-- [SWIR reflection data](examples/swir_reflection.md) — *WIP*
-- [4D fluorescence unmixing](examples/fluorescence_4d_unmixing.md) — *WIP*
 
 ## Methods
 

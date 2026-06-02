@@ -55,10 +55,13 @@ where `W` (pixels × components) holds the per-pixel **abundance maps** and `H` 
 ### NNMF — non-negative matrix factorization
 
 NNMF minimizes the reconstruction error under non-negativity:
+
 $$
 W, H = \arg\min_{W \ge 0,\; H \ge 0} \left\| X - W H \right\|_F^2
 $$
-resp.
+
+i.e.
+
 ```
 min_{W, H ≥ 0}  ‖X − W H‖_F²
 ```

@@ -96,7 +96,8 @@ Histogram levels control display contrast only. For exact reproducible min/max d
 
 For 4D results, the result viewer can browse the outer z/time axis.
 
-> GIF placeholder: browsing channels and changing component color.
+![Result viewer channel preview with component selector, color button, autoscale, histogram controls, and z/time slice selector for 4D results](../assets/gifs/4d_browsing.gif)
+*Result viewer channel preview with component selector, color button, autoscale, histogram controls, and z/time slice selector for 4D results*
 
 ## Composite Projection In The Raw Image Viewer
 
@@ -187,8 +188,6 @@ Use this plot to check:
 - whether fixed-H NNLS used the expected spectra,
 - whether component labels and colors match the intended interpretation.
 
-> Screenshot placeholder: spectral component plot with fitted H spectra, optional seed overlays, component labels, and color-matched result channels.
-
 ### H seed scales
 
 If **Normalize H spectra to unity** was enabled during seed building, the result metadata can store the original per-component H maxima. These values are the scale factors used to turn the original seed spectra into max=1 spectra before W reconstruction and analysis.
@@ -270,7 +269,7 @@ The component columns follow the component order in the result. Rename component
 
 Use **Export Spectra** to export the visible spectral plot as PNG or PDF. PNG export can use a transparent background. The export keeps the plot aspect ratio to avoid distorted text.
 
-> Screenshot placeholder: **Export Spectra** dialog showing PNG/PDF choice, maximum size fields, and transparent-background option.
+![Export Spectra button in the result viewer toolbar, which saves the spectral plot as PNG or PDF](../assets/images/05_save_spectra.png)
 
 ## Saving Composite TIFFs
 

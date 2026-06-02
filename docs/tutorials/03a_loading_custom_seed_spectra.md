@@ -23,7 +23,7 @@ The spectrum loader can read common text-based spectrum formats such as:
 
 After loading, assign each loaded spectrum to the desired component number.
 
-> GIF placeholder: loading a CSV spectrum and assigning it to a component.
+![Loading a spectrum file from the ROI Manager. The loaded spectra appear as dummy ROI rows that can be assigned to components and plotted as spectra.](../assets/gifs/spectra_loading.gif)
 
 ## Example CSV Format
 

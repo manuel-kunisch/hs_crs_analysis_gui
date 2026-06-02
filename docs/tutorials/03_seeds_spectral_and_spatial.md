@@ -144,8 +144,9 @@ Gaussian models can be generated from manually defined resonance settings. This 
 
 The Gaussian model creates a dummy ROI row for the relevant component. The row behaves like a spectral seed without requiring a spatial ROI.
 
-> GIF placeholder: adding a resonance setting and seeing a Gaussian dummy ROI appear.
+![Gaussian seed generation from manually defined resonance settings, creating a dummy ROI row with the Gaussian spectrum as H seed](../assets/gifs/03_gaussian.gif)
 
+*Here the PMMA beads have a known peak at around 2960 cm⁻¹. A Gaussian seed is generated from that resonance position and width, creating a dummy ROI row with the Gaussian spectrum as H seed. We also scaled the spectrum to the data matching absolute intensity*
 ## Auto-Suggested ROIs
 
 The **Suggest ROIs** tool scans the image for bright or structured regions and turns them into candidate seed ROIs. The output is just a set of ROIs in the ROI Manager — they then feed into the normal seed flow described on this page.
@@ -199,8 +200,6 @@ A background W map can also be generated from the analysis panel using a project
 The row marked with the **Subtract** flag defines a background ROI. The GUI averages the spectrum inside that ROI and subtracts that mean spectrum from every pixel in the raw stack. The result is shown in the **Processed** view in the raw image viewer.
 
 The raw loaded image is not overwritten. However, processed/subtracted data can be used by seed estimation or analysis steps that explicitly request processed data, so check the Subtract state before running a final analysis.
-
-> GIF placeholder: marking a component as background, generating a background W map, and viewing the subtracted result.
 
 ## Dummy ROIs and Fixed W Seeds
 

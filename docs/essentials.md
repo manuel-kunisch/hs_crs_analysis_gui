@@ -113,6 +113,9 @@ Analysis settings (solver, backend, iteration limits, fixed-H mode) are **not** 
 
 ## Where to go next
 
+**Start here:** work through the [Synthetic quickstart example](examples/synthetic_quickstart.md) next. It runs the shipped synthetic dataset through every analysis mode with illustrated GIFs, and it puts several of the essentials above into action on real clicks: ROI seeding (#1), letting the background fall out of the residual (#2), and verifying the result with the composite mirror (#3). It is the best way to turn these headlines into a workflow you can repeat on your own data.
+
+- [Synthetic quickstart example](examples/synthetic_quickstart.md) — the recommended hands-on follow-up to this page
 - [Quickstart](quickstart.md) — minimal end-to-end workflow
 - [Analysis modes](tutorials/02_analysis_modes.md) — which of PCA / Random NNMF / Seeded NNMF / Fixed-H NNLS to pick
 - [Concepts](concepts.md) — the unmixing model and the role of seeds

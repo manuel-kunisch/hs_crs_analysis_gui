@@ -22,8 +22,9 @@ The challenge with hyperspectral data is that looking at dozens of frames one by
 
 Multivariate analysis addresses this by summarizing the whole stack as a small set of component maps and spectra.
 
-> Schematic placeholder: hyperspectral stack as `(channel, y, x)` with one example pixel spectrum extracted from the cube.
+![3D hyperspectral CARS microbead mixture bead data cube. Each channel is a grayscale image at one Raman shift.](./assets/images/hs_cube_spectrum.png)
 
+*3D hyperspectral CARS microbead mixture bead data cube. Each channel is a grayscale image at one Raman shift. Different spectral properties are making the beads distinguishable as illustrated by the extracted PS bead spectrum from the ROI (cyan)*
 ## The Unmixing Model: X ≈ WH
 
 The core idea is that each pixel spectrum can be approximated as a weighted sum of a few basis spectra:
@@ -54,7 +55,7 @@ In the GUI:
 - component maps (columns of \(W\)) appear as grayscale images and as layers in the composite,
 - the composite view fuses all component maps into a false-color image.
 
-> Schematic placeholder: matrix view of `X = W H`, with `X` as pixel spectra, `W` as component maps, and `H` as component spectra.
+![NNMF schematic: the data matrix X is approximated as the product of a spatial map matrix W and a spectral basis matrix H.](./assets/images/nnmf_scheme.png)
 
 ## Spatial Maps W and Spectral Components H
 
@@ -126,7 +127,6 @@ Use seeded NNMF when you want the algorithm to adapt and refine the spectral est
 
 This distinction matters for scaling. In fixed-H NNLS, W is the fitted result, not just a starting seed. The usual NNMF scale ambiguity is no longer a free normalization choice: because H is fixed, rescaling W alone changes \(W H\) and therefore changes the reconstruction error. Preserving the same product would require inverse rescaling of H, which fixed-H mode deliberately does not allow. The internal W coefficients are therefore kept on the scale required to reconstruct \(X\) from the fixed H spectra. Display or export can still rescale maps for visualization, but the fixed-H NNLS fit itself should not normalize W to unit maximum.
 
-> Figure placeholder: side-by-side comparison of seeded NNMF and fixed-H NNLS, showing that seeded NNMF can adjust `H` while fixed-H NNLS keeps reference spectra locked.
 
 ## 4D z/Time Workflows
 
@@ -144,9 +144,10 @@ The GUI can analyze each z/time slice independently using the same seed setup, w
 
 In **fixed-H NNLS** mode, the same spectral basis is applied to every slice, making the resulting W maps directly comparable. In seeded NNMF mode, the basis is re-initialized for each slice from the same seeds, so mild per-slice adaptation is possible.
 
-A special option, **fast multislice NNMF**, uses NNMF on a reference slice and then NNLS for all other slices. This is faster than running full NNMF on every slice and keeps the spectral basis consistent across the series.
+![Fixed H NNLS result for a unmixed U2OS fluorescence z-stack. The resultuing H spectra are locked across slices.](./assets/gifs/4d_browsing.gif)
+*Fixed H NNLS result for a unmixed U2OS fluorescence z-stack. The resultuing H spectra are locked across slices.*
 
-> Schematic placeholder: 4D z/time workflow showing one reference slice used for NNMF and the fitted spectra reused by NNLS on the remaining slices.
+A special option, **fast multislice NNMF**, uses NNMF on a reference slice and then NNLS for all other slices. This is faster than running full NNMF on every slice and keeps the spectral basis consistent across the series.
 
 ## Non-Negativity Constraint
 

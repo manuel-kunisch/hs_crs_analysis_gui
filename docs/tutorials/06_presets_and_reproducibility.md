@@ -33,8 +33,6 @@ This preset is the best option for reproducing a full GUI analysis.
 
 Use **Save Preset** in the analysis/data area to write the main analysis settings JSON file. Use **Load Preset** to restore the saved setup later. Save the preset after the spectral axis, analysis settings, ROI rows, component labels, colors, and histogram levels are in the state you want to reproduce.
 
-> GIF placeholder: saving and loading a main JSON preset.
-
 ## Example Preset Structure
 
 Preset files are meant to be written by the GUI. They can be inspected in a text editor, but manual editing should be limited to simple, intentional changes.

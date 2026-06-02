@@ -27,13 +27,12 @@ cm^-1
 
 ## Wavelength Axis In nm
 
-For hyperspectral fluorescence, SWIR, or other wavelength-resolved measurements, switch the unit to:
+`nm` is a **Unit**, not a separate source mode. It works with both the Calculated and the Custom source. Switch the Unit to `nm` for wavelength-resolved data such as fluorescence emission, SWIR, or broadband spectroscopy.
 
-```text
-nm
-```
+- With the **Calculated** source and Unit `nm`, the GUI ignores the fixed beam and builds a plain linear wavelength ramp from the tuned minimum to the tuned maximum (one value per channel). You enter only the scan range, the same min/max (or min plus step) fields as the Raman calculation.
+- With the **Custom** source and Unit `nm`, you provide the per-channel wavelength values yourself (loaded or entered), and the axis is labeled in nm.
 
-In this mode, the spectral axis is treated as wavelength rather than Raman shift.
+In both cases the spectral axis is treated as wavelength rather than Raman shift. For the full breakdown of every Source × Unit combination, see [Spectral axis reference → Axis Modes](../reference/spectral_axis_and_wavelength_json.md#axis-modes).
 
 ## Manual / Custom Axis
 
@@ -111,7 +110,6 @@ For label-only fluorescence or filter-channel data:
 
 This creates a channel-index x-axis and uses the labels for display. If external spectra should be interpolated later, provide numerical `custom_values` as well.
 
-> GIF placeholder: loading a TIFF folder with `wavelength.json` and custom labels appearing in the GUI.
 
 ## What Is Saved
 

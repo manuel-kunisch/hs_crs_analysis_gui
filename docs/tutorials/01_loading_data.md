@@ -22,7 +22,6 @@ z_or_time, channel, y, x
 
 The remaining two axes are treated as spatial dimensions.
 
-> GIF placeholder: drag-and-drop loading of a 3D TIFF stack.
 
 ## Concrete TIFF Layout Examples
 
@@ -89,7 +88,6 @@ After loading, the app will:
 
 If a `wavelength.json` file is present in the same folder as the TIFF, the GUI tries to use it for the spectral axis.
 
-> Screenshot placeholder: loaded 3D stack with channel slider, LUT controls, and spectral-axis widget.
 
 ## Data Types And Intensity Handling
 
@@ -181,7 +179,7 @@ time, channel, y, x
 
 After loading, the GUI shows a z/time selector below the raw image controls. Changing this selector updates the displayed slice and the analysis input.
 
-> GIF placeholder: loading a 4D stack and choosing spectral and z/time axes.
+![Loading a 4D TIFF: the axis selection dialog appears, and the z/time selector is added to the raw image viewer](../assets/gifs/01_loading_4d.gif)
 
 ## Stitching A Tile Folder
 
@@ -201,8 +199,6 @@ The stitching workflow is:
 
 The result is loaded back into the same data workflow.
 
-> GIF placeholder: tile folder selection, filename parsing, and stitched-image loading.
-
 ## Viewing Loaded Data
 
 The raw data viewer provides:
@@ -218,8 +214,6 @@ The raw data viewer provides:
 - ROI table and ROI average plot.
 
 For 4D data, the z/time selector changes the current outer slice. The spectral channel navigation remains inside the image viewer.
-
-> Screenshot placeholder: raw image viewer controls annotated with LUT, autoplay, average image, and binning.
 
 ## Common Loading Problems
 

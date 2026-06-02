@@ -84,10 +84,25 @@ In the ROI table, these appear as normal ROI rows or dummy ROI rows. A dummy ROI
 | `average` | Uses the mean image. Neutral image-derived fallback. |
 | `empty` | Near-zero homogeneous map. Use this when a component should be discovered entirely from the data without a spatial prior. |
 
-**Rule of thumb:** components live in different pixels → `nnls`; components share pixels by design → `selective_score`. If unsure, try `nnls` first and look at the W maps — if they come out implausibly clean and disjoint compared to what you would expect from the sample, switch to `selective_score`. This only affects the *seed*; seeded NNMF can still recover mixed pixels because both `W` and `H` are updated during the fit. See [Picking nnls vs selective_score](../methods/nnmf_nnls_modes.md#picking-nnls-vs-selective_score) for the longer reasoning.
+**Rule of thumb:** components live in different pixels → `nnls`; components share pixels by design → `selective_score`. If unsure, try `nnls` first and look at the W maps: if they come out implausibly clean and disjoint compared to what you would expect from the sample, switch to `selective_score`. This only affects the *seed*; seeded NNMF can still recover mixed pixels because both `W` and `H` are updated during the fit. See [Picking nnls vs selective_score](../methods/nnmf_nnls_modes.md#picking-nnls-vs-selective_score) for the longer reasoning.
 
 !!! important "The W-seed mode is the most consequential single setting after the H seeds"
-    `nnls` and `selective_score` push the analysis toward opposite assumptions — one-component-per-pixel vs many-components-per-pixel. Picking the wrong one usually shows up as either over-separated, implausibly-clean maps (`nnls` on co-localised samples) or smudgy, mixed maps where everything looks similar (`selective_score` on spatially distinct chemistries). If the W maps look wrong, this is the first knob to flip.
+    `nnls` and `selective_score` push the analysis toward opposite assumptions: one-component-per-pixel vs many-components-per-pixel. Picking the wrong one usually shows up as either over-separated, implausibly-clean maps (`nnls` on co-localized samples) or smudgy, mixed maps where everything looks similar (`selective_score` on spatially distinct chemistries). If the W maps look wrong, this is the first knob to flip.
+
+### Smoothing the W seed: the W-seed downsample factor
+
+The W-seed mode decides *how* the spatial seed is built; the **W-seed downsample** factor (in the *Performance* column, default **4**) decides *how smooth* it comes out. This is the second knob to reach for when the component spectra **overlap strongly**, because that is exactly when the per-pixel `nnls` seed is noisiest: with near-degenerate spectra, the per-pixel fit is poorly conditioned and the raw abundance map is speckled.
+
+!!! tip "Tune the W-seed downsample for strongly overlapping spectra"
+    Downsampling averages the data over small spatial blocks before the per-pixel NNLS, so it suppresses that pixel noise. NNMF then starts from a cleaner spatial map and converges to a smoother, less speckled result. The effect is largest exactly where you need it: the **NNLS abundance** W-seed mode and **strongly overlapping** spectra.
+
+    **Do not overdo it, though.** Too large a factor over-coarsens the seed. The block-mean over large regions, followed by bilinear upsampling, turns fine detail into big uniform blocks, which can show up as blocky zero (or saturated) patches in NNLS abundance seeds. These coarse blocks bias the NNMF initialization and tend to persist in the final maps. Large zero blocks are the worst case: because the multiplicative-update solver grows values multiplicatively from a near-zero start, a region seeded at (near) zero is slow to lift back up, so the block can stay dark in the result. Very high factors make this worse.
+
+    **Recommendation:** keep it moderate. The default **4** balances smoothing against artifacts for most data; drop to **2** (or **1**) if you see blockiness, and reserve **8** for very large mosaics. For *fixed-H NNLS* analysis (where W is the final result, not a seed) set it to **1** instead. See [Analysis modes → Performance column](02_analysis_modes.md#performance-column-v094).
+
+![The W-seed downsample setting and its effect on the spatial seed: moderate downsampling smooths per-pixel noise, while too high a factor produces blocky artifacts in the NNLS abundance seed](../assets/images/03_seed_downsample.png)
+
+*The W-seed downsample control and its effect on the spatial seed. Moderate values smooth out per-pixel noise; excessive values coarsen the seed into visible blocks (see arrow).*
 
 If an `H` seed is missing for a component, the residual fallback (described above) builds an `H0` first, and then the selected W-seed mode produces the spatial map from that `H0`. Fixed W maps can also be attached to dummy ROIs — useful for background components or for importing spatial maps from previous results.
 

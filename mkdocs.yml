@@ -22,7 +22,7 @@ extra_javascript:
 nav:
   - Home: index.md
   - Essentials (must-know features): essentials.md
-  - Standalone Windows .exe: standalone_windows.md
+  - Standalone (Windows / Apple Silicon): standalone_windows.md
   - Full Python Installation: installation.md
   - Quickstart: quickstart.md
   - Concepts: concepts.md

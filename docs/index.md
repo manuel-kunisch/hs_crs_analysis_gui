@@ -14,7 +14,7 @@ Quick Demo of the main workflow:
 ## Start Here
 
 - [Essentials](essentials.md) — six must-know features (visual TL;DR)
-- [Standalone Windows .exe](standalone_windows.md)
+- [Standalone (Windows / Apple Silicon)](standalone_windows.md) — run without installing Python
 - [Full Python installation](installation.md)
 - [Quickstart](quickstart.md)
 - [Concepts](concepts.md)

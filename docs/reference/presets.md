@@ -6,7 +6,11 @@ For a workflow-oriented introduction, see [Presets and reproducibility](../tutor
 
 ## Main JSON Preset
 
-The main JSON preset is the most complete snapshot of a GUI session. Save it with **Save Preset** in the analysis panel.
+The main JSON preset is the most complete snapshot of a GUI session. Save it with **Save Preset** in the analysis panel, and restore it later with **Load Preset** in the same place.
+
+![The Save Preset and Load Preset buttons for the main JSON application preset in the analysis panel](../assets/images/load_preset_json.png)
+
+*The main JSON preset is saved and loaded from the analysis panel using the highlighted buttons.*
 
 ### What it stores
 
@@ -71,7 +75,13 @@ The result-viewer `.preset` is a lighter snapshot focused on display settings an
 
 ### Loading a `.preset`
 
-Load it from the ROI Manager. The GUI asks how it should be applied:
+Load it from the ROI Manager with **Load Lookup Table and Spectra Preset**.
+
+![The Load Lookup Table and Spectra Preset button in the ROI Manager, used to load a result-viewer .preset file](../assets/images/load_preset_preset.png)
+
+*Result-viewer `.preset` files are loaded from the ROI Manager using the highlighted button.*
+
+The GUI then asks how it should be applied:
 
 **LUTs Only**: applies the saved colors and histogram levels to the current components without changing ROIs.
 

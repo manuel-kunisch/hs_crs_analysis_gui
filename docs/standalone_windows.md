@@ -1,10 +1,25 @@
-# Standalone Windows .exe
+# Standalone (Windows / Apple Silicon)
 
-This page is the Windows install guide for users who want to run HS-MOSAIC without installing Python.
+This page is the install guide for users who want to run HS-MOSAIC **without installing Python**. Pre-built standalone downloads are available for two platforms:
 
-The standalone packages are portable zip files. Each zip contains the application, Python, and the required Python packages. Users do not need Conda, pip, venv, PyTorch, or a project checkout.
+- **Windows** — portable `.zip` packages (CPU and CUDA GPU builds). Covered in full on this page.
+- **macOS (Apple Silicon)** — a `.dmg` with Metal/MPS GPU acceleration. Summarized in [macOS (Apple Silicon)](#macos-apple-silicon) below, with the full walkthrough in [Installation → Standalone macOS](installation.md#standalone-macos-apple-silicon-dmg).
 
-Use the [full Python installation](installation.md) instead when you want to run from source, modify the code, use Linux/macOS, or manage the Python environment yourself.
+The standalone packages are self-contained. Each one bundles the application, Python, and the required Python packages. Users do not need Conda, pip, venv, PyTorch, or a project checkout.
+
+Use the [full Python installation](installation.md) instead when you want to run from source, modify the code, use Linux or an Intel Mac, or manage the Python environment yourself.
+
+## macOS (Apple Silicon)
+
+Apple Silicon Macs (M1/M2/M3/M4) have a pre-built `HS_MOSAIC_AppleSilicon_vX.Y.Z.dmg` download with GPU acceleration via Metal (MPS) included.
+
+1. Download the `.dmg` from the release downloads.
+2. Open it and drag **HS-MOSAIC** into **Applications**.
+3. On the **first** launch, right-click (or Control-click) **HS-MOSAIC** in Applications and choose **Open**, then **Open** again to confirm. This one-time step is required because the app is not signed with a paid Apple Developer ID; afterward it launches with a normal double-click.
+
+Requires macOS 12.3 or newer (for the Metal/MPS GPU backend). Intel Macs are not covered by this DMG; use `pip install hs-mosaic torch` instead. See [Installation → Standalone macOS](installation.md#standalone-macos-apple-silicon-dmg) for the full notes.
+
+The rest of this page covers the Windows packages.
 
 ## Choose A Package
 

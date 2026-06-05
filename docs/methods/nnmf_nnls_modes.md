@@ -156,6 +156,8 @@ In practice it works best as:
 
 ## Seeded NNMF
 
+![NNMF schematic: the data matrix X is approximated as the product of a spatial map matrix W and a spectral basis matrix H.](../assets/images/nnmf_scheme.png)
+
 ### Intuition
 
 Seeded NNMF keeps the same non-negative matrix factorization model but starts from prior knowledge instead of random guesses. The question becomes:

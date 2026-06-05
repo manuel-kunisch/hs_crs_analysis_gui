@@ -1261,7 +1261,10 @@ class MultivariateAnalyzer(object):
             if self.seed_H is None or self.seed_W is None:
                 self.reset_seeds()
 
-            self.seed_W[:, background_component] = W_bg
+            # Unit-normalize the background W so it matches the [eps, 1] scale of
+            # the H-derived W columns. The raw rolling-ball map is on the image
+            # count scale and would otherwise dominate the seed_W initialization.
+            self.seed_W[:, background_component] = self._scale_w_seed_to_unity(W_bg)
             self.set_H_seed(background_component, H_bg, flag_background=True)
 
         return W_bg, H_bg

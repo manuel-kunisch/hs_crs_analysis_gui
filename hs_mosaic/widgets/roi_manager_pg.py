@@ -2394,6 +2394,16 @@ class ROIManager(QtCore.QObject):
 
         self.preset_load_signal.emit(len(seeds), histogram_states, colormap_colors)
 
+    def get_component_label(self, component_number) -> str:
+        """Return the user-facing name for a component (from the ROI table),
+        or a ``Component N`` fallback when no named row exists yet."""
+        for idx in range(self.roi_table.rowCount()):
+            if self.component_number_from_table_index(idx) == component_number:
+                text = self._component_label_text_from_row(idx)
+                if text:
+                    return text
+        return f"Component {component_number + 1}"
+
     def get_color_rgba(self, component_number):
         # find the desired row of the component in the table
         for idx in range(self.roi_table.rowCount()):

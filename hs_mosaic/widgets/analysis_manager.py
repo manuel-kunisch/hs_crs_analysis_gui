@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import QLabel
 from skimage.filters.rank import minimum
 
 from hs_mosaic.composite_image import CompositeImageViewWidget
-from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX
+from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX, ImageViewYXC
 from hs_mosaic.widgets import torch_nmf
 from hs_mosaic.widgets.multivariate_analyzer import HSeedScaleState, MultivariateAnalyzer
 from hs_mosaic.widgets.roi_manager_pg import ROIManager
@@ -131,6 +131,11 @@ class AnalysisManager(QtCore.QObject):
         self._last_analysis_error: str | None = None
 
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
+        # Keep an open seed-preview window's colors in sync with component-color
+        # (per-component picks and palette changes).
+        if self.color_manager is not None:
+            self.color_manager.sigColorChanged.connect(self._on_component_color_changed)
+            self.color_manager.sigCustomizationChanged.connect(self._on_component_color_changed)
         # Main widget instantiated in the init_ui method
         self.analysis_widget = None
         self.mv_analyzer = MultivariateAnalyzer(data, 3, self.wavenumbers)
@@ -885,7 +890,7 @@ class AnalysisManager(QtCore.QObject):
         # add rolling ball sigma for gaussian smoothing
         self.rolling_ball_sigma = QtWidgets.QDoubleSpinBox()
         self.rolling_ball_sigma.setRange(0.1, 100.0)
-        self.rolling_ball_sigma.setValue(3.0)
+        self.rolling_ball_sigma.setValue(11.0)
         self.rolling_ball_sigma.setSingleStep(0.1)
         self.rolling_ball_sigma.setFixedWidth(90)
         bg_form.addRow("Gaussian smoothing (px):", self.rolling_ball_sigma)
@@ -1837,6 +1842,15 @@ class AnalysisManager(QtCore.QObject):
             normalize_w_seed=normalize_w_seed,
         )
 
+    def _on_component_color_changed(self, *args):
+        """Refresh an open seed-preview window when component colors change."""
+        seed_window = getattr(self, "seed_window", None)
+        if seed_window is not None and seed_window.isVisible():
+            try:
+                seed_window.refresh_colors()
+            except Exception:
+                logger.debug("Failed to refresh seed window colors.", exc_info=True)
+
     def show_seed_window(self, seed_W_3d, seed_H, seed_pixels):
         if self.seed_window is None:
             self.seed_window = SeedWidget(
@@ -1844,7 +1858,8 @@ class AnalysisManager(QtCore.QObject):
                 seed_H,
                 self.wavenumbers,
                 seed_pixels,
-                self.roi_manager.get_color_rgba
+                color_getter=self.roi_manager.get_color_rgba,
+                label_getter=self.roi_manager.get_component_label,
             )
             self.seed_window.set_spectral_units(self.spectral_units)
             logger.info("Created new seed window")
@@ -1997,6 +2012,12 @@ class AnalysisManager(QtCore.QObject):
             fixed_W (np.ndarray): The fixed W seed array of shape (n_pixels,).
         """
         fixed_W = np.asarray(fixed_W, dtype=np.float64)
+        # Unit-normalize so a fixed W seed (background projection, imported
+        # result W map, etc.) sits on the same [eps, 1] scale as every
+        # H-derived W column. Without this, a raw-count background map is
+        # orders of magnitude larger than the other seeds and dominates the
+        # seed_W initialization, biasing the NNMF.
+        fixed_W = self.mv_analyzer._scale_w_seed_to_unity(fixed_W)
         current_W_seed_cmp = self._fixed_seed_W.get(component, None)
         if current_W_seed_cmp is None:
             self._fixed_seed_W[component] = fixed_W
@@ -2005,7 +2026,8 @@ class AnalysisManager(QtCore.QObject):
             count = self._fixed_seed_W_counts.get(component, 1)
             # Repeatedly using (old + new) / 2 would bias the mean toward the most recent ROI.
             cmp_avg = (current_W_seed_cmp * count + fixed_W) / (count + 1)
-            self._fixed_seed_W[component] = cmp_avg
+            # Re-normalize the averaged map so it stays on the unit scale.
+            self._fixed_seed_W[component] = self.mv_analyzer._scale_w_seed_to_unity(cmp_avg)
             self._fixed_seed_W_counts[component] = count + 1
             logger.warning(f"Component {component} has multiple fixed W seeds from different ROIs."
                            f" Averaging them together. This may indicate overlapping ROIs with different spatial seed maps.")
@@ -3486,7 +3508,7 @@ class AnalysisManager(QtCore.QObject):
 class SeedWidget(QtWidgets.QWidget):
     default_colors = CompositeImageViewWidget.colormap_colors
     def __init__(self, seed_W_3d: np.ndarray, seed_H: np.ndarray, wavenumbers,
-                 seed_pixels: dict or None = None, color_getter = None,):
+                 seed_pixels: dict or None = None, color_getter=None, label_getter=None,):
         super(SeedWidget, self).__init__()
         self.seed_W_3d = seed_W_3d
         self.seed_H = seed_H
@@ -3495,8 +3517,13 @@ class SeedWidget(QtWidgets.QWidget):
         self.seed_H_plot = pg.PlotWidget()
         self.seed_H_plot.addLegend()
         self.seed_W_view = ImageViewYX()
+        # Composite (false-color) view of all W seeds at once.
+        self.composite_view = ImageViewYXC()
         self.seed_pixels = seed_pixels
         self.get_color = color_getter if color_getter is not None else lambda i: self.default_colors[i]
+        self.get_label = label_getter if label_getter is not None else (lambda i: f'Component {i}')
+        self.h_curves = []
+        self.current_component_label = None
         self.scatters = []
         self.change_colormap_on_change = True
         self.seed_plot_signal = False
@@ -3506,22 +3533,58 @@ class SeedWidget(QtWidgets.QWidget):
 
     def init_ui(self):
         self.seed_W_view.setImage(self.seed_W_3d)
-        for i in range(self.seed_H.shape[0]):
-            self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pg.mkPen(self.get_color(i)), name=f'Component {i}')
+
+        # Curves are stored so they can be recolored and
+        # highlighted later without rebuilding the whole plot.
+        self._plot_h_curves()
         self.seed_H_plot.setLabel('left', 'Intensity')
         self.seed_H_plot.setLabel('bottom', spectral_axis_label(self.spectral_units))
 
+        # The composite is an RGB image; hide the per-channel histogram, the ROI
+        # button, and the menu button to keep it clean.
+        self.composite_view.ui.histogram.hide()
+        self.composite_view.ui.roiBtn.hide()
+        self.composite_view.ui.menuBtn.hide()
+
         layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(self.seed_W_view)
+
+        # Top row: per-component W seed (left) and the false-color composite of
+        # all W seeds (right), side by side.
+        views_row = QtWidgets.QHBoxLayout()
+
+        left_col = QtWidgets.QVBoxLayout()
+        left_col.addWidget(QtWidgets.QLabel("<b>Per-component W seed</b>"))
+        self.current_component_label = QtWidgets.QLabel("")
+        left_col.addWidget(self.current_component_label)
+        left_col.addWidget(self.seed_W_view)
+        left_container = QtWidgets.QWidget()
+        left_container.setLayout(left_col)
+
+        right_col = QtWidgets.QVBoxLayout()
+        right_col.addWidget(QtWidgets.QLabel("<b>Composite (all W seeds)</b>"))
+        right_col.addWidget(self.composite_view)
+        right_container = QtWidgets.QWidget()
+        right_container.setLayout(right_col)
+
+        views_row.addWidget(left_container)
+        views_row.addWidget(right_container)
+        layout.addLayout(views_row)
+
         layout.addWidget(self.seed_H_plot)
-        # widget = QtWidgets.QWidget()
         self.setLayout(layout)
-        # self.setCentralWidget(widget)
         self.seed_W_view.ui.roiPlot.setMinimumSize(QtCore.QSize(0, 60))
         axis = self.seed_W_view.ui.roiPlot.getAxis('bottom')
         axis.setLabel("W component")
         axis.setTicks([[(i, str(i)) for i in range(int(self.seed_W_3d.shape[2]))]])
         self.update_color_channel(0)
+
+        # Scrolling through W components highlights the matching H curve and
+        # updates the "current component" label.
+        self.seed_W_view.timeLine.sigPositionChanged.connect(self._on_component_scrolled)
+
+        # Build the false-color composite from all W seeds, then sync highlight + label.
+        self.build_composite()
+        self._on_component_scrolled()
 
         # add a new row with an HBox layout
         hbox = QtWidgets.QHBoxLayout()
@@ -3577,14 +3640,17 @@ class SeedWidget(QtWidgets.QWidget):
         self.wavenumbers = wavenumbers
         self.seed_pixels = seed_pixels
 
-        # update W image and x-axis ticks
+        # update W image and x-axis ticks (also rebuilds the composite)
         self.update_seed_W(seed_W_3d)
 
-        # update H spectra
+        # update H spectra (also re-applies the active-component highlight)
         self.update_seed_H(seed_H)
 
         # re-draw seed markers according to current checkbox state
         self._replot_seeds()
+
+        # keep the current-component label in sync
+        self._update_current_component_label(self._current_index())
 
     def save_seeds(self):
         time = datetime.now().strftime("%Y_%m_%d_%H-%M-%S")
@@ -3597,7 +3663,7 @@ class SeedWidget(QtWidgets.QWidget):
         csv_path = file_path.replace('.tif', '.csv')
         csv_path.replace('W_seeds', 'H_seeds')
         H = np.vstack((self.wavenumbers, self.seed_H)).T
-        header = spectral_csv_header(self.spectral_units) + ', ' + ', '.join([f'Component {i}' for i in range(self.seed_H.shape[0])])
+        header = spectral_csv_header(self.spectral_units) + ', ' + ', '.join([str(self.get_label(i)) for i in range(self.seed_H.shape[0])])
         np.savetxt(csv_path, H, delimiter=',', header=header)
         logger.info(f'Saved seeds to {file_path} and {csv_path}')
 
@@ -3698,17 +3764,102 @@ class SeedWidget(QtWidgets.QWidget):
         axis = self.seed_W_view.ui.roiPlot.getAxis('bottom')
         axis.setTicks([[(i, str(i)) for i in range(int(self.seed_W_3d.shape[2]))]])
 
-    def update_seed_H(self, seed_H):
-        self.seed_H = seed_H
-        # clear previous plots
+        # Rebuild the false-color composite for the new W seeds.
+        self.build_composite()
+
+    def _plot_h_curves(self):
+        """(Re)draw the H spectra, one curve per component, and cache the curve
+        items so they can be recolored and highlighted without a full rebuild."""
         self.seed_H_plot.clear()
+        self.h_curves = []
         for i in range(self.seed_H.shape[0]):
             try:
                 pen = pg.mkPen(self.get_color(i))
             except TypeError:
                 logger.error('Error getting color for seed H plot; using white instead.')
-                pen = pg.mkPen(self.default_colors[i%len(self.default_colors)])
-            self.seed_H_plot.plot(self.wavenumbers, self.seed_H[i, :], pen=pen, name=f'Component {i}')
+                pen = pg.mkPen(self.default_colors[i % len(self.default_colors)])
+            curve = self.seed_H_plot.plot(
+                self.wavenumbers, self.seed_H[i, :], pen=pen, name=str(self.get_label(i))
+            )
+            self.h_curves.append(curve)
+
+    def update_seed_H(self, seed_H):
+        self.seed_H = seed_H
+        self._plot_h_curves()
+        self._highlight_h_curve(self._current_index())
+
+    def _current_index(self) -> int:
+        try:
+            return int(self.seed_W_view.currentIndex)
+        except Exception:
+            return 0
+
+    def _on_component_scrolled(self, *args):
+        """Scrolling the W component slider highlights the matching H curve and
+        updates the current-component label."""
+        idx = self._current_index()
+        self._highlight_h_curve(idx)
+        self._update_current_component_label(idx)
+
+    def _highlight_h_curve(self, active_idx: int):
+        """Bold the active component's H curve and dim the others."""
+        for i, curve in enumerate(self.h_curves):
+            try:
+                r, g, b = self.get_color(i)[:3]
+            except Exception:
+                r, g, b = 255, 255, 255
+            if i == active_idx:
+                curve.setPen(pg.mkPen((r, g, b, 255), width=2.5))
+                curve.setZValue(10)
+            else:
+                curve.setPen(pg.mkPen((r, g, b, 70), width=1))
+                curve.setZValue(0)
+
+    def _update_current_component_label(self, idx: int):
+        if self.current_component_label is None:
+            return
+        try:
+            r, g, b = self.get_color(idx)[:3]
+        except Exception:
+            r, g, b = 255, 255, 255
+        self.current_component_label.setText(
+            f"Current: <b><span style='color: rgb({r},{g},{b})'>{self.get_label(idx)}</span></b>"
+        )
+
+    def build_composite(self):
+        """Build a false-color composite of all W seeds: each component's map,
+        normalized to its own max, tinted by its color, and summed."""
+        if self.seed_W_3d is None or np.ndim(self.seed_W_3d) != 3:
+            return
+        height, width, n_components = self.seed_W_3d.shape
+        rgb = np.zeros((height, width, 3), dtype=np.float64)
+        for i in range(n_components):
+            wmap = np.nan_to_num(
+                np.asarray(self.seed_W_3d[..., i], dtype=np.float64),
+                nan=0.0, posinf=0.0, neginf=0.0,
+            )
+            wmap = np.maximum(wmap, 0.0)
+            peak = float(wmap.max())
+            if peak > 0.0:
+                wmap = wmap / peak
+            try:
+                color = np.asarray(self.get_color(i)[:3], dtype=np.float64) / 255.0
+            except Exception:
+                color = np.asarray(self.default_colors[i % len(self.default_colors)][:3], dtype=np.float64) / 255.0
+            rgb += wmap[..., None] * color
+        rgb = np.clip(rgb, 0.0, 1.0)
+        rgb_u16 = (rgb * 65535.0).astype(np.uint16)
+        self.composite_view.setImage(rgb_u16, autoLevels=False, levels=(0, 65535))
+
+    def refresh_colors(self):
+        """Re-apply the current component colors to every view. Called when the
+        ROI-manager colors change while this window is open."""
+        self._plot_h_curves()
+        self.update_color_channel(self._current_index())
+        self.build_composite()
+        self._replot_seeds()
+        self._highlight_h_curve(self._current_index())
+        self._update_current_component_label(self._current_index())
 
     def set_spectral_units(self, units: str):
         self.spectral_units = normalize_spectral_unit(units)

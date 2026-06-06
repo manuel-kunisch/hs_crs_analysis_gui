@@ -15,9 +15,6 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 
 *Above: a typical hyperspectral stack as it appears in HS-MOSAIC — one grayscale frame per spectral channel, with the channel slider scrolling through the cube.*
 
-![Same dataset, four modes side by side — PCA, random NNMF, seeded NNMF, fixed-H NNLS — on the synthetic quickstart data shipped with the GUI](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/images/02_modes_comparison.png)
-
-*Above: the same synthetic dataset analyzed with each of the four available modes. PCA misses peaks, random NNMF mixes components, seeded NNMF and fixed-H NNLS recover the underlying blob spectra.*
 
 > [!IMPORTANT]
 > HS-MOSAIC is under active development. For published analyses, cite the exact release tag or commit hash you used so the processing workflow remains reproducible.
@@ -33,6 +30,7 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 - **Reproducible by construction**: presets save the full analysis state, ROI configuration, and seed choices. Reload the same TIFF, reload the preset, get the same result.
 - **Publication-friendly export**: Fiji/ImageJ-compatible TIFFs, CSV spectra, LUT presets, and scale-bar metadata that survive into downstream figures.
 
+![](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/images/nnmf_scheme.png)
 ## How HS-MOSAIC unmixes a hyperspectral stack
 
 A hyperspectral stack is a 3D cube (or 4D, with z or time): for every spatial pixel you have one full spectrum across many channels. HS-MOSAIC reorganizes that cube into a small number of **components**: a *spatial map* plus the matching *spectrum* that you can actually interpret as chemistry etc..
@@ -52,6 +50,12 @@ where `W` (pixels × components) holds the per-pixel **abundance maps** and `H` 
 | **Seeded NNMF** | Initialized from user ROIs / spectra, then refined | Initialized from `H` via NNLS / selective-score, then refined | **The main workflow.** You have a rough idea of the components and want the algorithm to refine both `W` and `H`. |
 | **Fixed-H NNLS** | **Locked** to the user spectra                     | Solved per pixel, non-negative | The spectra are trusted; only the per-pixel amounts vary. Most stable mode for 4D / cross-FOV.                    |
 
+
+![Same dataset, four modes side by side — PCA, random NNMF, seeded NNMF, fixed-H NNLS — on the synthetic quickstart data shipped with the GUI](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/images/02_modes_comparison.png)
+
+*Above: the same synthetic dataset analyzed with each of the four available modes. PCA misses peaks, random NNMF mixes components, seeded NNMF and fixed-H NNLS recover the underlying blob spectra.*
+
+
 ### NNMF — non-negative matrix factorization
 
 NNMF minimizes the reconstruction error under non-negativity:
@@ -66,7 +70,7 @@ i.e.
 min_{W, H ≥ 0}  ‖X − W H‖_F²
 ```
 
-Because both `W` and `H` are non-negative, the model is **purely additive**. There is no sign cancellation, which makes the components interpretable as physical contributions. The cost is non-convex in `W` and `H` jointly, so the initial guess (the **seed**) determines which local minimum the solver lands in. That is why HS-MOSAIC's seeded NNMF is the mode that actually works on hard data: the seed picks the basin of attraction.
+Because both `W` and `H` are non-negative, the model is **purely additive**. There is no sign cancellation, which makes the components interpretable as physical contributions. The cost is non-convex in `W` and `H` jointly, so the initial guess (the **seed**) determines which local minimum the solver lands in. That is why HS-MOSAIC's seeded NNMF is the mode that actually works on hard data: the seed picks the solution you want, and the solver refines it.
 
 The GUI ships two solvers: **multiplicative updates (`mu`, default)** — the classic Lee–Seung rule, optionally accelerated on GPU via PyTorch — and **coordinate descent (`cd`)** from scikit-learn, useful when MU's zero-stuck-zero property is inconvenient.
 
@@ -81,7 +85,6 @@ for every pixel p:
 
 with `H_seed` locked. That is the **pure abundance** problem: how much of each known spectrum is present in each pixel? It is the cleanest mode for 4D z- or t-stacks (every slice gets fitted against the same spectral basis) and for cross-FOV comparison.
 
-The GUI runs NNLS through SciPy's classical Lawson–Hanson active-set solver on CPU, and through a vectorized projected-gradient + FISTA backend on PyTorch / GPU for large mosaics.
 
 ### Why seeds are the scientific decision
 

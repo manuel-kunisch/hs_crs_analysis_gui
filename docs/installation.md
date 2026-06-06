@@ -20,7 +20,7 @@ HS-MOSAIC ships as a regular Python package on PyPI. **For almost every user the
 
 ## Standalone macOS (Apple Silicon) .dmg
 
-Apple Silicon Macs (M1/M2/M3/M4) have a pre-built download for users who do not want to install Python: `HS_MOSAIC_AppleSilicon_v0.9.5.dmg`. Open the DMG and drag **HS-MOSAIC** into **Applications**. GPU acceleration via Metal (MPS) is included; no Python or PyTorch setup is required.
+Apple Silicon Macs (M1/M2/M3/M4) have a pre-built download for users who do not want to install Python: `HS_MOSAIC_AppleSilicon_v0.9.6.dmg`. Open the DMG and drag **HS-MOSAIC** into **Applications**. GPU acceleration via Metal (MPS) is included; no Python or PyTorch setup is required.
 
 ### First launch: "Apple could not verify..." / "unidentified developer"
 

@@ -4,6 +4,31 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.6] — 2026-06-06
+
+### Added
+- **Seed-preview window: false-color composite and live linking.** The seed
+  preview (opened with **Test seeds**) now shows a false-color **composite of
+  all W seeds** next to the per-component view, so you can judge the spatial
+  separation of the seed at a glance. It also uses the real **component labels**
+  from the ROI manager in the H-spectra legend, the current-component label,
+  and the saved CSV header; **highlights the active component's H curve** while
+  you scroll the W component slider; and **updates its colors live** when you
+  change component colors in the ROI manager (previously an open seed window
+  kept stale colors until the next *Test seeds*).
+
+### Fixed
+- **Fixed and background W seeds are now unit-normalized like every other W
+  seed.** A background-projection component, an imported result-viewer W map,
+  or any ROI-attached fixed W was previously written into the seed matrix on
+  its raw (image-count) scale, orders of magnitude larger than the
+  unit-normalized H-derived columns. This unbalanced the NNMF initialization
+  and let the background dominate the result. Such maps are now scaled to the
+  same `[eps, 1]` range at seed-assembly time, including result-viewer imports
+  (W-only and H+W). **Note:** presets containing a fixed/background W will
+  reproduce the corrected, balanced seed on a rerun, which can differ from the
+  previous (unbalanced) output.
+
 ## [0.9.5] — 2026-05-29
 
 ### Changed

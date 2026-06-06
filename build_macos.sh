@@ -9,7 +9,7 @@
 # Usage:
 #   chmod +x build_macos.sh
 #   ./build_macos.sh                # builds version from pyproject.toml
-#   ./build_macos.sh 0.9.5          # override the version label on the .dmg
+#   ./build_macos.sh 0.9.6          # override the version label on the .dmg
 #
 # Requirements:
 #   - A native arm64 Python 3.10+ (NOT x86_64 under Rosetta).

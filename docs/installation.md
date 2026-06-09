@@ -24,14 +24,22 @@ Apple Silicon Macs (M1/M2/M3/M4) have a pre-built download for users who do not 
 
 ### First launch: "Apple could not verify..." / "unidentified developer"
 
-The app is not signed with a paid Apple Developer ID, so on the **first** launch macOS Gatekeeper blocks it with a message such as *"HS-MOSAIC.app cannot be opened because Apple cannot check it for malicious software"* (or *"unidentified developer"*). This is expected for an unsigned app and does not mean anything is wrong with it. To run it:
+The app is not signed with a paid Apple Developer ID, so on the **first** launch macOS Gatekeeper blocks it with a message such as *"HS-MOSAIC.app cannot be opened because Apple cannot check it for malicious software"* (or *"unidentified developer"*). This is expected for an unsigned app and does not mean anything is wrong with it. Use one of the two methods below (the old Control-click → **Open** trick has been removed for unsigned apps on recent macOS, so it no longer works).
 
-1. In **Applications**, **Control-click HS-MOSAIC** and choose **Open**.
-2. In the dialog that appears, click **Open** again to confirm.
+**Method 1 — System Settings (no Terminal):**
 
-You only need to do this once. After the first time, double-clicking launches the app normally.
+1. Double-click **HS-MOSAIC** in **Applications** once. macOS blocks it; click **Done**.
+2. Open **System Settings → Privacy & Security** and scroll to the **Security** section.
+3. Click **Open Anyway** next to the message about HS-MOSAIC, then authenticate (Touch ID or password).
+4. Click **Open** in the final confirmation dialog.
 
-If the **Open** option does not appear on a newer macOS version, open **System Settings → Privacy & Security**, scroll to the **Security** section, and click **Open Anyway** next to the HS-MOSAIC message, then confirm.
+**Method 2 — Terminal:** remove the quarantine flag, then open the app normally:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/HS-MOSAIC.app
+```
+
+You only need to do either of these once. After that, double-clicking launches the app normally.
 
 Requires macOS 12.3 or newer (for the Metal/MPS GPU backend). If you would rather not use the standalone build, `pip install hs-mosaic torch` gives the same MPS acceleration on Apple Silicon.
 

@@ -15,7 +15,7 @@ Apple Silicon Macs (M1/M2/M3/M4) have a pre-built `HS_MOSAIC_AppleSilicon_vX.Y.Z
 
 1. Download the `.dmg` from the release downloads.
 2. Open it and drag **HS-MOSAIC** into **Applications**.
-3. On the **first** launch, right-click (or Control-click) **HS-MOSAIC** in Applications and choose **Open**, then **Open** again to confirm. This one-time step is required because the app is not signed with a paid Apple Developer ID; afterward it launches with a normal double-click.
+3. On the **first** launch, clear the Gatekeeper block once (the app is not signed with a paid Apple Developer ID). Either open **System Settings → Privacy & Security** and click **Open Anyway** after the first blocked launch, or run `xattr -dr com.apple.quarantine /Applications/HS-MOSAIC.app` in Terminal. Afterward it launches with a normal double-click. (The old Control-click → **Open** trick no longer works for unsigned apps on recent macOS.)
 
 Requires macOS 12.3 or newer (for the Metal/MPS GPU backend). Intel Macs are not covered by this DMG; use `pip install hs-mosaic torch` instead. See [Installation → Standalone macOS](installation.md#standalone-macos-apple-silicon-dmg) for the full notes.
 

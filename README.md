@@ -13,7 +13,7 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 
 ![Demonstration of a typical hyperspectral stack stepping through its spectral channels — synthetic quickstart data shipped with the GUI](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/gifs/quick_synthetic_data_demo.gif)
 
-*Above: a typical hyperspectral stack as it appears in HS-MOSAIC — one grayscale frame per spectral channel, with the channel slider scrolling through the cube.*
+*Above: a typical hyperspectral stack (here the demo data set) as it appears in HS-MOSAIC — one grayscale frame per spectral channel, with the channel slider scrolling through the cube. Finally, the seeded unmixing results are displayed.*
 
 
 > [!IMPORTANT]
@@ -135,7 +135,7 @@ The GUI is built with PyInstaller into standalone executables that include a Pyt
 
 A pre-built standalone Windows executable is described in [docs/standalone_windows.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/standalone_windows/).
 
-A pre-built standalone macOS app for Apple Silicon (`HS_MOSAIC_AppleSilicon_*.dmg`, Metal/MPS GPU included) is available from the release downloads. Because it is not signed with a paid Apple Developer ID, the first launch needs a one-time right-click → **Open**; see [docs/installation.md → Standalone macOS](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/#standalone-macos-apple-silicon-dmg).
+A pre-built standalone macOS app for Apple Silicon (`HS_MOSAIC_AppleSilicon_*.dmg`, Metal/MPS GPU included) is available from the release downloads. Because it is not signed with a paid Apple Developer ID, the first launch needs a one-time Gatekeeper bypass via **System Settings → Privacy & Security → Open Anyway**, or `xattr -dr com.apple.quarantine /Applications/HS-MOSAIC.app` in Terminal; see [docs/installation.md → Standalone macOS](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/#standalone-macos-apple-silicon-dmg).
 ###  Option B: PyPI
 Recommended platform-independent install method. **Prerequisites**: A (virtual) python environment with Python ≥ 3.10 on Windows, Linux, or macOS. Optionally a supported GPU for PyTorch acceleration: NVIDIA (CUDA), Apple Silicon (MPS), Intel Arc (XPU), or AMD on Linux (ROCm).
 The package is published on PyPI as `hs-mosaic`. Install in a virtual environment with pip.

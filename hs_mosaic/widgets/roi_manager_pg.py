@@ -15,6 +15,7 @@ from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX
 from hs_mosaic.widgets.hs_image_view import ROITableDelegate, ColorButton
 from hs_mosaic.widgets.spectrum_loader import SpectrumLoader
 from hs_mosaic.widgets.spectral_axis import normalize_spectral_unit, spectral_axis_label, spectral_csv_header
+from hs_mosaic.widgets.vca import extract_endmember_spectra
 
 logger = logging.getLogger('ROI Manager')
 
@@ -145,14 +146,22 @@ class ROIManager(QtCore.QObject):
         remove_all_rois_button.setToolTip("Remove all ROIs from the image and ROI table")
         remove_all_rois_button.clicked.connect(self.remove_all_rois)
 
-        suggest_rois_button = QtWidgets.QPushButton("Suggest ROIs")
-        suggest_rois_button.setIcon(
+        suggest_spectra_button = QtWidgets.QPushButton("Suggest spectra/ROIs (VCA)")
+        suggest_spectra_button.setIcon(
             themed_button_icon(
                 ["system-search", "edit-find", "help-hint", "dialog-question"],
                 QtWidgets.QStyle.SP_MessageBoxQuestion,
             )
         )
-        suggest_rois_button.clicked.connect(self.suggest_rois_from_image)
+        suggest_spectra_button.setToolTip(
+            "Automatically estimate pure component spectra (H seeds) from the data "
+            "with Vertex Component Analysis, and add them as dummy ROI rows. "
+            "Best when each component has at least one near-pure pixel; less "
+            "reliable for strongly overlapping spectra.\n\n"
+            "The deprecated clustering-based 'Suggest ROIs' method is still "
+            "available via a toggle inside this dialog."
+        )
+        suggest_spectra_button.clicked.connect(self.suggest_spectra_vca)
 
         load_spectra_button = QtWidgets.QPushButton("Load Spectra from File")
         load_spectra_button.setIcon(button_style.standardIcon(QtWidgets.QStyle.SP_DialogOpenButton))
@@ -171,7 +180,7 @@ class ROIManager(QtCore.QObject):
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addWidget(add_line_roi_button, alignment=QtCore.Qt.AlignCenter)
         button_layout.addWidget(remove_all_rois_button, alignment=QtCore.Qt.AlignCenter)
-        button_layout.addWidget(suggest_rois_button, alignment=QtCore.Qt.AlignCenter)
+        button_layout.addWidget(suggest_spectra_button, alignment=QtCore.Qt.AlignCenter)
         button_layout.addWidget(load_spectra_button, alignment=QtCore.Qt.AlignCenter)
         button_layout.addWidget(load_preset_button, alignment=QtCore.Qt.AlignCenter)
         palette_layout = QtWidgets.QHBoxLayout()
@@ -925,6 +934,372 @@ class ROIManager(QtCore.QObject):
         for roi in rois_to_remove[::-1]:
             self.remove_roi(roi)
         return len(rois_to_remove)
+
+    def _prompt_vca_settings(self):
+        """Small dialog for the VCA seed extractor: number of endmembers, and
+        whether to place real ROIs in the image. Returns (n_endmembers,
+        place_rois, grow_mode, max_radius, use_legacy) or None if canceled.
+        When use_legacy is True the caller hands off to the deprecated
+        clustering-based suggester instead of running VCA."""
+        n_bands = int(self.raw_data.shape[0])
+        max_p = max(2, min(20, n_bands - 1))
+        # Default to the currently selected component count (from the analysis
+        # panel) when that getter is available; otherwise fall back to 4.
+        default_p = min(4, max_p)
+        count_getter = getattr(self, "vca_component_count_getter", None)
+        if count_getter is not None:
+            try:
+                selected = int(count_getter())
+                if selected >= 2:
+                    default_p = min(max(2, selected), max_p)
+            except Exception:
+                pass
+
+        dialog = QtWidgets.QDialog()
+        dialog.setWindowTitle("Suggest spectra (VCA)")
+        dialog.setModal(True)
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        form = QtWidgets.QFormLayout()
+        spin = QtWidgets.QSpinBox()
+        spin.setRange(2, max_p)
+        spin.setValue(default_p)
+        form.addRow("Number of endmember spectra:", spin)
+        layout.addLayout(form)
+
+        place_checkbox = QtWidgets.QCheckBox("Place ROIs in the image (grow a region around each VCA pixel)")
+        place_checkbox.setChecked(True)
+        place_checkbox.setToolTip(
+            "For each endmember, anchor on the pixel VCA selected as that "
+            "endmember and grow a rectangular ROI around it (out to the connected "
+            "region that stays similar, see 'Grow region by' below). The ROI's "
+            "mean spectrum becomes the seed. If the region degenerates to nothing, "
+            "a dummy spectrum row is added instead.\n\n"
+            "Uncheck to add the VCA spectra directly as dummy rows without placing "
+            "ROIs."
+        )
+        layout.addWidget(place_checkbox)
+
+        # When placing ROIs, each one is grown outward from the pixel VCA picked
+        # as that endmember, expanding while pixels stay similar by this measure.
+        score_form = QtWidgets.QFormLayout()
+        score_combo = QtWidgets.QComboBox()
+        score_combo.addItem("Cosine similarity to endmember spectrum", "cosine")
+        score_combo.addItem("Least-squares abundance", "least_squares")
+        score_combo.addItem("Selective score", "selective_score")
+        score_combo.addItem("NNLS abundance", "nnls")
+        score_combo.setCurrentIndex(0)  # cosine similarity: spectral-shape default
+        score_combo.setToolTip(
+            "The ROI is anchored on the pixel VCA selected for each endmember and "
+            "grown to the connected region around it, stopping where this measure "
+            "drops off:\n"
+            "- Cosine similarity to the endmember spectrum (default): grows while "
+            "neighboring spectra keep the same shape. Scale-invariant.\n"
+            "- Least-squares / Selective score / NNLS abundance: grow on the "
+            "corresponding abundance map instead (NNLS uses the analysis backend; "
+            "slower on large images)."
+        )
+        score_form.addRow("Grow region by:", score_combo)
+        layout.addLayout(score_form)
+
+        # Maximum ROI half-size: caps how far the box may grow from the seed pixel.
+        size_form = QtWidgets.QFormLayout()
+        max_size_spin = QtWidgets.QSpinBox()
+        max_size_spin.setRange(0, 200)
+        max_size_spin.setValue(15)
+        max_size_spin.setToolTip(
+            "Maximum ROI half-size in pixels, measured from the endmember pixel.\n"
+            "The box grows outward from that pixel (by the measure above) but never "
+            "exceeds this half-size, so the largest possible box is (2 x value + 1) "
+            "px per side, centered on the endmember pixel.\n\n"
+            "0 = use only the single endmember pixel (no growth).\n"
+            "Scale this to the size of your structures: larger for big homogeneous "
+            "regions, smaller to keep tight ROIs on small features."
+        )
+        size_form.addRow("Max ROI half-size (px):", max_size_spin)
+        layout.addLayout(size_form)
+
+        # Escape hatch to the deprecated clustering-based suggester. When checked,
+        # the VCA controls are irrelevant, so they are grayed out and OK simply
+        # hands off to the existing "Suggest ROIs" flow (its own dialog).
+        legacy_checkbox = QtWidgets.QCheckBox(
+            "Use legacy clustering-based ROI suggestion instead (deprecated)"
+        )
+        legacy_checkbox.setChecked(False)
+        legacy_checkbox.setToolTip(
+            "Switch to the older spatial-clustering 'Suggest ROIs' method, which "
+            "groups bright image regions instead of estimating spectra. VCA is "
+            "generally more reliable; this is kept for purely spatial blob "
+            "detection. Pressing OK with this checked opens the clustering dialog."
+        )
+        layout.addWidget(legacy_checkbox)
+
+        # The grow measure and max size only matter when VCA actually places ROIs,
+        # and none of the VCA controls matter when the legacy method is selected.
+        def _sync_place_enabled():
+            use_legacy = legacy_checkbox.isChecked()
+            spin.setEnabled(not use_legacy)
+            place_checkbox.setEnabled(not use_legacy)
+            place_on = place_checkbox.isChecked() and not use_legacy
+            score_combo.setEnabled(place_on)
+            max_size_spin.setEnabled(place_on)
+        place_checkbox.toggled.connect(_sync_place_enabled)
+        legacy_checkbox.toggled.connect(_sync_place_enabled)
+        _sync_place_enabled()
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return None
+        return (int(spin.value()), bool(place_checkbox.isChecked()),
+                str(score_combo.currentData()), int(max_size_spin.value()),
+                bool(legacy_checkbox.isChecked()))
+
+    def suggest_spectra_vca(self):
+        """Estimate pure component spectra (H seeds) from the data with Vertex
+        Component Analysis.
+
+        VCA returns endmember spectra only. By default, ("Place ROIs" checked) each
+        endmember's spatial region is located by growing a box around the VCA pixel
+        and a real rectangular ROI is placed there, so the ROI's own mean spectrum
+        becomes the seed. If "Place ROIs" is unchecked, the endmember spectra are
+        instead added directly as dummy ROI rows.
+        """
+        if self.raw_data is None or np.ndim(self.raw_data) < 3:
+            QtWidgets.QMessageBox.information(None, "Suggest spectra (VCA)", "Load an image stack first.")
+            return
+
+        prompt = self._prompt_vca_settings()
+        if prompt is None:
+            return
+        n_endmembers, place_rois, grow_mode, max_radius, use_legacy = prompt
+
+        # The dialog can hand off to the deprecated clustering-based suggester,
+        # which runs its own dialog and flow.
+        if use_legacy:
+            self.suggest_rois_from_image()
+            return
+
+        try:
+            spectra, indices = extract_endmember_spectra(
+                self.raw_data, int(n_endmembers), seed=0, clip_negative=True,
+            )
+        except Exception as exc:
+            logger.exception("VCA endmember extraction failed.")
+            QtWidgets.QMessageBox.warning(None, "Suggest spectra (VCA)", f"VCA failed:\n{exc}")
+            return
+
+        if not place_rois:
+            # add only the spectra without actually locating them for the user in the data set
+            for i in range(spectra.shape[0]):
+                self.add_dummy_roi(
+                    spectrum_data=spectra[i],
+                    component_number=i + 1,
+                    spectrum_name=f"VCA endmember {i + 1}",
+                )
+            logger.info("Added %d VCA endmember spectra as dummy ROI seeds.", spectra.shape[0])
+            QtWidgets.QMessageBox.information(
+                None,
+                "Suggest spectra (VCA)",
+                f"Added {spectra.shape[0]} VCA endmember spectra as dummy ROI rows "
+                f"(components 1-{spectra.shape[0]}).\n\n"
+                "Set the analysis component count to match, then run seeded NNMF or "
+                "fixed-H NNLS. Inspect and remove any noisy endmember first.",
+            )
+            return
+
+        n_roi, n_dummy = self._place_rois_from_vca_spectra(spectra, indices, grow_mode, max_radius)
+        logger.info("VCA: placed %d image ROIs and %d dummy fallback seeds (grow=%s, max_radius=%d).",
+                    n_roi, n_dummy, grow_mode, max_radius)
+        message = (
+            f"Extracted {spectra.shape[0]} endmember spectra and grew {n_roi} "
+            f"ROI(s) around their VCA pixels (components 1-{spectra.shape[0]})."
+        )
+        if n_dummy:
+            message += (
+                f"\n\n{n_dummy} endmember(s) had a degenerate region, so a dummy "
+                "spectrum row was added for them instead."
+            )
+        message += (
+            "\n\nSet the analysis component count to match, check the ROI "
+            "placements, then run seeded NNMF or fixed-H NNLS."
+        )
+        QtWidgets.QMessageBox.information(None, "Suggest spectra (VCA)", message)
+
+    def _vca_abundance_maps(self, spectra: np.ndarray, score_mode: str) -> np.ndarray:
+        """Build a per-endmember abundance/score map stack (k, Y, X) used to
+        locate ROIs. Computed on ``raw_data`` so the coordinates match the
+        displayed image exactly.
+
+        score_mode:
+          - ``least_squares``: unconstrained LS abundances ``pinv(E) @ X`` (fast).
+          - ``selective_score``: target projection down-weighted by competitors.
+          - ``nnls``: per-pixel non-negative least squares via the analysis
+            backend (most selective); falls back to least squares if unavailable.
+        """
+        eps = 1e-8
+        bands, height, width = self.raw_data.shape
+        X = np.nan_to_num(self.raw_data.reshape(bands, -1).astype(np.float64),
+                          nan=0.0, posinf=0.0, neginf=0.0)  # (bands, n_pixels)
+        E = spectra.T.astype(np.float64)                    # (bands, k)
+        k = spectra.shape[0]
+
+        if score_mode == "selective_score":
+            Xc = np.maximum(X, 0.0)                     # (bands, n_pixels), clip negatives to zero
+            proj = np.maximum(E.T @ Xc, 0.0)               # (k, n_pixels)
+            maps = np.empty_like(proj)
+            # score each endmember by its projection down-weighted by the sum of the
+            # other endmembers' projections, with an epsilon to prevent divide-by-zero.
+            # pixels which are unique will winn
+            for i in range(k):
+                target = proj[i]
+                competitor = (np.max(np.delete(proj, i, axis=0), axis=0)
+                              if k > 1 else np.zeros_like(target))
+                selectivity = target / (target + competitor + eps)
+                maps[i] = target * selectivity
+            maps = np.maximum(maps, 0.0)
+        elif score_mode == "nnls":
+            solver = getattr(self, "vca_nnls_solver", None)
+            if solver is not None:
+                try:
+                    abundance = solver(X.T, E)             # (n_pixels, k)
+                    maps = np.maximum(np.asarray(abundance).T, 0.0)
+                except Exception:
+                    logger.exception("VCA NNLS solver failed; using least squares.")
+                    maps = np.maximum(np.linalg.pinv(E) @ X, 0.0)
+            else:
+                logger.info("No NNLS solver wired for VCA; using least squares.")
+                # least_squares
+                maps = np.maximum(np.linalg.pinv(E) @ X, 0.0)
+        else:  # least_squares with non-negativity clip
+            maps = np.maximum(np.linalg.pinv(E) @ X, 0.0)
+
+        return maps.reshape(k, height, width)
+
+    def _cosine_similarity_map(self, endmember: np.ndarray, X_norm: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+        """Per-pixel cosine similarity between each pixel spectrum and one
+        endmember. ``X_norm`` is the (bands, n_pixels) data with unit-norm
+        columns; ``endmember`` is (bands,). Returns a (Y, X) map in [0, 1]."""
+        eps = 1e-12
+        e = np.asarray(endmember, dtype=np.float64)
+        e = e / (np.linalg.norm(e) + eps)   # normalize the endmember to unit length
+        sim = np.maximum(e @ X_norm, 0.0)
+        return sim.reshape(shape)
+
+    def _grow_region_around_pixel(self, sim_map: np.ndarray, seed_yx: tuple[int, int],
+                                  threshold: float, max_radius: int) -> tuple[int, int, int, int] | None:
+        """Grow the connected region of ``sim_map >= threshold`` that contains the
+        seed pixel, then return its bounding box ``(y0, x0, height, width)`` capped
+        to a ``±max_radius`` window centered on the seed.
+
+        ``max_radius == 0`` returns just the single endmember pixel (1x1). The cap
+        guarantees the box never exceeds ``(2*max_radius + 1)`` px per side, so
+        broadly-similar spectra cannot grow it across the whole frame. Returns
+        None for a degenerate seed (non-positive value)."""
+        height, width = sim_map.shape
+        sy, sx = int(seed_yx[0]), int(seed_yx[1])
+        if not (0 <= sy < height and 0 <= sx < width):
+            return None
+        if float(sim_map[sy, sx]) <= 0.0:
+            return None
+
+        r = int(max_radius)
+        if r <= 0:
+            return (sy, sx, 1, 1)  # only the endmember pixel
+
+        # Symmetric window around the seed: the box may not extend beyond it.
+        wy0, wy1 = max(0, sy - r), min(height, sy + r + 1)
+        wx0, wx1 = max(0, sx - r), min(width, sx + r + 1)
+
+        mask = sim_map >= threshold
+        if not mask[sy, sx]:
+            mask = np.zeros_like(mask, dtype=bool)
+            mask[sy, sx] = True
+
+        # Keep only the connected blob that actually contains the seed pixel (so the
+        # ROI stays anchored on the VCA vertex), then restrict it to the window.
+        labels, _ = label(mask)
+        component = labels == int(labels[sy, sx])
+        component_in_window = np.zeros_like(component, dtype=bool)
+        component_in_window[wy0:wy1, wx0:wx1] = component[wy0:wy1, wx0:wx1]
+
+        ys, xs = np.where(component_in_window)
+        if ys.size == 0:
+            return (sy, sx, 1, 1)
+        y0, y1 = int(ys.min()), int(ys.max()) + 1
+        x0, x1 = int(xs.min()), int(xs.max()) + 1
+        return (y0, x0, y1 - y0, x1 - x0)
+
+    def _place_rois_from_vca_spectra(self, spectra: np.ndarray, indices: np.ndarray,
+                                     grow_mode: str = "cosine", max_radius: int = 15) -> tuple[int, int]:
+        """Anchor on each VCA endmember pixel and grow a rectangular ROI around it,
+        expanding to the connected region that stays similar by ``grow_mode``
+        (``cosine`` similarity to the endmember, or an ``least_squares`` /
+        ``selective_score`` / ``nnls`` abundance map), capped to ``max_radius``
+        pixels from the seed (``max_radius=0`` keeps only the endmember pixel).
+        Falls back to a dummy spectrum row for a degenerate region.
+        Returns (n_rois, n_dummies)."""
+        bands, height, width = self.raw_data.shape
+
+        # Precompute what each grow measure needs.
+        score_maps = None
+        X_norm = None
+        if grow_mode == "cosine":
+            X = np.nan_to_num(self.raw_data.reshape(bands, -1).astype(np.float64),
+                              nan=0.0, posinf=0.0, neginf=0.0)
+            X_norm = X / (np.linalg.norm(X, axis=0, keepdims=True) + 1e-12)
+        else:
+            score_maps = self._vca_abundance_maps(spectra, grow_mode)  # (k, Y, X)
+
+        n_roi = 0
+        n_dummy = 0
+        for i in range(spectra.shape[0]):
+            # Component numbering conventions differ between the two helpers:
+            # add_rect_roi_from_bounds / _next_auto_roi_label take a 0-based index;
+            # add_dummy_roi takes a 1-based number (it subtracts 1 internally).
+            comp_idx = i           # 0-based
+            comp_no = i + 1        # 1-based
+
+            # The VCA pixel index is a flat row-major index over (Y, X).
+            # we need the actual xy coordinates...
+            seed_y, seed_x = divmod(int(indices[i]), width)
+
+            if grow_mode == "cosine":
+                sim_map = self._cosine_similarity_map(spectra[i], X_norm, (height, width))
+                # Cosine is bounded and comparable across pixels: grow while the
+                # spectral shape stays within a small angular margin of the seed.
+                threshold = max(0.5, float(sim_map[seed_y, seed_x]) - 0.03)
+            else:
+                sim_map = score_maps[i]
+                # Abundance magnitude varies, so grow relative to the seed value.
+                threshold = float(sim_map[seed_y, seed_x]) * 0.85
+
+            box = self._grow_region_around_pixel(sim_map, (seed_y, seed_x), threshold, max_radius)
+            if box is not None:
+                y0, x0, h, w = box
+                self.add_rect_roi_from_bounds(
+                    component_number=comp_idx,
+                    pos=(x0, y0),
+                    size=(w, h),
+                    label_text=self._next_auto_roi_label(comp_idx),
+                    auto_suggested=True,
+                    score=float(sim_map[seed_y, seed_x]),
+                )
+                n_roi += 1
+            else:
+                # Degenerate region (seed value <= 0): keep the seed as a dummy row.
+                self.add_dummy_roi(
+                    spectrum_data=spectra[i],
+                    component_number=comp_no,
+                    spectrum_name=f"VCA endmember {comp_no}",
+                )
+                n_dummy += 1
+        return n_roi, n_dummy
 
     def suggest_rois_from_image(self):
         if self.raw_data is None:
@@ -1961,7 +2336,7 @@ class ROIManager(QtCore.QObject):
 
         max_cmp_number = self.max_component_slots
         resonance_combobox = QtWidgets.QComboBox()
-        resonance_combobox.addItems("Compontent %i" % i for i in range(1, max_cmp_number+1))
+        resonance_combobox.addItems("Component %i" % i for i in range(1, max_cmp_number+1))
         index = new_row_idx
         if component_number is not None:
             index = component_number

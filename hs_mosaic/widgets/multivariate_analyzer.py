@@ -727,7 +727,7 @@ class MultivariateAnalyzer(object):
         self._maybe_yield_to_ui()
         return abundance, self._finalize_fit_info(info, working_data)
 
-    def _build_nnls_abundance_matrix(
+    def build_nnls_abundance_matrix(
             self,
             image_data: np.ndarray,
             basis: np.ndarray,
@@ -833,7 +833,7 @@ class MultivariateAnalyzer(object):
                 self.last_nnls_info["cache_hit"] = True
             return cached
 
-        abundance, info = self._build_nnls_abundance_matrix(image_data, basis, eps, source_key)
+        abundance, info = self.build_nnls_abundance_matrix(image_data, basis, eps, source_key)
         info = self._annotate_H_seed_scale_info(info)
         info["source"] = source_key
         info["cache_hit"] = False
@@ -1036,12 +1036,8 @@ class MultivariateAnalyzer(object):
         use_subtracted = bool(use_processed_data and self.resonance_data_2d is not None)
         image_data = self.resonance_data_2d if use_subtracted else self.data_2d
         resolved_source_key = source_key or ("fixed-h-subtracted" if use_subtracted else "fixed-h-raw")
-        abundance, info = self._build_nnls_abundance_matrix(
-            image_data,
-            fixed_h.T.astype(np.float64, copy=False),
-            eps,
-            resolved_source_key,
-        )
+        abundance, info = self.build_nnls_abundance_matrix(image_data, fixed_h.T.astype(np.float64, copy=False), eps,
+                                                           resolved_source_key)
 
         self.fixed_W = np.asarray(abundance, dtype=np.float32)
         self.fixed_H = fixed_h
@@ -1298,12 +1294,7 @@ class MultivariateAnalyzer(object):
         residual = working_data
         if basis_columns:
             basis = np.column_stack(basis_columns).astype(np.float64, copy=False)
-            abundance, _ = self._build_nnls_abundance_matrix(
-                working_data,
-                basis,
-                eps,
-                f'missing-h-{component_index}',
-            )
+            abundance, _ = self.build_nnls_abundance_matrix(working_data, basis, eps, f'missing-h-{component_index}')
             residual = np.maximum(
                 working_data - np.asarray(abundance, dtype=np.float64) @ basis.T,
                 0.0,

@@ -4,6 +4,40 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.7] — 2026-06-16
+
+### Added
+- **Automatic spectral seeding with Vertex Component Analysis (VCA).** A new
+  **Suggest spectra (VCA)** button in the ROI Manager estimates the pure
+  component spectra directly from the data (geometric endmember extraction;
+  Nascimento & Bioucas-Dias, *IEEE TGRS* 2005) and uses them as H seeds. It is
+  unsupervised (only needs the component count, which defaults to the value in
+  the Analysis panel) and reproducible (fixed random seed). Two modes:
+    * **Dummy spectra** (Place ROIs off): the endmember spectra are added
+      directly as dummy ROI rows.
+    * **Place ROIs** (default): for each endmember the GUI anchors on the pixel
+      VCA selected and grows a rectangular ROI around it, expanding to the
+      connected region that stays similar. The grow measure is selectable
+      (**cosine similarity** to the endmember, default; or least-squares /
+      selective-score / NNLS abundance), and a **Max ROI half-size** caps how
+      far the box may grow (0 = only the endmember pixel). The ROI's mean
+      spectrum then becomes the seed; degenerate regions fall back to a dummy
+      row. Implemented in a self-contained ``hs_mosaic/widgets/vca.py``.
+
+### Changed
+- **The clustering-based "Suggest ROIs" is now deprecated** in favor of
+  Suggest spectra (VCA). It still works, but VCA is generally more reliable, so
+  the old tool is best reserved for purely spatial detection. It no longer
+  has its own toolbar button: it is reached through a small "Use legacy
+  clustering-based ROI suggestion" toggle inside the Suggest spectra (VCA)
+  dialog. The clustering dialog and algorithm are unchanged. Documentation moves
+  VCA to its own page and relocates the clustering page to the Reference section.
+
+### Fixed
+- **Corrected the component dropdown label typo** in the ROI Manager table
+  ("Compontent" -> "Component"). Parsing was already spelling-agnostic, so
+  existing presets are unaffected.
+
 ## [0.9.6] — 2026-06-06
 
 ### Added

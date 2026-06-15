@@ -13,7 +13,7 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 
 ![Demonstration of a typical hyperspectral stack stepping through its spectral channels — synthetic quickstart data shipped with the GUI](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/gifs/quick_synthetic_data_demo.gif)
 
-*Above: a typical hyperspectral stack (here the demo data set) as it appears in HS-MOSAIC — one grayscale frame per spectral channel, with the channel slider scrolling through the cube. Finally, the seeded unmixing results are displayed.*
+*Above: a typical hyperspectral stack (here the demo data set) as it appears in HS-MOSAIC with one grayscale frame per spectral channel stepping through the spectral channels. Finally, the seeded unmixing results from user selected initialization values are displayed.*
 
 
 > [!IMPORTANT]

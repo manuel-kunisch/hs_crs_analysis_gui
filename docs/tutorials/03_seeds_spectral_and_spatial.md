@@ -162,9 +162,17 @@ The Gaussian model creates a dummy ROI row for the relevant component. The row b
 ![Gaussian seed generation from manually defined resonance settings, creating a dummy ROI row with the Gaussian spectrum as H seed](../assets/gifs/03_gaussian.gif)
 
 *Here the PMMA beads have a known peak at around 2960 cm⁻¹. A Gaussian seed is generated from that resonance position and width, creating a dummy ROI row with the Gaussian spectrum as H seed. We also scaled the spectrum to the data matching absolute intensity*
-## Auto-Suggested ROIs
+## Suggesting seeds  (spectra) automatically (VCA)
 
-The **Suggest ROIs** tool scans the image for bright or structured regions and turns them into candidate seed ROIs. The output is just a set of ROIs in the ROI Manager — they then feed into the normal seed flow described on this page.
+When you do not yet have seeds and do not want to draw ROIs by hand, the **Suggest spectra (VCA)** button in the ROI Manager estimates the pure component spectra directly from the data with Vertex Component Analysis, and can place ROIs for them automatically. In practice this is the most reliable automatic seeding option in HS-MOSAIC, and it is a good first step on unfamiliar data.
+
+See [Suggest spectra (VCA)](03d_suggest_spectra_vca.md) for the theory, the original paper, the dialog options, and the two modes (only spectra vs. spectra spatially located in the dataset).
+
+## Suggest ROIs (clustering-based, deprecated)
+
+The older **Suggest ROIs** tool scans the image for bright or structured regions and groups them by **spatial** structure first and then distinguishes spectral similarity, turning them into candidate seed ROIs. This is a different, purely spatial approach to VCA's spectral one.
+
+The methodology remains available, but **VCA is generally more reliable**, so it is the recommended automatic method now and this clustering tool is considered deprecated for most workflows. It is still useful when you specifically want spatial blob detection rather than spectral endmembers.
 
 See [Auto-suggested ROIs](03c_suggest_rois.md) for the dialog reference, projection modes, the gradient fingerprint, hierarchical vs greedy grouping, and the internal algorithm walkthrough.
 

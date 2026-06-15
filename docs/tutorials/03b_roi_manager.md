@@ -40,11 +40,13 @@ Creates a new spatial ROI in the image view. The app asks for a component number
 
 Removes all ROI Manager rows and image ROIs. Use this when starting a new seed setup.
 
-`Suggest ROIs`
+`Suggest spectra / ROIs (VCA)`
 
-Runs automatic ROI suggestion. Suggested ROIs are normal spatial ROI rows after creation: they can be renamed, moved, removed, reassigned, plotted, or used as seeds.
+Estimates the pure component spectra directly from the data with Vertex Component Analysis and, by default, grows a real ROI around each component's purest pixel (the ROI's mean spectrum becomes the seed). With the *Place ROIs* option off, the endmember spectra are added as dummy ROI rows instead. The dialog also offers the number of endmembers (defaults to the analysis component count), the grow measure (cosine similarity / least-squares / selective score / NNLS abundance), and a maximum ROI half-size.
 
-The full settings dialog is explained in [Auto-Suggested ROIs](03_seeds_spectral_and_spatial.md#auto-suggested-rois).
+This is the recommended automatic seeding method. The full explanation is in [Suggest spectra (VCA)](03d_suggest_spectra_vca.md).
+
+The older spatial-clustering **Suggest ROIs** method is now deprecated and no longer has its own button; it is reachable through a toggle inside the *Suggest spectra (VCA)* dialog. It still works, but VCA is generally more reliable; prefer the clustering method only for purely spatial detection. Its full settings dialog is explained in [Suggest ROIs (clustering-based, legacy)](03c_suggest_rois.md).
 
 **Existing ROIs are respected.** Before candidate detection starts, every pixel already covered by a drawn ROI — whether placed manually or from a previous auto-suggestion run — is zeroed out in the response map. The algorithm is completely blind to those areas and will not place a new suggestion on top of an existing one. This means you can place a ROI manually on a known structure first and then run `Suggest ROIs` to fill in the remaining structures automatically without getting duplicates. Dummy spectrum rows and Gaussian model rows have no spatial footprint and are not masked.
 

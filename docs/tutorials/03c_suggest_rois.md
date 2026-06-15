@@ -1,4 +1,7 @@
-# 03c Auto-suggested ROIs
+# 03c Suggest ROIs (clustering-based, deprecated)
+
+!!! warning "Deprecated — prefer Suggest spectra (VCA)"
+    This spatial-clustering ROI suggestion still works, but it is now **deprecated for most workflows** and no longer has its own toolbar button; it is reached through a toggle inside the *Suggest spectra (VCA)* dialog. The newer [Suggest spectra (VCA)](03d_suggest_spectra_vca.md) method (Vertex Component Analysis) estimates the pure component spectra directly and is generally **more reliable**. Reach for the clustering tool below only when you specifically want purely spatial detection rather than spectral endmembers.
 
 The ROI suggestion tool searches for bright or structured image regions that can be useful seed candidates. It is a separate workflow that runs *before* seed building — its output is just a set of ROIs, which then feed into the normal seed flow described in [Seeds, spectra, and W maps](03_seeds_spectral_and_spatial.md).
 
@@ -28,7 +31,7 @@ The dialog scans the current image stack without requiring resonance positions o
 | **Hierarchical grouping** | Uses Ward hierarchical clustering to force exactly *k* groups from the candidate pool instead of merging greedily by threshold. | On | More reliable when components are spectrally similar. Greedy mode (off) can be used when the number of distinct components is uncertain. |
 | **Replace previous auto ROI suggestions** | Removes only earlier auto-suggested ROIs before creating new suggestions. | On | Keep enabled while tuning settings. Disable to accumulate batches without removing earlier suggestions. |
 
-## Gradient fingerprint — how it works and why it matters
+## Gradient fingerprint - how it works and why it matters
 
 When two spectra are compared, the default measure is **cosine similarity on raw intensity**: it asks how much the two intensity traces point in the same direction. This works well for spectra that look fundamentally different. But for closely related variants — such as a lipid and a slightly modified lipid — both spectra might share a large, dominant peak at the same position. The raw intensity comparison sees that shared peak and reports 85–95% similarity, even though the two components differ meaningfully in the slope leading up to the peak, the steepness of the descent, or the presence of a small shoulder.
 

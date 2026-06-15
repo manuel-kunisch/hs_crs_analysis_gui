@@ -131,6 +131,12 @@ class AnalysisManager(QtCore.QObject):
         self._last_analysis_error: str | None = None
 
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
+        # Let the ROI manager's VCA "place ROIs" option reuse the analyzer's fast
+        # NNLS backend for its abundance/score maps (selective-score and
+        # least-squares are computed locally in the ROI manager).
+        self.roi_manager.vca_nnls_solver = self._vca_nnls_solve
+        # Default the VCA endmember count to the currently selected component count.
+        self.roi_manager.vca_component_count_getter = lambda: self.mv_analyzer.get_n_components()
         # Keep an open seed-preview window's colors in sync with component-color
         # (per-component picks and palette changes).
         if self.color_manager is not None:
@@ -1841,6 +1847,18 @@ class AnalysisManager(QtCore.QObject):
             skip_components=self._fixed_seed_W.keys(),
             normalize_w_seed=normalize_w_seed,
         )
+
+    def _vca_nnls_solve(self, image_data: np.ndarray, basis: np.ndarray) -> np.ndarray:
+        """NNLS abundance solve for the ROI manager's VCA 'place ROIs' option,
+        reusing the analyzer's fast (torch / chunked SciPy) backend.
+
+        image_data : (n_pixels, n_bands)   basis : (n_bands, k)
+        Returns abundance of shape (n_pixels, k).
+        """
+        abundance, _ = self.mv_analyzer.build_nnls_abundance_matrix(np.asarray(image_data, dtype=np.float64),
+                                                                    np.asarray(basis, dtype=np.float64), 1e-8,
+                                                                    "vca-roi-placement")
+        return np.asarray(abundance)
 
     def _on_component_color_changed(self, *args):
         """Refresh an open seed-preview window when component colors change."""

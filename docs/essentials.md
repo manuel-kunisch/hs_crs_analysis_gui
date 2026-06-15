@@ -8,15 +8,25 @@ Seven features that are easy to miss when you just click around, but that change
 
 ---
 
-## 1. Placing ROIs three different ways
+## 1. Placing ROIs several different ways
 
 ROIs are the main way to give the analysis a starting point. There is more than one way to place them, and you can mix them in the same session.
 
+- **Suggest spectra (VCA): recommended automatic method.** The **Suggest spectra/ROIs (VCA)** button estimates the pure component spectra straight from the data (Vertex Component Analysis) and, by default, grows an ROI around each component's purest pixel. It is a reliable automatic seeding option and a great first step on unfamiliar data. See [Suggest spectra (VCA)](tutorials/03d_suggest_spectra_vca.md).
+
+![VCA on the synthetic quickstart data: recovering all five endmember spectra and placing a tight grown ROI on each, then separating every bead species in the result viewer](assets/gifs/03d_blops_vca.gif)
+
+*One click on **Suggest spectra (VCA)** recovers all five pure spectra of the [synthetic quickstart dataset](examples/synthetic_quickstart.md) (including the broad background) and places a tight ROI on each.*
+
 - **Manual, scrolling through the stack.** Step the channel slider through the spectral axis, identify a channel where a structure is bright, draw a rectangular ROI on it. Quick and unbeatable when you already know what you are looking for. Look out for distinct structures that are bright in different channels — they make the best seeds.
-- **Auto-suggested ROIs.** The **Suggest ROIs** button scans the stack for bright structures and groups them by spectral similarity. Useful as a first pass on unfamiliar data, or to fill out the table after one manual ROI is already placed. See [Auto-suggested ROIs](tutorials/03c_suggest_rois.md).
+
+![Manually placing ROIs by stepping through the HS stack and drawing a box on three different synthetic blobs from the example dataset](assets/gifs/add_roi.gif)
+
+*Scrolling through the HS stack by hand and drawing an ROI on three different synthetic blobs from the [example dataset](examples/synthetic_quickstart.md).*
+
 - **Draw on a projection image.** The raw image viewer's **Projection** dropdown (`Average`, `Max`, `Min`) collapses the spectral stack into one image so faint structures become visible. ROIs drawn on the projection still pick up the full per-channel spectrum of the underlying pixels.
 
-![Auto-suggested ROIs on synthetic microbead data](assets/gifs/03_suggest_rois_beads.gif)
+![Auto-suggested ROIs (clustering-based) on synthetic microbead data](assets/gifs/03_suggest_rois_beads.gif)
 
 → Full reference: [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md) · [ROI Manager in detail](tutorials/03b_roi_manager.md)
 

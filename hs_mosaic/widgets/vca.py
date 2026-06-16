@@ -38,7 +38,9 @@ def _estimate_snr(Y: np.ndarray, y_mean: np.ndarray, x: np.ndarray) -> float:
     p, _ = x.shape
 
     p_y = np.sum(Y ** 2) / N
-    p_x = np.sum(x ** 2) / N + float(y_mean.T @ y_mean)
+    # NumPy 2.x rejects float() on a (1,1) array (``y_mean.T @ y_mean``); use the
+    # equivalent sum of squares, which is a true 0-d scalar.
+    p_x = np.sum(x ** 2) / N + float(np.sum(y_mean ** 2))
     denom = p_y - p_x
     if abs(denom) < _EPS:
         return 0.0

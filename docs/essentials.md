@@ -8,25 +8,29 @@ Seven features that are easy to miss when you just click around, but that change
 
 ---
 
-## 1. Placing ROIs several different ways
+## 1. Using ROIs to find seeds for NNMF unmixing: Multiple ways...
 
 ROIs are the main way to give the analysis a starting point. There is more than one way to place them, and you can mix them in the same session.
 
 - **Suggest spectra (VCA): recommended automatic method.** The **Suggest spectra/ROIs (VCA)** button estimates the pure component spectra straight from the data (Vertex Component Analysis) and, by default, grows an ROI around each component's purest pixel. It is a reliable automatic seeding option and a great first step on unfamiliar data. See [Suggest spectra (VCA)](tutorials/03d_suggest_spectra_vca.md).
 
 ![VCA on the synthetic quickstart data: recovering all five endmember spectra and placing a tight grown ROI on each, then separating every bead species in the result viewer](assets/gifs/03d_blops_vca.gif)
-
 *One click on **Suggest spectra (VCA)** recovers all five pure spectra of the [synthetic quickstart dataset](examples/synthetic_quickstart.md) (including the broad background) and places a tight ROI on each.*
 
 - **Manual, scrolling through the stack.** Step the channel slider through the spectral axis, identify a channel where a structure is bright, draw a rectangular ROI on it. Quick and unbeatable when you already know what you are looking for. Look out for distinct structures that are bright in different channels — they make the best seeds.
 
 ![Manually placing ROIs by stepping through the HS stack and drawing a box on three different synthetic blobs from the example dataset](assets/gifs/add_roi.gif)
+*Scrolling through the HS example stack by hand and drawing an ROI on three different synthetic blobs from the [example dataset](examples/synthetic_quickstart.md).*
 
-*Scrolling through the HS stack by hand and drawing an ROI on three different synthetic blobs from the [example dataset](examples/synthetic_quickstart.md).*
+- **Draw on a projection image.** The raw image viewer's **Projection** dropdown (`Average`, `Max`, `Min` & `Composite` (see [below](#3-composite-projection-verify-and-find-what-is-missing))) collapses the spectral stack into one image so faint structures become visible. Sometimes this can help to identify different structures e.g. via intensity differences. ROIs drawn on the projection still pick up the full per-channel spectrum of the underlying pixels.
 
-- **Draw on a projection image.** The raw image viewer's **Projection** dropdown (`Average`, `Max`, `Min`) collapses the spectral stack into one image so faint structures become visible. ROIs drawn on the projection still pick up the full per-channel spectrum of the underlying pixels.
+![Average projection of a CARS microbead stack: the bead types stand out by their mean intensity, so each one can be told apart and given a manually drawn ROI](assets/gifs/average_projection_hs_beads_roi_drawing.gif)
+*On the **Average** projection of a CARS microbead stack the bead types separate by their mean intensity, so each kind can be distinguished by eye and given a manually drawn ROI, fixing its spectrum directly.*
 
-![Auto-suggested ROIs (clustering-based) on synthetic microbead data](assets/gifs/03_suggest_rois_beads.gif)
+The same automatic VCA seeding works just as well on real CARS data:
+
+![Suggest spectra (VCA) on a CARS microbead stack: setting 4 components and letting VCA recover all three bead types plus the background in one pass](assets/gifs/vca_auto_suggest_hs_beads.gif)
+*Auto-seeding a CARS microbead stack: with the component count set to 4, one press of **Suggest spectra (VCA)** finds all three bead types plus the background, no manual ROIs needed.*
 
 → Full reference: [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md) · [ROI Manager in detail](tutorials/03b_roi_manager.md)
 

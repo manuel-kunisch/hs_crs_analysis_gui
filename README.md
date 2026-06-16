@@ -24,7 +24,7 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 ## Why HS-MOSAIC?
 
 - **Four analysis modes in one workflow**: PCA for variance-based diagnostics, random NNMF for unguided exploration, seeded NNMF for the main guided workflow, and fixed-H NNLS for spectral seed stability, particularly in 4D cross-slice / cross-time.
-- **Seed-first interaction**: draw ROIs, load reference spectra, build Gaussian resonance models, or let the auto-suggester scan the image. Every seed source feeds the same H/W building pipeline.
+- **Seed-first interaction**: extract pure component spectra automatically with Vertex Component Analysis (VCA), draw ROIs, load reference spectra, or build Gaussian resonance models. Every seed source feeds the same H/W building pipeline.
 - **3D and 4D stacks**: per-slice or fast multislice (NNMF on a reference slice → NNLS everywhere else) for time series and z-stacks.
 - **Optional GPU acceleration** via PyTorch with CPU fallback (scikit-learn NMF, SciPy NNLS).
 - **Reproducible by construction**: presets save the full analysis state, ROI configuration, and seed choices. Reload the same TIFF, reload the preset, get the same result.
@@ -108,6 +108,7 @@ Quickest entry points:
 - [Loading data](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/01_loading_data/) — TIFF conventions, 3D/4D axis selection, intensity handling
 - [Analysis modes](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/02_analysis_modes/) — which mode to choose and what to expect
 - [Seeds, spectra, and W maps](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/03_seeds_spectral_and_spatial/) — building H and W seeds
+- [Suggest spectra (VCA)](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/03d_suggest_spectra_vca/) — automatic endmember seeding (recommended)
 - [Presets and reproducibility](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/06_presets_and_reproducibility/) — saving and restoring the full analysis state
 - [NNMF and NNLS methods](https://manuel-kunisch.github.io/hs_crs_analysis_gui/methods/nnmf_nnls_modes/) — math, convergence criteria, references
 - [Workflow checklist](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/07_workflow_checklist/) — single-page reminder for a publication-grade run
@@ -123,9 +124,9 @@ mkdocs serve
 
 ## At a glance
 
-![Auto-suggested ROIs on synthetic microbead data — spatial detection followed by Ward hierarchical clustering on spectral fingerprints](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/gifs/03_suggest_rois_beads.gif)
+![Suggest spectra (VCA) on a CARS microbead stack: automatic seed spectra extraction recovering every bead type plus the background in one click](https://raw.githubusercontent.com/manuel-kunisch/hs_crs_analysis_gui/main/docs/assets/gifs/vca_auto_suggest_hs_beads.gif)
 
-The screenshot above demonstrates the **Suggest ROIs** tool on the bead dataset. The same GUI handles seed building, NNMF/NNLS analysis, and result export. See [docs/tutorials/03c_suggest_rois.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/03c_suggest_rois/) for the algorithm and settings reference.
+The GIF above demonstrates **Suggest spectra (VCA)**, the recommended automatic seeding method, recovering the pure component spectra of a CARS microbead stack in a single click. The same GUI handles seed building, NNMF/NNLS analysis, and result export. See [docs/tutorials/03d_suggest_spectra_vca.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/03d_suggest_spectra_vca/) for the theory and settings reference.
 
 ## Install
 

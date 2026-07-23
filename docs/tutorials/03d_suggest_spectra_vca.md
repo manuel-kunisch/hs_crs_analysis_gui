@@ -14,6 +14,10 @@ VCA is described in:
 
 VCA first reduces the data to the signal subspace with an SVD, then repeatedly projects the data onto a direction orthogonal to the endmembers found so far and selects the **most extreme pixel** as the next vertex. It returns one pure spectrum per component (these become the **H seeds**) together with the pixel each spectrum came from.
 
+![Three-panel VCA schematic: the pixel cloud forms a simplex whose vertices are the pure spectra, VCA finds the vertices by projecting onto orthogonal directions and taking the extreme pixel, and the found endmember spectra are stacked as rows into the seed matrix H0 that initializes the NNMF](../assets/images/vca_schmatic.png)
+
+*How VCA seeds the NNMF. **(1)** Every measured pixel is a non-negative mixture of a few pure spectra, so the pixel cloud fills a simplex whose vertices are exactly those pure spectra. **(2)** VCA projects all pixels onto a direction orthogonal to the vertices found so far; the pixel with the extreme projection is the next vertex — a real measured spectrum. **(3)** The endmember spectra are stacked as the rows of the seed matrix H₀ and handed to the NNMF, which then only refines spectra that are already physically meaningful.*
+
 The one assumption to keep in mind is the **pure-pixel assumption**: VCA works best when each component has at least one near-pure pixel in the image. When spectra overlap strongly or the data is noisy, VCA still returns the most extreme pixels, but they may be less pure, so inspect the suggested spectra before running the analysis.
 
 ![The Suggest spectra (VCA) dialog: number of endmember spectra, the Place ROIs checkbox, the Grow region by selector, the Max ROI half-size, and the legacy clustering toggle](../assets/images/03d_vca_dialog.png)

@@ -35,9 +35,15 @@ floor is a real constant per pixel, so it *accumulates* with the bin size and
 must be carried through the levels. Ignoring it makes the test too strict at
 high levels (it under-bins, and the denoising quietly stops working).
 
-``gain`` is not the physical PMT gain: it is ``F * g`` in ADU per photoelectron,
-with F the excess-noise factor of the dynode chain (~1.2-2). Measure it with
-:func:`estimate_noise_model`, never assume it.
+``gain`` is not the PMT high-voltage gain. With ``k`` the ADU per photoelectron
+and ``F`` the excess-noise factor of the dynode chain (~1.2-2), the photoelectron
+statistics give ``Var = F*k^2*lambda = (F*k)*mean``, so ``gain = F*k``: ADU per
+*effective* photoelectron. Useful corollary: ``mean/gain`` is the effective
+number of quanta behind a measurement (~15 per pixel and band on the CARS data).
+Measure it with :func:`estimate_noise_model`, never assume it.
+
+A code-next-to-physics walkthrough of the whole chain is in
+``nnmf_scripting/docs/binlets_physics.md``.
 
 Install with ``pip install binlets``.
 """
@@ -115,9 +121,12 @@ class NoiseModel:
     offset: float
 
     def sigma_at(self, mean: float) -> float:
-        # Denoising thresholds use the standard deviation sigma, whereas the
-        # fitted model describes the variance. Standard deviation is therefore
-        # the square root of the predicted variance.
+        """Predicted per-pixel standard deviation at a given intensity.
+
+        Reporting convenience only: sigma is what one can compare against image
+        contrast by eye. The merge test itself consumes the *variance*, and
+        never takes this square root.
+        """
         return float(np.sqrt(max(self.gain * float(mean) + self.offset, 0.0)))
 
     def __str__(self) -> str:

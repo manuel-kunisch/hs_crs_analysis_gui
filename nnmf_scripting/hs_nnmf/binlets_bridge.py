@@ -56,9 +56,34 @@ _INSTALL_HINT = (
     "`pip install binlets` (see https://github.com/maurosilber/binlets)."
 )
 
-# half-normal: P(|Z| < 0.3186 s) = 0.25  ->  s = p25(|d|) / 0.3186
+# Conversion factors used by ``estimate_noise_model``.
+#
+# If zero-mean Gaussian noise has standard deviation sigma, its absolute value
+# follows a half-normal distribution. The 25th percentile of that distribution
+# is 0.3186 * sigma. Therefore:
+#
+#     sigma = percentile_25(abs(noise)) / 0.3186
+#
+# This lower percentile is used instead of the usual variance because edges and
+# other real structures produce large spatial differences. A low percentile is
+# less influenced by those large values.
 _P25_TO_SIGMA = 1.0 / 0.3186
-_SECOND_DIFF = np.sqrt(6.0)  # var(x[i-1] - 2x[i] + x[i+1]) = 6 sigma^2
+
+# For three independent pixels with equal noise variance sigma**2, the
+# coefficients of the second difference are (1, -2, 1). Variances add with the
+# squared coefficients:
+#
+#     var(x_left - 2*x_center + x_right)
+#         = (1**2 + (-2)**2 + 1**2) * sigma**2
+#         = 6 * sigma**2
+#
+# The standard deviation of the second difference is consequently
+# sqrt(6) * sigma, so we divide by sqrt(6) to recover per-pixel sigma.
+_SECOND_DIFF = np.sqrt(6.0)
+
+# If two pixels contain the same true signal and differ only by independent
+# Gaussian noise, their squared standardized difference follows a chi-square
+# distribution with one degree of freedom. Its median is approximately 0.4549.
 _CHI2_1_MEDIAN = 0.4549  # median of a chi-square with 1 degree of freedom
 
 
@@ -72,12 +97,27 @@ def binlets_available() -> bool:
 
 @dataclass(frozen=True)
 class NoiseModel:
-    """Per-pixel detector noise as ``var = gain * mean + offset``."""
+    """Per-pixel detector noise as ``variance = gain * mean + offset``.
+
+    ``mean`` is the expected detector value in counts/ADU. ``variance`` is the
+    expected squared fluctuation around that value.
+
+    ``gain`` describes the signal-dependent part: brighter pixels have more
+    photon/PMT shot noise. It is the increase in variance per additional count,
+    not the voltage gain configured on the PMT.
+
+    ``offset`` is the signal-independent noise floor, such as readout,
+    electronic, dark-current, and digitisation noise. Its units are counts
+    squared.
+    """
 
     gain: float
     offset: float
 
     def sigma_at(self, mean: float) -> float:
+        # Denoising thresholds use the standard deviation sigma, whereas the
+        # fitted model describes the variance. Standard deviation is therefore
+        # the square root of the predicted variance.
         return float(np.sqrt(max(self.gain * float(mean) + self.offset, 0.0)))
 
     def __str__(self) -> str:
@@ -100,9 +140,19 @@ def _calibrate_on_flat_pixels(stack: np.ndarray, model: NoiseModel) -> NoiseMode
     from scipy.ndimage import gaussian_filter
 
     data = np.asarray(stack, dtype=np.float64)
+
+    # Average all spectral channels (and any additional leading dimensions)
+    # into one 2-D overview image. Gaussian smoothing prevents random
+    # pixel-to-pixel noise from being mistaken for anatomical/image structure
+    # when the gradient is calculated below.
     projection = gaussian_filter(data.reshape(-1, *data.shape[-2:]).mean(axis=0), 2)
     gradient_y, gradient_x = np.gradient(projection)
     gradient = np.hypot(gradient_y, gradient_x)
+
+    # The lowest-gradient 25% of the overview is treated as locally flat. Both
+    # pixels of a horizontal pair must belong to that flat subset. In a truly
+    # flat pair, x-y should contain detector noise but almost no real spatial
+    # contrast.
     flat = gradient < np.percentile(gradient, 25)
     flat_pairs = flat[:, :-1] & flat[:, 1:]
     if flat_pairs.sum() < 100:
@@ -110,6 +160,15 @@ def _calibrate_on_flat_pixels(stack: np.ndarray, model: NoiseModel) -> NoiseMode
         return model
 
     x, y = data[..., :-1], data[..., 1:]
+
+    # For two independent pixels, variances add when they are subtracted:
+    #
+    #   var(x-y)
+    #       = (gain*x + offset) + (gain*y + offset)
+    #       = gain*(x+y) + 2*offset
+    #
+    # The observed squared difference divided by this predicted variance is a
+    # dimensionless chi-square statistic.
     variance = model.gain * (x + y) + 2.0 * model.offset
     variance = np.where(variance <= 0, np.inf, variance)
     median_chi2 = float(np.median(((x - y) ** 2 / variance)[..., flat_pairs]))
@@ -117,6 +176,11 @@ def _calibrate_on_flat_pixels(stack: np.ndarray, model: NoiseModel) -> NoiseMode
         logger.warning("Noise-model calibration failed; using the raw fit.")
         return model
 
+    # A median above 0.4549 means the observed differences are larger than the
+    # model predicts, so both variance terms are increased. A median below the
+    # target means the model is too large, so both terms are reduced. This
+    # preserves the fitted gain-to-offset ratio; it only adjusts the overall
+    # variance scale.
     scale = median_chi2 / _CHI2_1_MEDIAN
     logger.info(
         "Noise-model calibration: median chi2 on flat pixels %.3f (target %.4f) -> variance x%.3f",
@@ -128,27 +192,83 @@ def _calibrate_on_flat_pixels(stack: np.ndarray, model: NoiseModel) -> NoiseMode
 def estimate_noise_model(
     stack: np.ndarray, *, n_bins: int = 20, calibrate: bool = True
 ) -> NoiseModel:
-    """Fit ``var = gain * mean + offset`` from the data (photon-transfer curve).
+    """Estimate detector noise from one image stack.
+
+    The fitted relationship is:
+
+    ``noise variance = gain * local mean intensity + offset``
+
+    In practical terms:
+
+    * ``gain * mean`` represents noise that grows with signal intensity,
+      principally photon/PMT shot noise.
+    * ``offset`` represents an approximately constant electronic/readout noise
+      floor.
+    * the returned standard deviation at an intensity is
+      ``sqrt(gain * mean + offset)``.
 
     Uses the second spatial difference along x, which cancels local linear
     trends, and takes the *25th percentile* of its magnitude inside each
-    intensity bin: real image structure only ever adds to a second difference,
-    so a low percentile approximates the pure-noise floor.
+    intensity bin. Curved edges and texture generally produce large second
+    differences, so a low percentile reduces their influence and approximates
+    the noise floor. It cannot remove structural contamination completely.
 
     This replaces the naive ``var/mean`` estimate, which folds the read-noise
     floor into the gain and overestimates it badly for a current-mode PMT.
+
+    This is a pragmatic estimate from a single structured image, not a formal
+    detector calibration. A laboratory photon-transfer measurement would use
+    repeated, uniformly illuminated frames at several intensities plus dark
+    frames.
+
+    Parameters
+    ----------
+    stack
+        Raw detector values with shape ``(..., Y, X)``. For a hyperspectral
+        stack this is normally ``(bands, Y, X)``. The last dimension is treated
+        as the x direction.
+    n_bins
+        Number of intensity ranges used to construct the variance-versus-mean
+        curve. Quantile bins contain roughly equal numbers of pixel triplets.
+    calibrate
+        If True, rescale the fitted variance so neighboring pixels in the
+        flattest image regions have the expected Gaussian-noise statistic.
+
+    Returns
+    -------
+    NoiseModel
+        ``gain`` and ``offset`` for predicting per-pixel noise variance.
     """
     data = np.asarray(stack, dtype=np.float64)
     if data.ndim < 3:
         raise ValueError(f"Expected at least (bands, Y, X), got shape {data.shape}.")
 
+    # Examine every horizontal group of three pixels:
+    #
+    #     left, center, right
+    #
+    # ``left - 2*center + right`` is a discrete second derivative. It is zero
+    # for a perfectly constant region and also for a linear intensity ramp. Its
+    # remaining value is therefore used as a proxy for high-frequency detector
+    # noise. Absolute values are used because only the magnitude matters.
     diff = np.abs(data[..., :-2] - 2 * data[..., 1:-1] + data[..., 2:]).ravel()
+
+    # Associate each second difference with the mean brightness of the same
+    # three pixels. This supplies the x-coordinate of the photon-transfer
+    # curve: "how much noise is present at this signal intensity?"
     mean = ((data[..., :-2] + data[..., 1:-1] + data[..., 2:]) / 3.0).ravel()
 
     # Quantile edges, not linear ones: intensity histograms are clumpy (most
     # pixels sit in a narrow range), so linear bins leave most of them empty.
+    # The lowest and highest 2% are omitted to reduce the influence of extreme
+    # dark values, bright outliers, and possible detector clipping.
     edges = np.unique(np.quantile(mean, np.linspace(0.02, 0.98, n_bins + 1)))
     index = np.digitize(mean, edges) - 1
+
+    # Do not fit an intensity bin unless it contains enough triplets for a
+    # reasonably stable percentile. On large images this requires about 2% of
+    # the expected samples per equal-population bin, with an absolute minimum
+    # of 50.
     min_per_bin = max(50, mean.size // (max(len(edges) - 1, 1) * 50))
 
     means, variances = [], []
@@ -156,6 +276,18 @@ def estimate_noise_model(
         selected = index == bin_index
         if selected.sum() < min_per_bin:
             continue
+
+        # Step 1: take the lower quartile of absolute second differences so
+        # large edges/structures have less influence.
+        #
+        # Step 2: convert that half-normal percentile to the standard deviation
+        # of the second differences.
+        #
+        # Step 3: divide by sqrt(6) to obtain the estimated standard deviation
+        # of one pixel.
+        #
+        # Step 4: square sigma because the photon-transfer relationship is
+        # linear in *variance*, not in standard deviation.
         sigma = np.percentile(diff[selected], 25) * _P25_TO_SIGMA / _SECOND_DIFF
         means.append(np.median(mean[selected]))
         variances.append(sigma ** 2)
@@ -166,8 +298,26 @@ def estimate_noise_model(
             "Pass gain and offset explicitly instead."
         )
 
+    # Fit a straight line through the representative points:
+    #
+    #       y = gain*x + offset
+    #       y = estimated noise variance
+    #       x = median intensity of the bin
+    #
+    # ``np.polyfit(..., 1)`` returns the slope first and the intercept second.
     gain, offset = np.polyfit(np.asarray(means), np.asarray(variances), 1)
+
+    # The downstream binlets variance calculation requires a positive gain and
+    # a non-negative constant noise floor, so the current implementation clips
+    # smaller fitted values to those usable limits. This clipping is a software
+    # safeguard, not proof that the detector model is correct: a negative raw
+    # fit can indicate an unremoved detector baseline or a poor affine fit and
+    # should be investigated when the values are used quantitatively.
     model = NoiseModel(gain=float(max(gain, 1e-6)), offset=float(max(offset, 0.0)))
+
+    # The optional second stage checks the model against neighboring pixels in
+    # flat regions. It adjusts the overall variance scale but does not change
+    # the gain-to-offset ratio determined by the line fit.
     if calibrate:
         model = _calibrate_on_flat_pixels(stack, model)
     logger.info("Estimated noise model: %s", model)

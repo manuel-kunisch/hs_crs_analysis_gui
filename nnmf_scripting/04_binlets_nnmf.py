@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tifffile
 
 from hs_nnmf import (
+    DEFAULT_PALETTE,
     NNMFParams,
     Roi,
     binlets_denoise,
@@ -38,6 +39,7 @@ def main():
     DATA = data_path("2017_03_23_Lungcells_Day2_60mWBoth_2xZoom_16ms_Pos2_HS_CARS_ch-1_C.tif")
     RESULT_DIR = Path(__file__).resolve().parent / "results" / "binlets"
     LABEL = "binlets"
+    PALETTE = DEFAULT_PALETTE  # or: high_contrast | okabe_ito | classic_rgb
 
     # Detector noise model, var = gain * mean + offset.
     #   None  -> fitted from the data (photon-transfer curve)
@@ -86,7 +88,10 @@ def main():
         patience=3,
     )
 
-    COMPOSITE = dict(mode="additive", gamma=1.0, low_percentile=(0, 0, 70))
+    COMPOSITE = dict(
+        palette=PALETTE, mode="additive", gamma=1.0,
+        low_percentile=(0, 0, 70),
+    )
     # QC panel: which band and pixel to show raw vs denoised
     CHECK_BAND = 42          # 2850 cm-1, the CH2 lipid band
     CHECK_PIXEL = (348, 150) # a lipid droplet
@@ -136,7 +141,7 @@ def main():
                       facecolor=composite.get_facecolor())
     save_composite_image(result, RESULT_DIR / f"{LABEL}_composite_rgb.png", **COMPOSITE)
 
-    save_figures(result, RESULT_DIR, basename=LABEL, show=True)
+    save_figures(result, RESULT_DIR, basename=LABEL, palette=PALETTE, show=True)
     print(f"results in {RESULT_DIR}")
 
 

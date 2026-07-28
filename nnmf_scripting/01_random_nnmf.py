@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from hs_nnmf import (
+    DEFAULT_PALETTE,
     NNMFParams,
     configure_logging,
     data_path,
@@ -25,6 +26,7 @@ def main():
     DATA = data_path("2017_03_23_Lungcells_Day2_60mWBoth_2xZoom_16ms_Pos2_HS_CARS_ch-1_C.tif")
     RESULT_DIR = Path(__file__).resolve().parent / "results" / "random"
     LABEL = "random"
+    PALETTE = DEFAULT_PALETTE  # or: high_contrast | okabe_ito | classic_rgb
 
     PARAMS = NNMFParams(
         n_components=3,
@@ -38,7 +40,9 @@ def main():
 
     # False-color composite: true additive RGB (what FIJI and the GUI's composite
     # view do)
-    COMPOSITE = dict(mode="additive", gamma=1.0, low_percentile=0.0)
+    COMPOSITE = dict(
+        palette=PALETTE, mode="additive", gamma=1.0, low_percentile=0.0
+    )
     # ------------------------------------------------------------------------------
 
     configure_logging("INFO")
@@ -57,7 +61,7 @@ def main():
                       facecolor=composite.get_facecolor())
     save_composite_image(result, RESULT_DIR / f"{LABEL}_composite_rgb.png", **COMPOSITE)
 
-    save_figures(result, RESULT_DIR, basename=LABEL, show=True)
+    save_figures(result, RESULT_DIR, basename=LABEL, palette=PALETTE, show=True)
     print(f"results in {RESULT_DIR}")
 
 

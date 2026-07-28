@@ -15,14 +15,22 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
+from hs_mosaic.widgets.color_manager import (
+    DEFAULT_PALETTE as GUI_DEFAULT_PALETTE,
+    PALETTES as GUI_PALETTES,
+)
+
 from .config import Roi
 from .runner import NNMFResult
 
 logger = logging.getLogger(__name__)
 
-# Fixed categorical order (blue, green, magenta, yellow, aqua, orange, violet, red).
-DEFAULT_COLORS = ("#2a78d6", "#008300", "#e87ba4", "#eda100", "#1baf7a", "#eb6834", "#4a3aa7", "#e34948")
-CLASSIC_COLORS = ("#d62728", "#008300", "#4b5563")
+# Use the GUI registry as the single source of truth. Tuple values keep the
+# scripting presets read-only while preserving the GUI's names and order.
+PALETTES = {name: tuple(colors) for name, colors in GUI_PALETTES.items()}
+DEFAULT_PALETTE = GUI_DEFAULT_PALETTE
+DEFAULT_COLORS = PALETTES[DEFAULT_PALETTE]
+CLASSIC_COLORS = PALETTES["classic_rgb"]
 
 INK = "#0b0b0b"
 INK_MUTED = "#898781"
@@ -30,19 +38,38 @@ GRID = "#e1e0d9"
 SURFACE = "#fcfcfb"
 
 
-def component_colors(n: int, colors: Sequence[str] | None = None) -> list[str]:
-    palette = list(colors) if colors is not None else list(DEFAULT_COLORS)
-    if n > len(palette):
+def component_colors(
+    n: int,
+    colors: Sequence[str] | None = None,
+    *,
+    palette: str | None = None,
+) -> list[str]:
+    """Resolve component colors from an explicit sequence or a GUI palette.
+
+    With neither argument, this uses the GUI's current fresh-session default.
+    """
+    if colors is not None and palette is not None:
+        raise ValueError("Pass either `colors=` or `palette=`, not both.")
+    if palette is not None:
+        try:
+            resolved = list(PALETTES[palette])
+        except KeyError as exc:
+            raise ValueError(
+                f"Unknown palette {palette!r}; available: {sorted(PALETTES)}"
+            ) from exc
+    else:
+        resolved = list(colors) if colors is not None else list(DEFAULT_COLORS)
+    if n > len(resolved):
         raise ValueError(
-            f"{n} components need {n} colors but only {len(palette)} are defined. "
+            f"{n} components need {n} colors but only {len(resolved)} are defined. "
             "Pass an explicit `colors=` sequence rather than cycling hues."
         )
-    return palette[:n]
+    return resolved[:n]
 
 
 def single_hue_cmap(color: str) -> LinearSegmentedColormap:
-    """White -> ``color`` sequential ramp (monotone lightness)."""
-    return LinearSegmentedColormap.from_list(f"hs_{color}", ["#ffffff", color])
+    """Black -> ``color`` sequential ramp, matching the GUI channel LUT."""
+    return LinearSegmentedColormap.from_list(f"hs_{color}", ["#000000", color])
 
 
 def _normalize_map(image: np.ndarray, percentile: float, low_percentile: float = 0.0) -> np.ndarray:
@@ -61,16 +88,8 @@ def _normalize_map(image: np.ndarray, percentile: float, low_percentile: float =
 
 
 def _channel_color(color: str) -> np.ndarray:
-    """Full-brightness version of a hue, for additive blending on black.
-
-    The categorical palette is stepped for a light surface, so its colors are
-    mid-lightness and look dim when added onto black. Dividing by the largest
-    channel keeps the hue but takes it to full brightness, which is what an
-    additive LUT needs.
-    """
-    rgb = np.asarray(to_rgb(color), dtype=np.float64)
-    peak = float(rgb.max())
-    return rgb / peak if peak > 0 else rgb
+    """Exact RGB channel color used by the GUI's black -> color LUT."""
+    return np.asarray(to_rgb(color), dtype=np.float64)
 
 
 def _per_component(value, n: int, name: str) -> list[float]:
@@ -88,6 +107,7 @@ def composite_rgb(
     colors: Sequence[str] | None = None,
     percentile: float | Sequence[float] = 99.5,
     *,
+    palette: str | None = None,
     mode: str = "additive",
     low_percentile: float | Sequence[float] = 0.0,
     gamma: float | Sequence[float] = 1.0,
@@ -117,7 +137,7 @@ def composite_rgb(
     """
     maps = np.asarray(maps)
     n_components = maps.shape[0]
-    palette = component_colors(n_components, colors)
+    component_palette = component_colors(n_components, colors, palette=palette)
     height, width = maps.shape[1], maps.shape[2]
 
     if mode not in {"additive", "multiply"}:
@@ -130,7 +150,7 @@ def composite_rgb(
     rgb = np.zeros((height, width, 3), dtype=np.float64) if mode == "additive" \
         else np.ones((height, width, 3), dtype=np.float64)
 
-    for index, (image, color) in enumerate(zip(maps, palette)):
+    for index, (image, color) in enumerate(zip(maps, component_palette)):
         weight = _normalize_map(image, highs[index], lows[index])
         if gammas[index] != 1.0:
             weight = weight ** gammas[index]
@@ -151,6 +171,7 @@ def plot_component_maps(
     result: NNMFResult,
     *,
     colors: Sequence[str] | None = None,
+    palette: str | None = None,
     percentile: float = 99.5,
     ncols: int = 2,
     show_composite: bool = True,
@@ -164,7 +185,7 @@ def plot_component_maps(
     if maps is None:
         raise ValueError("No seed maps available for this result (random init has no seeds).")
     maps = np.asarray(maps)
-    palette = component_colors(maps.shape[0], colors)
+    component_palette = component_colors(maps.shape[0], colors, palette=palette)
 
     n_panels = maps.shape[0] + (1 if show_composite else 0)
     ncols = max(1, int(ncols))
@@ -173,7 +194,7 @@ def plot_component_maps(
     fig.patch.set_facecolor(SURFACE)
     flat_axes = axes.ravel()
 
-    for index, (image, color) in enumerate(zip(maps, palette)):
+    for index, (image, color) in enumerate(zip(maps, component_palette)):
         ax = flat_axes[index]
         ax.imshow(_normalize_map(image, percentile), cmap=single_hue_cmap(color), vmin=0.0, vmax=1.0)
         kind = "W seed" if use_seeds else "W"
@@ -183,7 +204,7 @@ def plot_component_maps(
     if show_composite:
         ax = flat_axes[maps.shape[0]]
         ax.imshow(
-            composite_rgb(maps, palette, percentile=percentile,
+            composite_rgb(maps, component_palette, percentile=percentile,
                           mode=composite_mode, gamma=composite_gamma),
             interpolation="nearest",
         )
@@ -203,6 +224,7 @@ def plot_composite(
     result: NNMFResult,
     *,
     colors: Sequence[str] | None = None,
+    palette: str | None = None,
     percentile: float = 99.5,
     mode: str = "additive",
     gamma: float = 1.0,
@@ -219,8 +241,17 @@ def plot_composite(
     maps = result.seed_W_2D if use_seeds else result.W_2D
     if maps is None:
         raise ValueError("No seed maps available for this result (random init has no seeds).")
-    palette = component_colors(np.asarray(maps).shape[0], colors)
-    rgb = composite_rgb(maps, palette, percentile, mode=mode, gamma=gamma, low_percentile=low_percentile)
+    component_palette = component_colors(
+        np.asarray(maps).shape[0], colors, palette=palette
+    )
+    rgb = composite_rgb(
+        maps,
+        component_palette,
+        percentile,
+        mode=mode,
+        gamma=gamma,
+        low_percentile=low_percentile,
+    )
 
     fig, ax = plt.subplots(figsize=figsize)
     fig.patch.set_facecolor(SURFACE)
@@ -229,10 +260,10 @@ def plot_composite(
     _style_image_axes(ax)
     ax.legend(
         handles=[Line2D([], [], color=color, lw=3, label=f"W component {index}")
-                 for index, color in enumerate(palette)],
+                 for index, color in enumerate(component_palette)],
         frameon=False, fontsize=9, labelcolor=INK,
         loc="upper center", bbox_to_anchor=(0.5, -0.09),
-        ncol=min(len(palette), 4),
+        ncol=min(len(component_palette), 4),
     )
     fig.tight_layout()
     return fig
@@ -243,6 +274,7 @@ def save_composite_image(
     path: str | Path,
     *,
     colors: Sequence[str] | None = None,
+    palette: str | None = None,
     percentile: float = 99.5,
     mode: str = "additive",
     gamma: float = 1.0,
@@ -258,7 +290,7 @@ def save_composite_image(
     if maps is None:
         raise ValueError("No seed maps available for this result.")
     rgb = composite_rgb_uint8(
-        maps, colors=colors, percentile=percentile, mode=mode,
+        maps, colors=colors, palette=palette, percentile=percentile, mode=mode,
         gamma=gamma, low_percentile=low_percentile,
     )
     path = Path(path)
@@ -357,13 +389,16 @@ def plot_spectra(
     result: NNMFResult,
     *,
     colors: Sequence[str] | None = None,
+    palette: str | None = None,
     show_seeds: bool = True,
     normalize: bool = True,
     title: str | None = None,
 ) -> Figure:
     """H components (solid) and, optionally, the H seeds they started from
     (dashed). Normalized to unit peak by default so shapes are comparable."""
-    palette = component_colors(result.n_components, colors)
+    component_palette = component_colors(
+        result.n_components, colors, palette=palette
+    )
     order = np.argsort(np.asarray(result.wavenumbers, dtype=float))
     x = np.asarray(result.wavenumbers, dtype=float)[order]
 
@@ -371,7 +406,7 @@ def plot_spectra(
     fig.patch.set_facecolor(SURFACE)
     ax.set_facecolor(SURFACE)
 
-    for index, color in enumerate(palette):
+    for index, color in enumerate(component_palette):
         spectrum = np.asarray(result.H[index], dtype=float)[order]
         if normalize:
             peak = float(np.max(spectrum))
@@ -407,6 +442,7 @@ def plot_roi_overview(
     rois: Sequence[Roi],
     *,
     colors: Sequence[str] | None = None,
+    palette: str | None = None,
     n_components: int | None = None,
     percentile: float = 99.5,
     title: str | None = None,
@@ -425,7 +461,7 @@ def plot_roi_overview(
     shape_yx = projection.shape
 
     n = n_components if n_components is not None else (max((r.component for r in rois), default=0) + 1)
-    palette = component_colors(n, colors)
+    component_palette = component_colors(n, colors, palette=palette)
 
     fig, ax = plt.subplots(figsize=(7.0, 6.8))
     fig.patch.set_facecolor(SURFACE)
@@ -435,7 +471,7 @@ def plot_roi_overview(
     placed: list[tuple[float, float]] = []
 
     for roi in rois:
-        color = palette[int(roi.component) % len(palette)]
+        color = component_palette[int(roi.component) % len(component_palette)]
         if roi.rect is not None:
             y0, x0, roi_h, roi_w = (int(v) for v in roi.rect)
             ax.add_patch(Rectangle((x0 - 0.5, y0 - 0.5), roi_w, roi_h,
@@ -453,7 +489,7 @@ def plot_roi_overview(
 
     used = sorted({int(roi.component) for roi in rois})
     ax.legend(
-        handles=[Line2D([], [], color=palette[c % len(palette)], lw=2,
+        handles=[Line2D([], [], color=component_palette[c % len(component_palette)], lw=2,
                         label=f"component {c}") for c in used],
         frameon=False, fontsize=9, labelcolor=INK,
         loc="upper center", bbox_to_anchor=(0.5, -0.09), ncol=min(len(used), 4),
@@ -497,6 +533,7 @@ def save_figures(
     *,
     basename: str | None = None,
     colors: Sequence[str] | None = None,
+    palette: str | None = None,
     formats: Sequence[str] = ("png", "pdf"),
     dpi: int = 200,
     percentile: float = 99.5,
@@ -515,13 +552,14 @@ def save_figures(
 
     figures = {
         "W_components": plot_component_maps(
-            result, colors=colors, percentile=percentile, title=f"{result.label}: W components"
+            result, colors=colors, palette=palette, percentile=percentile,
+            title=f"{result.label}: W components"
         ),
-        "H_components": plot_spectra(result, colors=colors),
+        "H_components": plot_spectra(result, colors=colors, palette=palette),
     }
     if result.seed_W_2D is not None:
         figures["W_seeds"] = plot_component_maps(
-            result, colors=colors, percentile=percentile, use_seeds=True,
+            result, colors=colors, palette=palette, percentile=percentile, use_seeds=True,
             show_composite=False, title=f"{result.label}: W seeds",
         )
 

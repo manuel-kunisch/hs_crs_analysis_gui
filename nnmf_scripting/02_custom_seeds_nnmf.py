@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from hs_nnmf import (
+    DEFAULT_PALETTE,
     NNMFParams,
     Roi,
     configure_logging,
@@ -30,6 +31,7 @@ def main():
     DATA = data_path("2017_03_23_Lungcells_Day2_60mWBoth_2xZoom_16ms_Pos2_HS_CARS_ch-1_C.tif")
     RESULT_DIR = Path(__file__).resolve().parent / "results" / "custom_seeds"
     LABEL = "custom_seeds"
+    PALETTE = DEFAULT_PALETTE  # or: high_contrast | okabe_ito | classic_rgb
 
     # its mean spectrum is subtracted for SEED estimation only (fit stays on raw data)
     NRB_SUBTRACT = Roi(component=2, rect=(430, 380, 30, 40), name="NRB subtraction (bottom right)", is_background=True)
@@ -73,7 +75,10 @@ def main():
 
     # False-color composite: true additive RGB (what FIJI and the GUI's composite
     # view do)
-    COMPOSITE = dict(mode="additive", gamma=1.0, low_percentile=(0, 0, 70))
+    COMPOSITE = dict(
+        palette=PALETTE, mode="additive", gamma=1.0,
+        low_percentile=(0, 0, 70),
+    )
     # ------------------------------------------------------------------------------
 
     configure_logging("INFO")
@@ -85,6 +90,7 @@ def main():
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
     overview = plot_roi_overview(
         stack, ROIS,
+        palette=PALETTE,
         n_components=PARAMS.n_components,
         title=f"{LABEL}: seed ROIs on the mean projection",
     )
@@ -103,7 +109,7 @@ def main():
     save_composite_image(result, RESULT_DIR / f"{LABEL}_composite_rgb.png", **COMPOSITE)
 
     # show=True displays the ROI overview and composite with the W/H figures
-    save_figures(result, RESULT_DIR, basename=LABEL, show=True)
+    save_figures(result, RESULT_DIR, basename=LABEL, palette=PALETTE, show=True)
     print(f"results in {RESULT_DIR}")
 
 if __name__ == "__main__":

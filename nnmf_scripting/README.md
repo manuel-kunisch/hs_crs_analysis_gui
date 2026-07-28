@@ -5,6 +5,8 @@ same seeding options the GUI offers: **spatial seeds (ROIs), spectral seeds, and
 VCA**, plus W-seed mode, W-seed downsampling, unity normalization and all solver
 settings.
 
+Please check the [GUI's NNMF documentation](https://manuel-kunisch.github.io/hs_crs_analysis_gui/) for the theory and the meaning of the parameters.
+
 The scripting runs `MultivariateAnalyzer` through the same call sequence the GUI's analysis
 manager uses, so a scripted run reproduces a GUI run.
 
@@ -19,8 +21,9 @@ nnmf_scripting/
 ├── 01_random_nnmf.py           random init, no seeds
 ├── 02_custom_seeds_nnmf.py     ROI seeds from coordinate indices (+ ROI overview)
 ├── 03_vca_nnmf.py              VCA seeds
-├── 04_binlets_nnmf.py          binlets denoising, then ROI-seeded NNMF
-└── selftest.py                 synthetic check, no data needed
+├── 04_binlets_nnmf.py          binlets denoising, then ROI-seeded NNMF (experimental)
+├── 05_binlets_4d.py            binlets denoising in 4D (experimental)
+└── selftest.py                 synthetic check, no data needed, test your python installation here
 ```
 
 The numbered scripts have no CLI: open one, edit the `SETTINGS` block at the top
@@ -35,7 +38,7 @@ The scripts name their dataset instead of hard-coding a path:
 DATA = data_path("2017_03_23_Lungcells_Day2_..._HS_CARS_ch-1_C.tif")
 ```
 
-`data_path()` looks in, in order: the path as given, `$HS_NNMF_DATA`, and
+`data_path()` looks in, in order: the path as given, `$HS_NNMF_DATA` (this is a path variable you have to define once), and
 `nnmf_scripting/data/` (one level of subfolders included). So drop the files into
 `data/`, or point `HS_NNMF_DATA` at wherever the measurements live, and the
 scripts run unchanged on any machine.
@@ -102,8 +105,8 @@ plotted first (a ROI overview, say) pops up in the same call.
 
 Priority when several apply, matching the GUI: `h_seeds` > `rois` > `vca` >
 the analyzer's own fallback (residual-NNLS spectrum, else smoothed random).
-Anything you do not seed is filled in automatically, so partial seeding is fine —
-seed the two components you know and let VCA or the fallback handle the rest.
+Anything you do not seed is filled in automatically, so partial seeding is fine.
+Seed the two components you know and let VCA or the fallback handle the rest.
 
 An `Roi` takes a region in any of three forms, and several ROIs on the same
 component are averaged (as `get_roi_mean_curves` does in the GUI):
@@ -117,7 +120,7 @@ Roi(component=2, mask=bool_array_YX)               # arbitrary region
 
 `sigma`, `scale`, `offset`, `is_background` mirror the ROI table columns.
 
-Check where the seeds actually landed before trusting a run — this is what
+Check where the seeds actually landed before trusting a run: this is what
 `02_custom_seeds_nnmf.py` shows first:
 
 ```python
@@ -166,20 +169,13 @@ downsample 4) takes ~1 s.
 
 **What the three runs show.** All three converge to essentially the same
 reconstruction error (relative error 0.337–0.339) but *not* to the same
-factorization:
-
-- **ROI seeds** give the cleanest separation — droplets in component 0, nuclei
-  clearly resolved in component 1, NRB in component 2.
-- **random** lands close to the ROI solution, but component 0 spreads over whole
-  cell bodies instead of isolating droplets.
-- **VCA** converges fastest (~90 iterations) to a different local optimum in which
-  nuclei and background are less cleanly split. This is not premature stopping:
-  running to `patience=5, tol=1e-6` (1830 iterations) only moves the error from
-  0.33764 to 0.33728.
+factorization! 
 
 That is the practical point of seeding: NMF has many equally good factorizations
-of this data, and the seeds decide which one you land on — not how well the model
-fits. Do not read a lower reconstruction error as a better decomposition.
+of this data, and the seeds decide which one you land on, not how well the model
+fits. **Do not read a lower reconstruction error as a better decomposition!**
+
+> ***The whole magic lies in the seeding process!***
 
 Component order is arbitrary in the unsupervised runs. To line them up with the
 seeded run so component 0/1/2 mean the same thing everywhere:
@@ -197,8 +193,8 @@ seed ROIs drawn on it, and `plot_composite()` the full-size composite.
 
 ### Composite
 
-The composite is a **true RGB array** handed to a single `imshow` — no
-matplotlib alpha compositing anywhere. `mode="additive"` (the default) is what
+The composite is a **true RGB array** handed to a single `imshow`, no
+matplotlib alpha compositing anywhere (as in alpha versions of HS-MOSAIC). `mode="additive"` (the default) is what
 HS-MOSAIC's composite view and FIJI do: normalize each map between its levels,
 map it through a black → color LUT, and *sum* the channels, so the background is
 black and overlaps brighten toward white. `mode="multiply"` is the subtractive
@@ -217,18 +213,8 @@ save_composite_image(result, "out/composite_rgb.png", low_percentile=(0, 0, 70))
 ```
 
 `save_composite_image()` writes a pixel-exact RGB PNG (one output pixel per data
-pixel, no axes, no resampling) — the equivalent of exporting the composite
-straight out of the GUI viewer. Note the channel hues are taken to full
-brightness for additive blending, since the categorical palette is stepped for a
-light surface and would look dim summed onto black.
-
-Each W component map is magnitude data, so it gets a single-hue sequential ramp
-(white → the component's color) rather than a rainbow map. Component identity
-uses a fixed color order, and every panel is titled, so identity never rests on
-color alone. The default palette (blue / green / magenta) is colorblind-validated.
-`CLASSIC_COLORS` reproduces the older red/green/gray figures but does **not**
-pass CVD separation (red vs green ΔE 5.4 for deuteranopia) — use it only for
-visual continuity with previous results:
+pixel, no axes, no resampling): the equivalent of exporting the composite
+straight out of the GUI viewer.
 
 ```python
 from hs_nnmf import CLASSIC_COLORS

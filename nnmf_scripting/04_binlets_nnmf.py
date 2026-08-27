@@ -5,7 +5,7 @@ statistical test says they are consistent, so flat areas get large bins while
 droplets and edges keep full resolution. The spectral axis is never binned --
 it is used as *evidence* for each spatial merge decision (joint_channels=True).
 
-Needs `pip install binlets`. Run in the env that has it (py312_nnmf_pytorch_binlets).
+Needs `pip install binlets`.
 
 Edit the SETTINGS block and run the file. Figures are saved and shown.
 """
@@ -43,9 +43,12 @@ def main():
 
     # Detector noise model, var = gain * mean + offset.
     #   None  -> fitted from the data (photon-transfer curve)
-    #   gain  -> ADU per photoelectron, INCLUDING the PMT excess-noise factor
-    #   offset-> read/dark/digitisation variance floor; 0 only for photon counting
-    # A current-mode PMT always needs the offset: it accumulates with bin size.
+    #   gain  -> ADU per effective photoelectron, i.e. with the PMT
+    #            excess-noise factor already folded in
+    #   offset-> read/dark/digitisation variance floor, in counts squared
+    # A current-mode PMT can carry a substantial offset, and it accumulates
+    # with the bin size, so it is fitted rather than assumed. It is not always
+    # present: of our four stacks only one fits a non-zero offset.
     GAIN = None
     OFFSET = None
 
@@ -56,8 +59,12 @@ def main():
     #      5.0 -> noise -65%,  contrast -0.5%    <- good default here
     #      8.0 -> noise -92%,  contrast -1.1%
     # It is dataset-dependent: a low-contrast stack needs a lower n_sigma (the
-    # day-1 lung-cell field is well denoised at 3.0). Raise it until the
-    # residual panel starts showing structure instead of noise, then back off.
+    # day-1 lung-cell field is well denoised at 3.0), and it also depends on the
+    # number of channels, since the null is relatively wider for few channels.
+    # Judge it on the residual panel, but read it correctly: for shot-noise
+    # limited data the residual amplitude is meant to follow the brightness,
+    # because the variance does. Only a sign-coherent residual, outlines that
+    # are consistently one colour, means signal is being removed.
     BINLETS = dict(
         n_sigma=5.0,          # merge threshold; larger bins harder, blurs more
         levels=3,             # max bin size 2**levels = 8x8 px

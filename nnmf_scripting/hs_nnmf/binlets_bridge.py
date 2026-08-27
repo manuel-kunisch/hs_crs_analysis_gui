@@ -28,8 +28,8 @@ For a detector with per-pixel variance ``var = gain * mu + offset``:
     var(x) = gain * x + N * offset          (x is a sum of N pixels)
     var(x - y) = gain * (x + y) + 2 * N * offset
 
-The shot term is level-independent -- that is the elegant property of summing
-Haar, and why photon-counting data needs no level correction (``gain=1``,
+The shot term is level-independent, which is the property of the summing Haar
+that lets photon-counting data work with no level correction (``gain=1``,
 ``offset=0``). A **current-mode PMT** is different: its read/dark/digitisation
 floor is a real constant per pixel, so it *accumulates* with the bin size and
 must be carried through the levels. Ignoring it makes the test too strict at
@@ -40,7 +40,7 @@ and ``F`` the excess-noise factor of the dynode chain (~1.2-2), the photoelectro
 statistics give ``Var = F*k^2*lambda = (F*k)*mean``, so ``gain = F*k``: ADU per
 *effective* photoelectron. Useful corollary: ``mean/gain`` is the effective
 number of quanta behind a measurement (~15 per pixel and band on the CARS data).
-Measure it with :func:`estimate_noise_model`, never assume it.
+:func:`estimate_noise_model` fits it from the data.
 
 A code-next-to-physics walkthrough of the whole chain is in
 ``nnmf_scripting/docs/binlets_physics.md``.

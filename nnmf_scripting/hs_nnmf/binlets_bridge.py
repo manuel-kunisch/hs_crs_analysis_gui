@@ -381,12 +381,24 @@ def binlets_denoise(
             f"Expected at least (channels, Y, X), got shape {source.shape}. "
             "Axis 0 carries the channels; every remaining axis is binned."
         )
-    data = source.astype(np.float64)
+
     gain = float(gain)
     if gain <= 0:
         raise ValueError("gain must be > 0.")
     offset = float(max(offset, 0.0))
-    n_bands = data.shape[0]
+
+    # Compute variance given the mean and concatenate them
+    # where the first dimension is [mean_0, ..., mean_N, var_0, ..., var_N]
+    mean = source.astype(np.float64)
+    variance = gain * source + offset
+    data = np.concat([mean, variance])
+
+    def normalized_mean_and_variance(x):
+        mean, variance = x.reshape(2, *source.shape)
+        norm = mean.sum()
+        return mean / norm, variance / norm**2
+
+    n_bands = source.shape[0]
     threshold = float(n_sigma) ** 2
 
     # Pooling over k channels turns the test into a chi-square with k degrees of
@@ -403,11 +415,10 @@ def binlets_denoise(
         ``x`` and ``y`` are sums of ``2**level`` raw pixels (unnormalized Haar),
         so the constant noise floor scales with the number of pooled pixels.
         """
-        pooled = 2.0 ** int(level)
-        difference = x - y
-        variance = gain * (x + y) + 2.0 * pooled * offset
-        variance = np.where(variance <= 0, np.inf, variance)
-        chi2 = difference ** 2 / variance
+        x_mean, x_var = normalized_mean_and_variance(x)
+        y_mean, y_var = normalized_mean_and_variance(y)
+
+        chi2 = (x_mean - y_mean) ** 2 / (x_var + y_var)
         if joint_channels:
             # one decision per pixel, pooled over every spectral channel
             return chi2.sum(axis=0) <= joint_threshold

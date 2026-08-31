@@ -4,6 +4,57 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.8] — 2026-08-25
+
+### Added
+- **Unmixing diagnostics: effective rank and separability.** The GUI now
+  answers two questions before (and after) an analysis: how many components
+  the loaded dataset can support at all, and whether the current component
+  spectra can actually be told apart.
+    * **Dataset (effective rank).** An SVD scree plot with an estimated noise
+      floor reports K_eff, the number of components
+      that carry signal rather than noise. Computed on demand when the
+      diagnostics window is opened, cached against the dataset content, and
+      invalidated on data load.
+    * **Background ROIs double as noise regions.** When a ROI is marked as
+      Background, the diagnostics measure the noise per channel from its raw
+      pixels and whiten the data with it before the rank test, which is the
+      statistically correct variant when channels have different gains or
+      exposure times. A selector on the Dataset tab switches between this and
+      the automatic estimate, both values are shown side by side, and the tab
+      warns when they disagree strongly (signal-dependent noise or a
+      non-empty background region) or when the region has too few pixels.
+    * **Separability (eta).** For every component spectrum the diagnostics
+      report eta, the fraction of its fingerprint that no combination of
+      the other components can imitate, together with the resulting noise
+      amplification 1/eta, the most similar partner, the raw SNR needed
+      for ~10 % abundance accuracy, a pairwise cosine similarity heatmap, and
+      a good/marginal/critical verdict.
+    * **Status lines in three places.** The Analysis panel (under the
+      Components spinbox, with an over-request warning against
+      K_eff), the ROI Manager (judging the live seed table while
+      seeds are being built, updating on ROI changes), and the seed/result
+      viewer (judging the displayed spectra). All three open the shared
+      diagnostics window. Judged spectra follow a fixed priority: fitted H,
+      then ROI table seeds, then programmatic seeds.
+    * The math lives in a GUI-independent module
+      (``hs_mosaic/widgets/unmixing_diagnostics.py``) and is documented with
+      references in *Methods → Unmixing diagnostics*.
+- **Purify seed: recover a pure spectrum when no pure pixel exists.** A new
+  **Purify seed…** button under the ROI table subtracts the largest multiple
+  of a reference seed that keeps a mixed seed non-negative — the extrapolation
+  to the pure spectrum for components that never occur alone (e.g. a nucleus
+  under cytoplasmic lipid, anchored by the lipid-only CH₂ band). The dialog
+  previews the mixed, subtracted, and purified spectra, shows the component's
+  eta before and after, and offers a subtraction slider for targets without a
+  truly reference-free channel. The result is added as a new dummy row on the
+  same component; the original row is disabled as an H seed (grayed out in the
+  table, re-enable via the row's new right-click menu) or optionally deleted,
+  so the mean-curve assembly does not re-mix it. The per-row H-seed flag is
+  saved and restored by session presets for every row type (previously dummy
+  rows only); legacy presets without the flag load unchanged, with every row
+  enabled.
+
 ## [0.9.7] — 2026-06-16
 
 ### Added

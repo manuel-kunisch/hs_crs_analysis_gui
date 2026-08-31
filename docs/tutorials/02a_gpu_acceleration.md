@@ -8,16 +8,16 @@ For installation instructions, environment files, and platform-specific notes, s
 
 GPU acceleration is currently relevant for:
 
-- multiplicative-update NNMF through the PyTorch backend;
+- NNMF with the multiplicative-update solver (`mu`, the default iteration scheme in the Analysis panel) through the PyTorch backend;
 - batched fixed-H NNLS through the PyTorch/CUDA NNLS backend.
 
-The coordinate-descent NNMF solver uses the scikit-learn CPU backend.
+The alternative coordinate-descent solver (`cd` in the NNMF solver dropdown) always runs on the CPU through scikit-learn, so the Backend setting does not affect it. The two solvers are compared in [02 Analysis modes](02_analysis_modes.md#advanced-settings) and [NNMF and NNLS modes](../methods/nnmf_nnls_modes.md).
 
 ## Backend Selection
 
 The analysis panel exposes a **Backend** dropdown for the PyTorch multiplicative-update NNMF path with two options (since v0.9.4):
 
-- **Prefer GPU** (default): tries the first available accelerator in priority order CUDA > MPS > XPU. If no GPU is detected, falls back to CPU torch and logs the fallback.
+- **Prefer GPU** (default): tries the first available accelerator in priority order CUDA (NVIDIA) > MPS (Apple Silicon) > XPU (Intel). If no GPU is detected, falls back to CPU torch and logs the fallback.
 - **CPU only**: skips the PyTorch MU path entirely and runs the scikit-learn MU NMF on CPU (not torch CPU). Useful for benchmarking, reproducibility against the scikit-learn reference, or when the GPU is busy with another job.
 
 If PyTorch is not installed, the Backend dropdown is locked to **CPU only** — there is no torch/GPU path to choose, so the multiplicative-update NMF runs on scikit-learn. A machine that has PyTorch but no GPU keeps the dropdown enabled: **Prefer GPU** then runs a torch-CPU fit.

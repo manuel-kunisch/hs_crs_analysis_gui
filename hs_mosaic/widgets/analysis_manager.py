@@ -28,6 +28,13 @@ from hs_mosaic.widgets.spectral_axis import (
 )
 from hs_mosaic.widgets.color_manager import ComponentColorManager
 from hs_mosaic.widgets.hs_image_view import ColorButton
+from hs_mosaic.widgets.unmixing_diagnostics import noise_sigma_from_pixels, separability
+from hs_mosaic.widgets.unmixing_diagnostics_dialog import (
+    UnmixingDiagnosticsDialog,
+    apply_badge,
+    rank_badge,
+    separability_badge,
+)
 
 
 def _make_tolerance_combo(
@@ -113,12 +120,36 @@ class AnalysisManager(QtCore.QObject):
         super().__init__()
         self.roi_manager: ROIManager | None = roi_manager
         self.color_manager:ComponentColorManager|None = self.roi_manager.color_manager
+        if self.roi_manager is not None:
+            # Seeds live in the ROI table until an analysis run copies them into
+            # the analyzer, so the separability badge must follow table changes
+            # directly. Debounced: extracting the mean curves walks every ROI
+            # mask, which is too heavy to redo on every drag event.
+            self._diagnostics_update_timer = QtCore.QTimer(self)
+            self._diagnostics_update_timer.setSingleShot(True)
+            self._diagnostics_update_timer.setInterval(300)
+            self._diagnostics_update_timer.timeout.connect(self.update_diagnostics_badges)
+
+            def _schedule_diagnostics(*_args):
+                self._diagnostics_update_timer.start()
+
+            self.roi_manager.set_diagnostics_provider(
+                lambda: self.open_diagnostics(UnmixingDiagnosticsDialog.SEPARABILITY_TAB),
+                dirty_callback=_schedule_diagnostics,
+            )
+            self.roi_manager.new_roi_signal.connect(_schedule_diagnostics)
+            self.roi_manager.remove_roi_plot_signal.connect(_schedule_diagnostics)
+            self.roi_manager.label_change_signal.connect(_schedule_diagnostics)
+            self.roi_manager.preset_load_signal.connect(_schedule_diagnostics)
+            # fires on every curve replot, including live ROI drags
+            self.roi_manager.plot_roi_signal.connect(_schedule_diagnostics)
         self.seed_window: QtWidgets.QMainWindow or None = None
         self.z3D_data = None
         # add an attribute to store fixed W components for NNMF
         self._fixed_seed_W: dict[int, np.ndarray] = {}  # component -> (n_pixels,) float32
         self._fixed_seed_W_counts: dict[int, int] = {}  # component -> number of fixed W maps averaged into the stored mean
         self.rolling_ball_preview_dialog: QtWidgets.QDialog | None = None
+        self._diagnostics_dialog: UnmixingDiagnosticsDialog | None = None
         self.wavenumbers = None
         self.spectral_units = "cm⁻¹"
         self.axis_labels = None
@@ -359,6 +390,31 @@ class AnalysisManager(QtCore.QObject):
         comp_row.addWidget(self.num_components_spinbox)
         comp_row.addStretch(1)
         method_layout.addLayout(comp_row)
+
+        # Unmixing diagnostics: how many components the data can support, and
+        # whether the current component spectra can actually be told apart.
+        diag_row = QtWidgets.QHBoxLayout()
+        diag_row.setContentsMargins(0, 0, 0, 0)
+        diag_row.setSpacing(8)
+        self.diagnostics_badge = QtWidgets.QLabel("")
+        self.diagnostics_badge.setWordWrap(True)
+        self.diagnostics_badge.setToolTip(
+            "Effective number of components the dataset supports, and the separability\n"
+            "(eta) of the current component spectra. Open the diagnostics for details."
+        )
+        self.diagnostics_button = QtWidgets.QPushButton("Diagnostics…")
+        self.diagnostics_button.setToolTip(
+            "Effective rank of the dataset (how many components the data can support)\n"
+            "and the separability of the current component spectra."
+        )
+        self.diagnostics_button.setFixedWidth(110)
+        self.diagnostics_button.clicked.connect(
+            lambda: self.open_diagnostics(UnmixingDiagnosticsDialog.DATASET_TAB)
+        )
+        diag_row.addWidget(self.diagnostics_badge, stretch=1)
+        diag_row.addWidget(self.diagnostics_button)
+        method_layout.addLayout(diag_row)
+        self.update_diagnostics_badges()
 
         custom_init_check = QtWidgets.QCheckBox("Custom initialization")
         custom_init_check.setToolTip(
@@ -984,6 +1040,10 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_running = False
         self._analysis_cancel_requested = False
         self._set_analyze_button_idle_state()
+        # The fitted H is now the more relevant thing to judge than the seeds.
+        self.update_diagnostics_badges()
+        if self._diagnostics_dialog is not None and self._diagnostics_dialog.isVisible():
+            self._diagnostics_dialog.refresh()
 
     def _on_analysis_failed(self, error_text: str):
         self._last_analysis_error = error_text
@@ -1680,6 +1740,175 @@ class AnalysisManager(QtCore.QObject):
 
     def _handle_component_count_changed(self, n_components: int):
         self.mv_analyzer.update_components(n_components)
+        self.update_diagnostics_badges()
+
+    # ------------------------------------------------------------------
+    # Unmixing diagnostics
+    # ------------------------------------------------------------------
+
+    def _diagnostics_cube(self) -> np.ndarray | None:
+        """Spectral cube ``(channels, height, width)`` the diagnostics run on."""
+        cube = getattr(self.mv_analyzer, "raw_data_3d", None)
+        if cube is None:
+            return None
+        cube = np.asarray(cube)
+        return cube if cube.ndim == 3 else None
+
+    def _diagnostics_spectra(self) -> tuple[np.ndarray | None, str]:
+        """Spectra to judge: the fitted H when there is one, else the ROI seeds.
+
+        Pre-analysis the ROI table is the live source of truth; the
+        analyzer's ``seed_H`` is only filled once an analysis run calls
+        ``reload_H_seeds_from_rois``. The analyzer seeds remain as a last
+        resort for scripted use where they are set directly.
+        """
+        fixed_H = getattr(self.mv_analyzer, "fixed_H", None)
+        if fixed_H is not None and np.asarray(fixed_H).size:
+            return np.asarray(fixed_H), "NNMF result (H)"
+        table_H = self._seed_H_from_roi_table()
+        if table_H is not None:
+            return table_H, "ROI table seeds"
+        seed_H = getattr(self.mv_analyzer, "seed_H", None)
+        if seed_H is not None and np.asarray(seed_H).size and np.any(np.abs(seed_H) > 0):
+            return np.asarray(seed_H), "analyzer seeds (H)"
+        return None, "no spectra"
+
+    def _seed_H_from_roi_table(self) -> np.ndarray | None:
+        """Assemble the seed spectra directly from the ROI table.
+
+        Mirrors the component parsing of ``reload_H_seeds_from_rois`` but
+        never touches analyzer state and never pops warning boxes: the badge
+        has to stay silent and safe. Unseeded components stay zero rows, which
+        the separability report flags as ``empty``.
+        """
+        mv = getattr(self, "mv_analyzer", None)
+        if self.roi_manager is None or mv is None:
+            return None
+        try:
+            curves = self.roi_manager.get_roi_mean_curves()
+        except Exception:
+            logger.debug("Diagnostics: reading ROI mean curves failed", exc_info=True)
+            return None
+        if not curves:
+            return None
+        n = mv.get_n_components()
+        H = None
+        for seed in curves:
+            try:
+                component_index = int(str(seed["resonance"]).strip("Component ")) - 1
+            except (KeyError, ValueError):
+                continue
+            spectrum = np.asarray(seed.get("H"), dtype=np.float64).ravel()
+            if not (0 <= component_index < n) or spectrum.size == 0:
+                continue
+            if H is None:
+                H = np.zeros((n, spectrum.size))
+            if spectrum.size == H.shape[1]:
+                H[component_index] = spectrum
+        if H is None or not np.any(np.abs(H) > 0):
+            return None
+        return H
+
+    def compute_current_separability(self):
+        """Separability of the current component spectra, or ``None``.
+
+        Cheap enough to call on every change: ``H`` is (components x channels).
+        """
+        H, _ = self._diagnostics_spectra()
+        if H is None:
+            return None
+        H = np.asarray(H)
+        if H.ndim != 2 or H.shape[0] == 0:
+            return None
+        labels = [self.roi_manager.get_component_label(i) for i in range(H.shape[0])]
+        return separability(H, labels=labels)
+
+    def _diagnostics_noise(self) -> dict | None:
+        """Per-channel noise sigma from the Background-flagged spatial ROIs.
+
+        Background regions are what a user marks anyway, and a signal-free
+        region is exactly what a direct noise estimate needs, so the Background
+        checkbox doubles as the noise flag. Dummy rows (loaded spectra,
+        Gaussian models) carry no spatial region and are skipped. Pixels come
+        from the raw data: subtraction would add its own noise to the estimate.
+        """
+        rm = self.roi_manager
+        if rm is None or rm.raw_data is None:
+            return None
+        blocks: list[np.ndarray] = []
+        names: list[str] = []
+        for row, roi in enumerate(rm.rois):
+            try:
+                box = rm.roi_table.cellWidget(row, rm.widget_columns["Background"])
+                if box is None or not box.isChecked():
+                    continue
+                if hasattr(roi, "spectrum_data"):
+                    continue
+                region = roi.getArrayRegion(rm.raw_data, rm.image_view.imageItem, axes=(2, 1))
+                if region is None or region.size == 0:
+                    continue
+                region = np.asarray(region, dtype=np.float64)
+                blocks.append(region.reshape(region.shape[0], -1).T)
+                name_widget = rm.roi_table.cellWidget(row, rm.widget_columns["Name"])
+                names.append(name_widget.text() if name_widget is not None else f"row {row + 1}")
+            except Exception:
+                logger.debug("Diagnostics: skipping background ROI in row %d", row, exc_info=True)
+        if not blocks:
+            return None
+        pixels = np.concatenate(blocks, axis=0)
+        sigma = noise_sigma_from_pixels(pixels)
+        if not np.isfinite(sigma).any():
+            return None
+        return {"sigma": sigma, "label": ", ".join(names), "n_pixels": int(pixels.shape[0])}
+
+    def open_diagnostics(self, tab_index: int = UnmixingDiagnosticsDialog.DATASET_TAB) -> None:
+        """Open (or raise) the shared unmixing diagnostics dialog."""
+        if self._diagnostics_dialog is None:
+            self._diagnostics_dialog = UnmixingDiagnosticsDialog(
+                parent=self.analysis_widget,
+                cube_getter=self._diagnostics_cube,
+                spectra_getter=self._diagnostics_spectra,
+                label_getter=self.roi_manager.get_component_label,
+                color_getter=self.roi_manager.get_color_rgba,
+                noise_getter=self._diagnostics_noise,
+            )
+        self._diagnostics_dialog.open_on(tab_index)
+        self.update_diagnostics_badges()
+
+    def update_diagnostics_badges(self) -> None:
+        """Refresh the inline diagnostics badges.
+
+        Separability is recomputed every time because ``H`` is small. The
+        dataset SVD is not: it only appears once the user has opened the dialog,
+        so loading data never pays for an SVD nobody asked for.
+        """
+        sep = self.compute_current_separability()
+        parts: list[str] = []
+        colors: list[str] = []
+
+        rank = self._diagnostics_dialog.cached_rank() if self._diagnostics_dialog else None
+        if rank is not None:
+            text, color = rank_badge(rank, self.mv_analyzer.get_n_components())
+            parts.append(text)
+            colors.append(color)
+
+        if sep is not None:
+            text, color = separability_badge(sep)
+            parts.append(text)
+            colors.append(color)
+
+        if not parts:
+            parts.append("Diagnostics: not computed")
+
+        # Red beats amber beats green, so the badge always shows the worst news.
+        severity = {"#d05050": 3, "#d0a030": 2, "#3faa60": 1}
+        color = max(colors, key=lambda c: severity.get(c, 0)) if colors else "#909090"
+
+        badge = getattr(self, "diagnostics_badge", None)
+        if badge is not None:
+            apply_badge(badge, (" · ".join(parts), color))
+        if self.roi_manager is not None:
+            self.roi_manager.update_diagnostics_badge(sep)
 
     def import_current_result_component(self, target: str, component_index: int, slice_index: int = 0) -> bool:
         """
@@ -1878,6 +2107,9 @@ class AnalysisManager(QtCore.QObject):
                 seed_pixels,
                 color_getter=self.roi_manager.get_color_rgba,
                 label_getter=self.roi_manager.get_component_label,
+                diagnostics_callback=lambda: self.open_diagnostics(
+                    UnmixingDiagnosticsDialog.SEPARABILITY_TAB
+                ),
             )
             self.seed_window.set_spectral_units(self.spectral_units)
             logger.info("Created new seed window")
@@ -1923,6 +2155,13 @@ class AnalysisManager(QtCore.QObject):
         defined: set[int] = set()
         # component_number_from_table_index returns 0-based; convert to 1-based
         for row in range(self.roi_manager.roi_table.rowCount()):
+            roi = self.roi_manager.rois[row] if row < len(self.roi_manager.rois) else None
+            # A row with a disabled H seed does not seed its component, unless
+            # it carries a fixed W map, which is collected regardless of the
+            # H-seed flag (result-import W rows are created exactly like that).
+            if (roi is not None and not getattr(roi, "seed_H_enabled", True)
+                    and not hasattr(roi, "fixed_W")):
+                continue
             comp_0 = self.roi_manager.component_number_from_table_index(row)
             if comp_0 is not None and comp_0 >= 0:
                 defined.add(comp_0 + 1)
@@ -2017,6 +2256,7 @@ class AnalysisManager(QtCore.QObject):
                                               f' {self.mv_analyzer.get_n_components()} components and is ignored.')
                 continue
             self.mv_analyzer.set_H_seed(component_index, seed_dict['H'], flag_background=flag_bgd)
+        self.update_diagnostics_badges()
 
     def set_fixed_W_seed(self, component: int, fixed_W: np.ndarray):
         """
@@ -3297,6 +3537,13 @@ class AnalysisManager(QtCore.QObject):
         logger.info(f"Analysis Manager: Image of shape {img.shape} and wavenumbers of length {len(wavenumbers)} updated in mv_analyzer.")
         logger.info(f"Analysis Manager: Image dtype {img.dtype}")
         logger.info(f"Analysis Manager: Image contains zeros: {np.any(img == 0)}")
+        # New data invalidates the dataset diagnostics (the cache is keyed by
+        # cube content). The SVD stays on demand: recompute right away only
+        # when the dialog is open, otherwise the badge just drops its K_eff
+        # part until the dialog is opened again.
+        if self._diagnostics_dialog is not None and self._diagnostics_dialog.isVisible():
+            self._diagnostics_dialog.refresh()
+        self.update_diagnostics_badges()
 
     def update_modified_data(self, data: np.ndarray):
         self.mv_analyzer.update_resonance_image_data(data)
@@ -3526,8 +3773,11 @@ class AnalysisManager(QtCore.QObject):
 class SeedWidget(QtWidgets.QWidget):
     default_colors = CompositeImageViewWidget.colormap_colors
     def __init__(self, seed_W_3d: np.ndarray, seed_H: np.ndarray, wavenumbers,
-                 seed_pixels: dict or None = None, color_getter=None, label_getter=None,):
+                 seed_pixels: dict or None = None, color_getter=None, label_getter=None,
+                 diagnostics_callback=None,):
         super(SeedWidget, self).__init__()
+        self.diagnostics_callback = diagnostics_callback
+        self.diagnostics_badge = None
         self.seed_W_3d = seed_W_3d
         self.seed_H = seed_H
         self.wavenumbers = wavenumbers
@@ -3587,6 +3837,27 @@ class SeedWidget(QtWidgets.QWidget):
         views_row.addWidget(left_container)
         views_row.addWidget(right_container)
         layout.addLayout(views_row)
+
+        # Can these spectra actually be unmixed? Sits directly above the H
+        # curves, which is what the user is looking at when they ask.
+        diag_row = QtWidgets.QHBoxLayout()
+        diag_row.setContentsMargins(0, 0, 0, 0)
+        self.diagnostics_badge = QtWidgets.QLabel("")
+        self.diagnostics_badge.setWordWrap(True)
+        self.diagnostics_badge.setToolTip(
+            "Smallest eta among the displayed spectra: the fraction of the hardest\n"
+            "component's fingerprint that no combination of the others can imitate.\n"
+            "Small values mean noise and spectral errors are strongly amplified."
+        )
+        diag_row.addWidget(self.diagnostics_badge, stretch=1)
+        if self.diagnostics_callback is not None:
+            diag_button = QtWidgets.QPushButton("Diagnostics…")
+            diag_button.setFixedWidth(120)
+            diag_button.setToolTip("Open the unmixing diagnostics on the separability tab")
+            diag_button.clicked.connect(lambda: self.diagnostics_callback())
+            diag_row.addWidget(diag_button)
+        layout.addLayout(diag_row)
+        self._update_diagnostics_badge()
 
         layout.addWidget(self.seed_H_plot)
         self.setLayout(layout)
@@ -3805,6 +4076,22 @@ class SeedWidget(QtWidgets.QWidget):
         self.seed_H = seed_H
         self._plot_h_curves()
         self._highlight_h_curve(self._current_index())
+        self._update_diagnostics_badge()
+
+    def _update_diagnostics_badge(self):
+        """Judge whether the displayed spectra can actually be unmixed.
+
+        Cheap enough to redo on every H update: the spectral matrix is only
+        (components x channels).
+        """
+        if self.diagnostics_badge is None:
+            return
+        sep = None
+        H = np.asarray(self.seed_H) if self.seed_H is not None else None
+        if H is not None and H.ndim == 2 and H.shape[0]:
+            labels = [self.get_label(i) for i in range(H.shape[0])]
+            sep = separability(H, labels=labels)
+        apply_badge(self.diagnostics_badge, separability_badge(sep))
 
     def _current_index(self) -> int:
         try:

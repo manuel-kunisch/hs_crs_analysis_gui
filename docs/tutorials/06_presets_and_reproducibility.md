@@ -1,6 +1,6 @@
 # 06 Presets And Reproducibility
 
-Presets are used to save analysis state and make workflows reproducible. They are important when the same seed set, lookup tables, labels, and settings should be applied to another field of view or included with a publication.
+Presets are used to save analysis state and make workflows reproducible. They are important when the same seed set, lookup tables, labels, and settings should be applied to another field of view or included with a publication. The seed terminology used below (H seeds, W seeds, dummy rows, Gaussian seed rows) is introduced in [Seeds, spectra, and W maps](03_seeds_spectral_and_spatial.md) and the [ROI Manager tutorial](03b_roi_manager.md).
 
 ## Main JSON Preset
 

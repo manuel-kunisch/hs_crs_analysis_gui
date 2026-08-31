@@ -1,6 +1,6 @@
 # HS-MOSAIC Documentation
 
-Welcome to the documentation for HS-MOSAIC (HyperSpectral Multivariate Optical Analysis Components), a desktop GUI for fast unmixing and reconstruction of hyperspectral and multispectral imaging data.
+Welcome to the documentation for HS-MOSAIC (HyperSpectral Multivariate Optical Analysis Components), a desktop GUI for fast unmixing and reconstruction of hyperspectral and multispectral imaging data. Unmixing here means decomposing a stack of spectral image channels into a small set of component spectra and matching concentration maps, so that each chemical or structural component can be inspected on its own; the [Concepts page](concepts.md) explains the model behind it.
 This documentation is designed to guide users through the installation, usage, and troubleshooting of the software, as well as provide detailed tutorials and reference materials.
 
 ![GUI Overview](assets/images/gui_overview.png)
@@ -9,7 +9,7 @@ This documentation is designed to guide users through the installation, usage, a
 Quick Demo of the main workflow:
 ![Demo](assets/gifs/quick_beads_demo.gif)
 
-> **💡 New here? Read [Essentials](essentials.md) first.** Six features that are easy to miss when clicking around but change how productive HS-MOSAIC is once you know them — ROI placement options, residual-data analysis, the composite mirror, Gaussian seeds, seed pixels with two ranking metrics, and the `.preset` for cross-FOV reproducibility.
+> **💡 New here? Read [Essentials](essentials.md) first.** Seven features that are easy to miss when clicking around but change how productive HS-MOSAIC is once you know them — ROI placement options, residual-data analysis, the composite mirror, Gaussian seeds, seed pixels with two ranking metrics, and the `.preset` for cross-FOV reproducibility.
 
 ## Start Here
 
@@ -44,7 +44,7 @@ The app can load both 3D TIFFs (x/y/spectral) and 4D TIFFs (x/y/z/spectral or x/
 ### 02 Analysis
 
 To understand the concepts of multivariate analysis, it is essential to understand the different analysis modes and how they work. This section explains the different modes and how to use them.
-The overview can help in particular to find better seed spectra for the NNMF and NNLS modes (see [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)), which can be crucial for getting good results.
+The overview can help in particular to find better seed spectra for the NNMF and NNLS modes (see [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)), which can be crucial for getting good results. NNMF (non-negative matrix factorization) fits component spectra and maps simultaneously; NNLS (non-negative least squares) keeps given spectra fixed and only fits the maps. Both are introduced on the [Concepts page](concepts.md).
 
 - [Analysis modes](tutorials/02_analysis_modes.md)
 
@@ -56,7 +56,7 @@ It is not essential to understand this for using the app, but it can be helpful 
 ### 03 Seeds
 
 Seeds are how you steer NNMF and fixed-H NNLS toward physically meaningful results. They can come from ROIs drawn on the image, reference spectra loaded from files, Gaussian resonance models, or the automatic suggester —
-the pages below cover each source and how they combine into the H and W matrices the solver receives.
+the pages below cover each source and how they combine into the spectra matrix `H` and the map matrix `W` that the solver receives (defined on the [Concepts page](concepts.md)).
 
 - [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)
 - [Loading custom seed spectra](tutorials/03a_loading_custom_seed_spectra.md)

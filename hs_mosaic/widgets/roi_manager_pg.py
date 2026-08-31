@@ -16,6 +16,8 @@ from hs_mosaic.widgets.hs_image_view import ROITableDelegate, ColorButton
 from hs_mosaic.widgets.spectrum_loader import SpectrumLoader
 from hs_mosaic.widgets.spectral_axis import normalize_spectral_unit, spectral_axis_label, spectral_csv_header
 from hs_mosaic.widgets.vca import extract_endmember_spectra
+from hs_mosaic.widgets.unmixing_diagnostics import purify_spectrum, separability
+from hs_mosaic.widgets.unmixing_diagnostics_dialog import apply_badge, separability_badge
 
 logger = logging.getLogger('ROI Manager')
 
@@ -88,6 +90,12 @@ class ROIManager(QtCore.QObject):
         self.spectrum_loaders = dict()
         self.auto_roi_settings = AutoROISuggestionSettings()
         self.fixed_w_seed_view = None
+        # Wired up by the AnalysisManager, which owns the diagnostics dialog.
+        self._diagnostics_open_callback = None
+        self._diagnostics_dirty_callback = None
+        self._diagnostics_badge = None
+        self._diagnostics_button = None
+        self._purify_button = None
         # Creating a dock
         # Set up the ROI table and add it to the ROI table dock
         self.roi_table_dock = Dock("Seed ROIs", size=(810, 500))
@@ -194,11 +202,50 @@ class ROIManager(QtCore.QObject):
         self.roi_table_dock.addWidget(button_widget)
         # add the table to the dock
         self.roi_table_dock.addWidget(self.roi_table)
+
+        # Separability badge: whether the current seed spectra can be told apart.
+        diag_layout = QtWidgets.QHBoxLayout()
+        diag_layout.setContentsMargins(6, 0, 6, 0)
+        self._diagnostics_badge = QtWidgets.QLabel("")
+        self._diagnostics_badge.setWordWrap(True)
+        self._diagnostics_badge.setToolTip(
+            "Smallest eta among the current component spectra: the fraction of the\n"
+            "hardest component's fingerprint that no combination of the others can\n"
+            "imitate. Small values mean noise and spectral errors are strongly\n"
+            "amplified when unmixing."
+        )
+        self._diagnostics_button = QtWidgets.QPushButton("Separability…")
+        self._diagnostics_button.setFixedWidth(120)
+        self._diagnostics_button.setToolTip(
+            "Open the unmixing diagnostics on the separability tab"
+        )
+        self._diagnostics_button.setEnabled(False)
+        self._diagnostics_button.clicked.connect(self._open_diagnostics)
+        diag_layout.addWidget(self._diagnostics_badge, stretch=1)
+        diag_layout.addWidget(self._diagnostics_button)
+        self._purify_button = QtWidgets.QPushButton("Purify seed…")
+        self._purify_button.setFixedWidth(110)
+        self._purify_button.setToolTip(
+            "Remove another component's contribution from a mixed seed spectrum.\n"
+            "Subtracts the largest multiple of a reference seed that keeps the\n"
+            "result non-negative, the extrapolation to the pure spectrum when\n"
+            "no pure pixel exists."
+        )
+        self._purify_button.clicked.connect(lambda: self.purify_seed())
+        diag_layout.addWidget(self._purify_button)
+        diag_widget = QtWidgets.QWidget()
+        diag_widget.setLayout(diag_layout)
+        self.roi_table_dock.addWidget(diag_widget)
+        self.update_diagnostics_badge(None)
         # bind shortcut on del press to remove the selected row / ROI
         del_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Del"), self.roi_table)
         del_shortcut.activated.connect(self._remove_selected_or_active_roi)
         esc_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Escape"), self.roi_table)
         esc_shortcut.activated.connect(lambda: self._select_roi(None))
+        # Right-click menu, currently only to toggle a row's H-seed participation
+        # (rows disabled by Purify seed are re-enabled here).
+        self.roi_table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.roi_table.customContextMenuRequested.connect(self._show_roi_table_context_menu)
         self._refresh_roi_table_layout()
         QtCore.QTimer.singleShot(0, self._refresh_roi_table_layout)
 
@@ -2698,6 +2745,10 @@ class ROIManager(QtCore.QObject):
         cur_index = self.add_last_roi_to_table(new_roi_id=roi_id, component_number=comp_idx, dummy=True,
                                                roi_name=spectrum_name,
                                                is_background=is_background)  # Use the loaded name
+        if not seed_H_enabled:
+            # Rows created disabled (preset restore, result-import W rows) must
+            # look disabled, same as rows disabled later.
+            self._style_row_seed_state(cur_index, False)
         self.request_plot_avg_intensity(roi_id)
         self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
         return roi_id
@@ -2790,6 +2841,411 @@ class ROIManager(QtCore.QObject):
         # if not found, return the default color
         return self.color_manager.get_color_rgb(component_number) + (255,) if self.color_manager else self.default_colors[
             component_number % len(self.default_colors)] + (255,)
+
+    def set_diagnostics_provider(self, open_callback, dirty_callback=None) -> None:
+        """Wire the separability badge to the shared diagnostics dialog.
+
+        The ROI manager does not own the dialog; the AnalysisManager does,
+        because it also holds the data and the fitted spectra. This keeps the
+        dependency pointing one way. ``dirty_callback`` is invoked for seed
+        changes that no ROI signal covers (e.g. toggling a row's H seed).
+        """
+        self._diagnostics_open_callback = open_callback
+        self._diagnostics_dirty_callback = dirty_callback
+        if self._diagnostics_button is not None:
+            self._diagnostics_button.setEnabled(open_callback is not None)
+
+    def _notify_diagnostics_dirty(self) -> None:
+        if self._diagnostics_dirty_callback is not None:
+            try:
+                self._diagnostics_dirty_callback()
+            except Exception:  # pragma: no cover - callback is app code
+                logger.debug("Diagnostics dirty callback failed", exc_info=True)
+
+    def set_row_seed_enabled(self, row: int, enabled: bool) -> None:
+        """Toggle whether a row's spectrum participates as an H seed.
+
+        A disabled row stays in the table (its ROI, plots, and subtraction
+        role keep working) but the seed assembly skips it. The Name cell is
+        grayed out so the state is visible; the row's context menu toggles it
+        back.
+        """
+        if not (0 <= row < len(self.rois)):
+            return
+        self.rois[row].seed_H_enabled = bool(enabled)
+        self._style_row_seed_state(row, enabled)
+        logger.info("Row %d H seed %s", row + 1, "enabled" if enabled else "disabled")
+        self._notify_diagnostics_dirty()
+
+    def _style_row_seed_state(self, row: int, enabled: bool) -> None:
+        """Gray out the Name cell of rows whose H seed is disabled.
+
+        Kept separate from ``set_row_seed_enabled`` because rows can also
+        be *created* disabled (preset restore, result-import W rows), and those
+        must look disabled too.
+
+        The gray style is written as the row's *base* style, because the
+        selection highlight (``_apply_table_row_highlight``) layers a
+        border on top of a cached ``roi_base_style`` and restores that cache on
+        deselect; writing the stylesheet directly would be wiped by the next
+        select/deselect cycle.
+        """
+        name_widget = self.roi_table.cellWidget(row, self.widget_columns["Name"])
+        if name_widget is None:
+            return
+        if enabled:
+            base_style = ""
+            name_widget.setToolTip("")
+        else:
+            base_style = "QLineEdit { color: #909090; font-style: italic; }"
+            name_widget.setToolTip(
+                "H seed disabled: this row does not contribute a seed spectrum.\n"
+                "Right-click the row to re-enable it."
+            )
+        name_widget.setProperty("roi_base_style", base_style)
+        if self._highlighted_table_row == row:
+            # Rebuild the highlight on top of the new base so a selected row
+            # shows gray text and the selection border at the same time.
+            self._apply_table_row_highlight(row, highlighted=True)
+        else:
+            name_widget.setStyleSheet(base_style)
+
+    def _show_roi_table_context_menu(self, pos) -> None:
+        row = self.roi_table.rowAt(pos.y())
+        if not (0 <= row < len(self.rois)):
+            return
+        enabled = getattr(self.rois[row], "seed_H_enabled", True)
+        menu = QtWidgets.QMenu(self.roi_table)
+        toggle = menu.addAction("Disable H seed" if enabled else "Re-enable H seed")
+        toggle.triggered.connect(lambda: self.set_row_seed_enabled(row, not enabled))
+        menu.exec_(self.roi_table.viewport().mapToGlobal(pos))
+
+    def _open_diagnostics(self) -> None:
+        if self._diagnostics_open_callback is not None:
+            self._diagnostics_open_callback()
+
+    def update_diagnostics_badge(self, sep=None) -> None:
+        """Show how separable the current component spectra are.
+
+        ``sep`` is a ``Separability`` result from ``unmixing_diagnostics``
+        or ``None`` when no spectra are defined yet.
+        """
+        if self._diagnostics_badge is None:
+            return
+        apply_badge(self._diagnostics_badge, separability_badge(sep))
+
+    # ------------------------------------------------------------------
+    # Seed purification
+    # ------------------------------------------------------------------
+
+    def _seed_row_label(self, row: int) -> str:
+        name_widget = self.roi_table.cellWidget(row, self.widget_columns["Name"])
+        text = name_widget.text().strip() if name_widget is not None else ""
+        return text or f"row {row + 1}"
+
+    def _enabled_seed_rows(self) -> list[tuple[int, str, int]]:
+        """Rows usable as purification inputs: ``(row, label, component0)``.
+
+        A row qualifies when its H seed is enabled, it maps to a component,
+        and its mean spectrum is currently computable (spatial ROIs need
+        loaded data; dummy rows always work).
+        """
+        rows = []
+        for row, roi in enumerate(self.rois):
+            if not getattr(roi, "seed_H_enabled", True):
+                continue
+            comp = self.component_number_from_table_index(row)
+            if comp is None or comp < 0:
+                continue
+            try:
+                self.get_roi_average(roi)
+            except Exception:
+                continue
+            rows.append((row, self._seed_row_label(row), comp))
+        return rows
+
+    def _seed_matrix_from_table(self) -> tuple[np.ndarray | None, list[str]]:
+        """Component seed matrix from the ROI table, rows = components.
+
+        Mirrors the parsing the analysis uses (``'Component N'`` resonance
+        strings, rows sharing a component averaged), for the eta preview in
+        the purify dialog. Unseeded components stay zero rows.
+        """
+        try:
+            curves = self.get_roi_mean_curves()
+        except Exception:
+            return None, []
+        parsed = []
+        for seed in curves:
+            try:
+                comp = int(str(seed["resonance"]).strip("Component ")) - 1
+            except (KeyError, ValueError):
+                continue
+            spectrum = np.asarray(seed.get("H"), dtype=np.float64).ravel()
+            if comp >= 0 and spectrum.size:
+                parsed.append((comp, spectrum))
+        if not parsed:
+            return None, []
+        n = max(comp for comp, _ in parsed) + 1
+        n_channels = parsed[0][1].size
+        H = np.zeros((n, n_channels))
+        for comp, spectrum in parsed:
+            if spectrum.size == n_channels:
+                H[comp] = spectrum
+        labels = [self.get_component_label(i) for i in range(n)]
+        return H, labels
+
+    def add_purified_seed_row(
+        self,
+        target_row: int,
+        reference_row: int,
+        fraction: float = 1.0,
+        original_action: str = "disable",
+    ) -> str | None:
+        """Subtract the reference row's spectrum from the target row's and add
+        the result as a new dummy seed row on the target's component.
+
+        ``original_action`` decides what happens to the target row, because
+        rows sharing a component are averaged and would re-mix the purified
+        spectrum with the mixture it came from:
+
+        - ``"disable"``: the row stays (region, plots, subtraction keep
+          working) but stops contributing its H seed; shown grayed out.
+        - ``"delete"``: the row is removed from the table entirely.
+        - ``"keep"``: nothing happens -- only sensible when the user intends
+          the averaging.
+        """
+        if not (0 <= target_row < len(self.rois) and 0 <= reference_row < len(self.rois)):
+            logger.error("Purify: row out of range (%s, %s)", target_row, reference_row)
+            return None
+        if target_row == reference_row:
+            logger.error("Purify: target and reference are the same row")
+            return None
+        target_roi = self.rois[target_row]
+        try:
+            mixed = self.get_roi_average(target_roi)
+            reference = self.get_roi_average(self.rois[reference_row])
+            result = purify_spectrum(mixed, reference, fraction=fraction)
+        except Exception as exc:
+            logger.error("Purify failed: %s", exc)
+            return None
+        comp0 = self.component_number_from_table_index(target_row)
+        if comp0 is None or comp0 < 0:
+            logger.error("Purify: target row %d has no component", target_row)
+            return None
+        # Labels before any table mutation: deleting the target shifts indices.
+        target_label = self._seed_row_label(target_row)
+        reference_label = self._seed_row_label(reference_row)
+        roi_id = self.add_dummy_roi(
+            result.spectrum,
+            component_number=comp0 + 1,
+            spectrum_name=f"{target_label} purified",
+        )
+        if original_action == "disable":
+            self.set_row_seed_enabled(target_row, False)
+        elif original_action == "delete":
+            self.remove_roi(target_roi)
+        logger.info(
+            "Purified seed for component %d: subtracted %.4g x '%s' "
+            "(b* = %.4g, anchor channel %d, residual %.0f%%)",
+            comp0 + 1, result.subtracted, reference_label,
+            result.b_star, result.anchor_channel, 100 * result.residual_fraction,
+        )
+        return roi_id
+
+    def purify_seed(self, *, exec_dialog: bool = True):
+        """Dialog: preview and apply seed purification against a reference row.
+
+        ``exec_dialog`` is keyword-only on purpose: Qt's ``clicked`` signal
+        passes its ``checked`` bool positionally, which would otherwise be
+        swallowed as ``exec_dialog=False`` and silently suppress the dialog.
+        """
+        rows = self._enabled_seed_rows()
+        if len(rows) < 2:
+            QtWidgets.QMessageBox.information(
+                None, "Purify seed",
+                "Purification needs at least two seed rows: the mixed target "
+                "and a reference for the component to remove.",
+            )
+            return None
+
+        dialog = QtWidgets.QDialog()
+        dialog.setWindowTitle("Purify seed")
+        dialog.setModal(True)
+        dialog.resize(640, 560)
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        form = QtWidgets.QFormLayout()
+        target_combo = QtWidgets.QComboBox()
+        reference_combo = QtWidgets.QComboBox()
+        for row, label, comp in rows:
+            display = f"{label} (Component {comp + 1})"
+            target_combo.addItem(display, row)
+            reference_combo.addItem(display, row)
+        target_combo.setToolTip("The mixed seed to purify")
+        reference_combo.setToolTip(
+            "The component to remove. Its largest non-negativity-preserving\n"
+            "multiple is subtracted from the target."
+        )
+        form.addRow("Target (mixed):", target_combo)
+        form.addRow("Reference (remove):", reference_combo)
+
+        slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        slider.setRange(0, 120)
+        slider.setValue(100)
+        slider.setToolTip(
+            "How far to extrapolate. 100% subtracts the full b* (the\n"
+            "non-negativity boundary); less is conservative when the target\n"
+            "has no truly reference-free channel."
+        )
+        slider_label = QtWidgets.QLabel("100 %")
+        slider_row = QtWidgets.QHBoxLayout()
+        slider_row.addWidget(slider, stretch=1)
+        slider_row.addWidget(slider_label)
+        form.addRow("Subtraction:", slider_row)
+        layout.addLayout(form)
+
+        plot = pg.PlotWidget()
+        plot.addLegend()
+        plot.setLabel("left", "Intensity")
+        plot.setLabel("bottom", spectral_axis_label(self.spectral_units))
+        mixed_curve = plot.plot([], [], pen=pg.mkPen((150, 150, 150), width=2), name="mixed target")
+        ref_curve = plot.plot(
+            [], [], pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine),
+            name="subtracted reference",
+        )
+        purified_curve = plot.plot([], [], pen=pg.mkPen((255, 0, 0), width=2), name="purified")
+        layout.addWidget(plot, stretch=1)
+
+        eta_label = QtWidgets.QLabel("")
+        layout.addWidget(eta_label)
+        warn_label = QtWidgets.QLabel("")
+        warn_label.setWordWrap(True)
+        warn_label.setStyleSheet("color: #d0a030;")
+        layout.addWidget(warn_label)
+
+        original_row_layout = QtWidgets.QHBoxLayout()
+        original_row_layout.addWidget(QtWidgets.QLabel("Original row after apply:"))
+        original_combo = QtWidgets.QComboBox()
+        original_combo.addItem("Disable its H seed (recommended)", "disable")
+        original_combo.addItem("Delete the row", "delete")
+        original_combo.addItem("Keep it seeding", "keep")
+        original_combo.setToolTip(
+            "Rows sharing a component are averaged into one seed, so the original\n"
+            "mixed row would re-mix the purified spectrum.\n"
+            "Disable: the row stays (grayed out, region and plots keep working)\n"
+            "but stops seeding; re-enable it via right-click on the row.\n"
+            "Delete: remove the row entirely.\n"
+            "Keep: leave it seeding -- only sensible if you want the average."
+        )
+        original_row_layout.addWidget(original_combo, stretch=1)
+        layout.addLayout(original_row_layout)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        ok_button = buttons.button(QtWidgets.QDialogButtonBox.Ok)
+        ok_button.setText("Add purified seed")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        spectra_cache: dict[int, np.ndarray] = {}
+
+        def _row_spectrum(row: int) -> np.ndarray:
+            if row not in spectra_cache:
+                spectra_cache[row] = np.asarray(
+                    self.get_roi_average(self.rois[row]), dtype=np.float64
+                )
+            return spectra_cache[row]
+
+        state: dict = {"result": None}
+        dialog.purify_state = state
+
+        def _update(*_args):
+            target_row = target_combo.currentData()
+            reference_row = reference_combo.currentData()
+            fraction = slider.value() / 100.0
+            slider_label.setText(f"{slider.value()} %")
+            if target_row is None or reference_row is None:
+                return
+            if target_row == reference_row:
+                warn_label.setText("Target and reference are the same row.")
+                ok_button.setEnabled(False)
+                state["result"] = None
+                return
+            mixed = _row_spectrum(target_row)
+            try:
+                result = purify_spectrum(mixed, _row_spectrum(reference_row), fraction=fraction)
+            except ValueError as exc:
+                warn_label.setText(str(exc))
+                ok_button.setEnabled(False)
+                state["result"] = None
+                return
+            state.update(result=result, target_row=target_row,
+                         reference_row=reference_row, fraction=fraction)
+            ok_button.setEnabled(True)
+
+            x = self.wavenumbers if self.wavenumbers is not None else np.arange(mixed.size)
+            x = np.asarray(x, dtype=np.float64)
+            if x.size != mixed.size:
+                x = np.arange(mixed.size, dtype=np.float64)
+            mixed_curve.setData(x, mixed)
+            ref_curve.setData(x, result.subtracted * _row_spectrum(reference_row))
+            comp0 = self.component_number_from_table_index(target_row) or 0
+            purified_curve.setPen(pg.mkPen(self.get_color_rgba(comp0)[:3], width=2))
+            purified_curve.setData(x, result.spectrum)
+
+            warnings = []
+            if result.b_star <= 1e-9:
+                warnings.append("The target already contains no measurable amount of the reference.")
+            elif result.residual_fraction < 0.05:
+                warnings.append("The spectra are nearly proportional: almost nothing remains "
+                                "after subtraction.")
+            warn_label.setText(" ".join(warnings))
+
+            H, labels = self._seed_matrix_from_table()
+            if H is not None and 0 <= comp0 < H.shape[0]:
+                eta_before = separability(H, labels=labels).eta[comp0]
+                H_after = H.copy()
+                H_after[comp0] = result.spectrum
+                eta_after = separability(H_after, labels=labels).eta[comp0]
+                eta_label.setText(
+                    f"Separability of this component: η = {eta_before:.3f} → {eta_after:.3f}"
+                )
+            else:
+                eta_label.setText("")
+
+        target_combo.currentIndexChanged.connect(_update)
+        reference_combo.currentIndexChanged.connect(_update)
+        slider.valueChanged.connect(_update)
+
+        # Defaults: the selected table row as target; the most similar other
+        # row as reference (that is the contamination one wants to remove).
+        current = self.roi_table.currentRow()
+        target_default = next((i for i, (row, _, _) in enumerate(rows) if row == current), 0)
+        target_combo.setCurrentIndex(target_default)
+        target_spec = _row_spectrum(rows[target_default][0])
+        best_i, best_cos = None, -1.0
+        for i, (row, _, _) in enumerate(rows):
+            if i == target_default:
+                continue
+            other = _row_spectrum(row)
+            denom = np.linalg.norm(target_spec) * np.linalg.norm(other)
+            cos = abs(float(target_spec @ other) / denom) if denom > 0 else 0.0
+            if cos > best_cos:
+                best_i, best_cos = i, cos
+        reference_combo.setCurrentIndex(best_i if best_i is not None else 0)
+        _update()
+
+        if not exec_dialog:
+            return dialog
+        if dialog.exec_() != QtWidgets.QDialog.Accepted or state["result"] is None:
+            return None
+        return self.add_purified_seed_row(
+            state["target_row"], state["reference_row"],
+            fraction=state["fraction"], original_action=original_combo.currentData(),
+        )
 
     def component_number_from_table_index(self, idx: int) -> int | None:
         """
@@ -3540,11 +3996,15 @@ class ROIManager(QtCore.QObject):
 
             is_dummy = isinstance(roi, DummyROI)
             row_state["dummy"] = bool(is_dummy)
+            # For every row type: a row disabled by Purify seed must stay
+            # disabled after a preset round-trip, or the reloaded original
+            # re-mixes with its purified replacement. Legacy presets lack the
+            # key and default to enabled on import, matching their old behavior.
+            row_state["seed_H_enabled"] = bool(getattr(roi, "seed_H_enabled", True))
 
             if is_dummy:
                 row_state["spectrum_name"] = getattr(roi, "spectrum_name", row_state["name"])
                 row_state["spectrum_data"] = roi.spectrum_data.tolist()
-                row_state["seed_H_enabled"] = bool(getattr(roi, "seed_H_enabled", True))
                 row_state["result_seed_dummy"] = bool(getattr(roi, "is_result_seed_dummy", False))
             else:
                 row_state["pos"] = [float(roi.pos()[0]), float(roi.pos()[1])]
@@ -3606,6 +4066,15 @@ class ROIManager(QtCore.QObject):
                                                  roi_name=entry.get("name", None))
                 self.connect_signals_to_roi(roi_obj, on_region_change=True)
                 self.request_plot_avg_intensity(roi_id)
+
+            # Restore the H-seed flag for every row type (legacy presets lack
+            # the key and default to enabled). Dummy rows already got the flag
+            # via add_dummy_roi; spatial rows only here. Styling included, so a
+            # disabled row also looks disabled after the reload.
+            seed_enabled = bool(entry.get("seed_H_enabled", True))
+            if roi_obj is not None:
+                roi_obj.seed_H_enabled = seed_enabled
+            self._style_row_seed_state(row, seed_enabled)
 
             # --- Apply table/widget states (block signals to avoid cascades) ---
             name_w = self.roi_table.cellWidget(row, self.widget_columns["Name"])

@@ -22,7 +22,7 @@ This is useful when the mouse wheel gives an approximate view, but you need repr
 
 ## Image Views
 
-Image views are used for the raw data, the channel preview, W seed previews, and the composite result image.
+Image views are used for the raw data, the channel preview, W seed previews (the starting concentration maps handed to the analysis), and the composite result image.
 
 Common interactions:
 
@@ -148,8 +148,8 @@ Spectral plots are used for:
 - ROI average spectra;
 - loaded seed spectra;
 - Gaussian/model seed spectra;
-- PCA loadings;
-- NNMF or fixed-H NNLS H components.
+- PCA loadings (the characteristic spectra of the principal components);
+- the fitted component spectra of an NNMF or fixed-H NNLS run (the rows of the `H` matrix; see [Concepts](../concepts.md) for what `H` and `W` are).
 
 For numerical spectral axes, the x-axis is shown as wavelength or Raman shift. For custom string labels, the plot uses channel positions internally and labels the axis as **Channel**.
 

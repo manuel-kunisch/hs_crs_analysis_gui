@@ -30,7 +30,7 @@ Press **Suggest spectra (VCA)** in the ROI Manager. The dialog offers:
 
 - **Number of endmember spectra** — defaults to the component count set in the Analysis panel.
 - **Place ROIs in the image** (on by default) — see the two modes below.
-- **Grow region by** — how the region around each endmember pixel is grown: **Cosine similarity to the endmember spectrum** (default), or the **Least-squares / Selective score / NNLS** abundance map.
+- **Grow region by** — how the region around each endmember pixel is grown, i.e. which per-pixel score decides whether a neighboring pixel still belongs to the component: **Cosine similarity to the endmember spectrum** (default; how similar the pixel's spectral *shape* is to the endmember, independent of brightness), or the **Least-squares / Selective score / NNLS** abundance map (how much of the endmember a fit assigns to the pixel; the three variants differ in how aggressively they suppress competing components, see [W-seed modes](03_seeds_spectral_and_spatial.md#w-seeds-spatial-information)).
 - **Max ROI half-size (px)** — caps how far the box may grow from the endmember pixel. `0` keeps only the single endmember pixel; otherwise the box grows but never exceeds `2 × value + 1` px per side, centered on the pixel.
 
 Two modes, controlled by the checkbox:

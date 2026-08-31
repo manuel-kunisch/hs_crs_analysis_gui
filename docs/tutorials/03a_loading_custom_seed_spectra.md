@@ -1,6 +1,6 @@
 # 03a Loading Custom Seed Spectra
 
-External spectra can be loaded into the ROI manager and used as H seeds. This is useful when spectra were measured with a spectrometer or obtained from a reference measurement.
+External spectra can be loaded into the ROI manager and used as H seeds, the starting spectra that steer the analysis toward known components (see [Seeds, spectra, and W maps](03_seeds_spectral_and_spatial.md) for how seeds work, and [Concepts](../concepts.md) for the underlying model). This is useful when spectra were measured with a spectrometer or obtained from a reference measurement.
 
 ## Supported Use Case
 
@@ -8,7 +8,7 @@ Use external spectra when:
 
 - the expected component spectrum is known before image analysis,
 - spectra should be reused across datasets,
-- fixed-H NNLS should be run with known spectral signatures,
+- fixed-H NNLS (the mode that locks the spectra and only fits the maps, see [02 Analysis modes](02_analysis_modes.md)) should be run with known spectral signatures,
 - spectral priors should be independent of local ROI selection.
 
 ## Loading A Spectrum File

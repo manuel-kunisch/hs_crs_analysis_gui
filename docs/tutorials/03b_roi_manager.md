@@ -128,7 +128,9 @@ This column is the component assignment. The label is historical. Selecting `Com
 `Background`
 
 Marks the row as a background component. This is useful when a component should be interpreted or initialized as background rather than sample signal.
-The algorithm always assigns unsubtracted singal to the latter to minimize cross talk with components containing spcific information.
+Background rows always take their spectrum from the unsubtracted data, so that the background component keeps carrying the baseline instead of leaking it into the components that hold specific information.
+
+Background ROIs serve a second purpose: the unmixing diagnostics use the pixels inside them as a signal-free region to measure the per-channel noise level, which gives a better noise floor for the effective-rank estimate than the automatic method. See [Unmixing diagnostics](../methods/unmixing_diagnostics.md#noise-estimation).
 
 `Subtract`
 
@@ -169,6 +171,12 @@ Centers the image view on a spatial ROI. If the row stores a fixed W seed, this 
 `Remove`
 
 Deletes the row and its associated ROI or dummy seed.
+
+## Separability line under the table
+
+Beneath the seed table a status line reports the minimum eta of the current seed spectra: the fraction of the weakest component's fingerprint that no combination of the other seeds can imitate. It updates automatically while seeds are added, moved, or relabeled, so an inseparable pair of seeds is visible before the analysis runs rather than after. The **Separability…** button opens the full per-component report. What eta means, how it relates to the achievable abundance accuracy, and how to react to a critical value is explained in [Unmixing diagnostics](../methods/unmixing_diagnostics.md).
+
+Next to it, **Purify seed…** fixes the most common cause of a critical eta: a seed drawn on a region where the component never occurs alone (a nucleus under cytoplasmic lipid, for example). It subtracts the largest multiple of a reference seed that keeps the spectrum non-negative, previews the result together with the eta improvement, and adds it as a new dummy row on the same component. The original row is then either kept but taken out of the seed assembly (shown grayed out; right-click the row to re-enable its H seed) or deleted, selectable in the dialog. The method and its assumptions are described in [Unmixing diagnostics](../methods/unmixing_diagnostics.md#when-no-pure-pixel-exists-purify-seed).
 
 ## H seeds from spatial ROIs
 

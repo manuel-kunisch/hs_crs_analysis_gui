@@ -2,6 +2,8 @@
 
 This reference summarizes the row types and table columns in the ROI Manager. For the guided tutorial, see [03b ROI Manager in detail](../tutorials/03b_roi_manager.md).
 
+Every row can contribute two kinds of seed to the analysis: an **H seed** (a starting spectrum for the component) and/or a **W seed** (a starting spatial map for it). The matrices `H` and `W` behind these names are defined on the [Concepts page](../concepts.md).
+
 ![ROI Manager interface with example rows](../assets/images/roi_manager.png)
 
 ## Row types

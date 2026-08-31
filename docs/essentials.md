@@ -10,6 +10,8 @@ Seven features that are easy to miss when you just click around, but that change
 
 ## 1. Using ROIs to find seeds for NNMF unmixing: Multiple ways...
 
+NNMF (non-negative matrix factorization) is the workhorse mode of the GUI: it decomposes the image stack into component spectra (the rows of a matrix called `H`) and matching concentration maps (the columns of `W`), and seeds are the starting spectra you hand it. The [Concepts page](concepts.md) explains the model; this section is about where good seeds come from.
+
 ROIs are the main way to give the analysis a starting point. There is more than one way to place them, and you can mix them in the same session.
 
 - **Suggest spectra (VCA): recommended automatic method.** The **Suggest spectra/ROIs (VCA)** button estimates the pure component spectra straight from the data (Vertex Component Analysis) and, by default, grows an ROI around each component's purest pixel. It is a reliable automatic seeding option and a great first step on unfamiliar data. See [Suggest spectra (VCA)](tutorials/03d_suggest_spectra_vca.md).
@@ -38,7 +40,7 @@ The same automatic VCA seeding works just as well on real CARS data:
 
 ## 2. Residual data analysis — let the GUI find what you missed
 
-If the component count is set higher than the number of seeded spectra, the missing components are filled automatically from the data residual (the part of the signal that is not yet explained by the existing seeded H rows). This is how you let the analysis tell you that there is *something else* in the data that you have not yet identified.
+If the component count is set higher than the number of seeded spectra, the missing components are filled automatically from the data residual (the part of the signal that is not yet explained by the seed spectra defined so far). This is how you let the analysis tell you that there is *something else* in the data that you have not yet identified.
 
 Typical use: seed the components you know, raise the component count by one or two, run the analysis, look at the extra component's spectrum and map.
 
@@ -136,7 +138,7 @@ After you have a finalized analysis on a representative field of view (colors lo
 - the spectra in use (Results or Seeds, selectable via the mode dropdown),
 - the spectral axis at save time.
 
-On the next field of view of the same sample, load it from the ROI Manager via **Load Lookup Table and Spectra Preset** → **LUTs + ROIs**. The spectra come back as **fixed dummy seeds** (no ROI dependence) and are interpolated onto the new dataset's spectral axis if it differs. Run fixed-H NNLS or seeded NNMF and the new FOV is analysed against the exact same spectral basis as the reference — which is what makes results visually and quantitatively comparable.
+On the next field of view of the same sample, load it from the ROI Manager via **Load Lookup Table and Spectra Preset** → **LUTs + ROIs**. The spectra come back as **fixed dummy seeds** (no ROI dependence) and are interpolated onto the new dataset's spectral axis if it differs. Run fixed-H NNLS (spectra locked, only the maps are fitted) or seeded NNMF and the new FOV is analysed against the exact same set of component spectra as the reference — which is what makes results visually and quantitatively comparable.
 
 Analysis settings (solver, backend, iteration limits, fixed-H mode) are **not** in the `.preset` — they live in the main JSON application preset.
 

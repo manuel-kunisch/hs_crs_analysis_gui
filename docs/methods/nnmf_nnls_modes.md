@@ -11,6 +11,8 @@ For the more workflow-oriented explanation, see [02 Analysis modes](../tutorials
 
 Hyperspectral CRS, CARS, SRS, Raman, or fluorescence stacks are usually recorded as many grayscale slices across a spectral axis [1, 2]. Looking at dozens of slices one by one is slow and often misleading because the relevant information is spread across the whole stack.
 
+The two mode families this page covers are NNMF (non-negative matrix factorization, which fits component spectra and their maps simultaneously, defined in [Data layout](#data-layout) below) and NNLS (non-negative least squares, which keeps given spectra fixed and fits only the maps, in [Fixed-H NNLS](#fixed-h-nnls)).
+
 The point of multivariate analysis here is not only dimensionality reduction in the abstract. It is a practical reorganization of the stack into a small set of spectral patterns, a matching set of spatial maps, and a false-color view that makes the dominant structures easier to inspect in one image. The raw stack is largely redundant or background-dominated; the analysis modes compress it into a smaller number of components that can be inspected as spectra and maps [3].
 
 ## Data layout
@@ -31,8 +33,8 @@ $$
 
 with
 
-- \(W \in \mathbb{R}_{\ge 0}^{n_\mathrm{pixels} \times n_\mathrm{components}}\): spatial maps or abundances,
-- \(H \in \mathbb{R}_{\ge 0}^{n_\mathrm{components} \times n_\mathrm{channels}}\): component spectra.
+- $W \in \mathbb{R}_{\ge 0}^{n_\mathrm{pixels} \times n_\mathrm{components}}$: spatial maps or abundances (how much of each component is present in each pixel),
+- $H \in \mathbb{R}_{\ge 0}^{n_\mathrm{components} \times n_\mathrm{channels}}$: component spectra.
 
 This is the canonical NNMF model [4, 5, 6]. In the GUI:
 
@@ -73,7 +75,7 @@ PCA does not try to find chemically pure components. It asks a different questio
 
 > Along which spectral directions does the dataset vary the most?
 
-Geometrically, PCA is a rotation of the coordinate system. Instead of describing each pixel by the original spectral channels, it creates new orthogonal axes (the principal components) that point along the strongest variance directions in the data [7, 8, 9].
+Geometrically, PCA is a rotation of the coordinate system. Instead of describing each pixel by the original spectral channels, it creates new axes (the principal components) that point along the strongest variance directions in the data; the axes are orthogonal, meaning mutually perpendicular, so no two of them describe the same variation twice [7, 8, 9].
 
 The first principal component explains the largest variance, the second explains the largest remaining variance under the orthogonality constraint, and so on. PCA is useful for:
 
@@ -142,7 +144,7 @@ The result is exploratory:
 - no seed information is enforced,
 - different initializations can lead to different local optima.
 
-NNMF optimization with the Frobenius cost is non-convex jointly in `W` and `H` [5, 6]; only local minima are guaranteed. This is why initialization (seeded NNMF below) matters in practice.
+The quantity NNMF minimizes is the Frobenius cost, which is simply the summed squared mismatch between the data and the reconstruction `W H` over all pixels and channels. This optimization is non-convex jointly in `W` and `H` [5, 6]: the cost surface has many valleys rather than one, so the solver is only guaranteed to land in *some* valley (a local minimum), not the best one. This is why initialization (seeded NNMF below) matters in practice.
 
 ### Interpretation in this project
 
@@ -186,7 +188,7 @@ $$
 X \approx W_0 H_0 \quad \longrightarrow \quad X \approx W^* H^*
 $$
 
-Because the cost surface has many local minima [5, 6], the choice of `W0` and `H0` determines which local minimum the solver reaches. That is the reason seeding matters on hard data: it picks the basin of attraction.
+Because the cost surface has many local minima [5, 6], the choice of `W0` and `H0` determines which local minimum the solver reaches. That is the reason seeding matters on hard data: the starting point decides which valley the solver rolls into (its basin of attraction).
 
 ### What can become a seed
 
@@ -223,7 +225,7 @@ The important separation is:
 So the basis finding and the W-map construction are related, but they are not the same step.
 
 
-See the [seed estimation pipeline diagram](../methods/nnmf_nnls_modes.md#seeded-nnmf) for an at-a-glance overview.
+See the [seed building flow diagram](../tutorials/03_seeds_spectral_and_spatial.md) for an at-a-glance overview of how seeds are assembled.
 
 #### Picking `nnls` vs `selective_score`
 
@@ -305,7 +307,7 @@ $$
 w_p = \arg\min_{w_p \ge 0} \left\| x_p - w_p H_{\mathrm{seed}} \right\|_2^2
 $$
 
-This is the classical non-negative least-squares problem, originally solved by the Lawson–Hanson active-set algorithm [13]. SciPy's `nnls` is a direct implementation [13]; the GUI's optional PyTorch backend uses projected gradient with FISTA acceleration instead [14, 15], which is significantly faster on GPU for large pixel counts. FISTA in its basic form is non-monotone and can oscillate on ill-conditioned problems; adaptive restart schemes that restore monotonicity and accelerate convergence are well established [16] and are a natural extension of the current backend.
+This is the classical non-negative least-squares problem. The textbook solution is the Lawson–Hanson active-set algorithm [13], which solves it exactly by tracking which coefficients are clamped at zero and which are free; SciPy's `nnls` is a direct implementation [13]. The GUI's optional PyTorch backend instead uses an iterative gradient method with FISTA acceleration [14, 15] (each step moves downhill on the cost and clips negatives to zero; the acceleration reuses momentum from previous steps), which is approximate but significantly faster on GPU for large pixel counts. FISTA in its basic form does not decrease the cost at every single step and can oscillate when spectra are nearly collinear; restart schemes that damp these oscillations are well established [16] and are a natural extension of the current backend.
 
 Because `H_seed` is fixed, the fitted `W` in fixed-H NNLS is not just a seed-scale convention. The NNMF scale ambiguity is only harmless when both sides of a component pair can be rescaled together. In fixed-H NNLS, rescaling `W` alone changes \(W H_{\mathrm{seed}}\) and therefore changes the fit. Internally, these fixed-H NNLS coefficients should remain on their fitted scale rather than being normalized to unit maximum. Display and export scaling can still be applied afterward for visualization.
 
@@ -389,7 +391,7 @@ with default `tol = 1e-4` and default `max_iter = 1000`. Chunks that fail to mee
 
 #### NNLS: SciPy backend
 
-The SciPy backend uses [`scipy.optimize.nnls`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.nnls.html), the Lawson–Hanson active-set algorithm [13]. It has no `tol` parameter, only an iteration limit (`max_iter`, default `1000`). It either reaches the exact KKT optimum within the budget or returns the best iterate found.
+The SciPy backend uses [`scipy.optimize.nnls`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.nnls.html), the Lawson–Hanson active-set algorithm [13]. It has no `tol` parameter, only an iteration limit (`max_iter`, default `1000`). It either reaches the exact solution of the constrained fit within the budget (the KKT optimum, the point where no allowed change can reduce the cost further) or returns the best iterate found.
 
 #### Practical recommendation
 

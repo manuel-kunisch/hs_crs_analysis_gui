@@ -1,6 +1,6 @@
 # 05 Results And Export
 
-The result viewer shows the output of PCA, NNMF, or fixed-H NNLS. It combines the spatial component maps, spectra, colormaps, labels, and export tools.
+The result viewer shows the output of the analysis modes (PCA, NNMF, or fixed-H NNLS, see [02 Analysis modes](02_analysis_modes.md)). It combines the spatial component maps (`W`), the component spectra (`H`), colormaps, labels, and export tools; the [Concepts page](../concepts.md) explains what `W` and `H` are.
 
 For general pyqtgraph interaction, histogram/LUT adjustment, zooming, and plot export behavior, see [GUI and pyqtgraph basics](00_gui_and_pyqtgraph_basics.md). For publication-style spectral plots, see [Publication plots with Matplotlib rc defaults](00a_publication_plots_matplotlibrc.md).
 
@@ -108,7 +108,7 @@ The **Projection** dropdown above the raw image viewer has an entry called **Com
 ### Use cases
 
 - **Verification against the input data.** Switching the dropdown between **None** (raw stack) and **Composite (from analysis)** places the composite and the raw channels in the same viewport. This is useful for checking whether structures in the composite have corresponding signal in the underlying spectral channels, or whether they were introduced or amplified by the unmixing step.
-- **Identification of unexpected structures.** Features that are not present in the seeded H basis can appear in the composite when residual-data analysis is used or when the chosen component count exceeds the number of seeded spectra. With the composite displayed in the raw viewer, the ROI Manager can be used to place a region of interest directly on such a feature. The mean spectrum of that region is then available as an H seed for a subsequent analysis run, supporting an iterative refinement of the spectral basis.
+- **Identification of unexpected structures.** Features that are not covered by any seed spectrum can appear in the composite when residual-data analysis is used (letting spare components pick up unexplained signal, see [Essentials §2](../essentials.md#2-residual-data-analysis-let-the-gui-find-what-you-missed)) or when the chosen component count exceeds the number of seeded spectra. With the composite displayed in the raw viewer, the ROI Manager can be used to place a region of interest directly on such a feature. The mean spectrum of that region is then available as an H seed for a subsequent analysis run, supporting an iterative refinement of the spectral basis.
 - **Detection of unrepresented features.** The reverse case is just as informative: a structure that is clearly present in the raw stack but appears **dark** in the mirrored composite is not explained by any of the current components. In a bead sample, for example, an individual bead that stays dark while its neighbours light up in their assigned colour indicates that no H seed in the current basis matches that bead's spectrum. The fix is the same iterative loop — place an ROI on the dark feature in the mirror, take its mean spectrum as a new H seed, increase the component count if needed, and re-run.
 
 ### Behaviour

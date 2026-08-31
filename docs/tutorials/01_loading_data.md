@@ -79,7 +79,7 @@ Use the **Single HS Image** tab to load a TIFF file. A file can be opened from t
 After loading, the app will:
 
 - read the TIFF data,
-- apply optional rolling-ball correction if enabled,
+- apply optional rolling-ball illumination correction if enabled (see [04 Physical units and rolling-ball correction](04_physical_units_and_rolling_ball.md)),
 - normalize the image if normalization is active,
 - validate the stack shape,
 - apply the current binning factor,
@@ -107,7 +107,7 @@ When a TIFF is opened, the loader first converts the input array into the GUI's 
 This means that unusual TIFF types such as `float32`, `float64`, `int32`, or `uint32` can be loaded, but their original absolute numeric scale is not preserved automatically. The loader maps them into the GUI's 16-bit working range.
 
 !!! warning "Float / 32-bit TIFFs are remapped. The original numeric scale is not preserved"
-    If your input is a `float32`/`float64` TIFF whose values are relevant on an absolute scale (counts per second, calibrated reflectance, etc.), HS-MOSAIC's 16-bit working range will rescale them globally before analysis. The relative structure (which pixels are bright, which spectra are which) is preserved, but the absolute numeric value of `W` afterward is in working-scale units, not in the original physical units. If absolute scale matters for downstream quantification, record the global scale factor used at load time (see the fit summary) and apply it on export.
+    If your input is a `float32`/`float64` TIFF whose values are relevant on an absolute scale (counts per second, calibrated reflectance, etc.), HS-MOSAIC's 16-bit working range will rescale them globally before analysis. The relative structure (which pixels are bright, which spectra are which) is preserved, but the absolute numeric value of the fitted concentration maps (`W`, see [Concepts](../concepts.md)) afterward is in working-scale units, not in the original physical units. If absolute scale matters for downstream quantification, record the global scale factor used at load time (see the fit summary) and apply it on export.
 
 ### Normalization after loading
 
@@ -141,7 +141,7 @@ The binned image is then the canonical image used for analysis and display.
 
 ### What the analysis backends actually use
 
-PCA, NNMF, and fixed-H NNLS do not operate on integer math internally. The analysis code converts the working image into floating-point arrays where needed:
+The analysis modes (PCA, NNMF, and fixed-H NNLS, see [02 Analysis modes](02_analysis_modes.md)) do not operate on integer math internally. The analysis code converts the working image into floating-point arrays where needed:
 
 - PCA works on floating-point data matrices,
 - scikit-learn NNMF uses `float32` input,

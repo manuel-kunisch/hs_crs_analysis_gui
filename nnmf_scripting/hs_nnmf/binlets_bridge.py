@@ -381,12 +381,27 @@ def binlets_denoise(
             f"Expected at least (channels, Y, X), got shape {source.shape}. "
             "Axis 0 carries the channels; every remaining axis is binned."
         )
-    data = source.astype(np.float64)
+
     gain = float(gain)
     if gain <= 0:
         raise ValueError("gain must be > 0.")
     offset = float(max(offset, 0.0))
-    n_bands = data.shape[0]
+
+    # Compute variance given the mean and concatenate them
+    # where the first dimension is [mean_0, ..., mean_N, var_0, ..., var_N]
+    mean = source.astype(np.float64)
+    variance = gain * source + offset
+    data = np.concatenate([mean, variance])
+
+    def normalized_mean_and_variance(x):
+        mean, variance = x.reshape(2, *source.shape)
+        # Sum over the channel axis only, so every pixel is divided by its own
+        # spectral total. Summing over everything would give one global scalar
+        # that is the same for x and y and cancels out of the test.
+        norm = mean.sum(axis=0, keepdims=True)
+        return mean / norm, variance / norm**2
+
+    n_bands = source.shape[0]
     threshold = float(n_sigma) ** 2
 
     # Pooling over k channels turns the test into a chi-square with k degrees of
@@ -403,11 +418,10 @@ def binlets_denoise(
         ``x`` and ``y`` are sums of ``2**level`` raw pixels (unnormalized Haar),
         so the constant noise floor scales with the number of pooled pixels.
         """
-        pooled = 2.0 ** int(level)
-        difference = x - y
-        variance = gain * (x + y) + 2.0 * pooled * offset
-        variance = np.where(variance <= 0, np.inf, variance)
-        chi2 = difference ** 2 / variance
+        x_mean, x_var = normalized_mean_and_variance(x)
+        y_mean, y_var = normalized_mean_and_variance(y)
+
+        chi2 = (x_mean - y_mean) ** 2 / (x_var + y_var)
         if joint_channels:
             # one decision per pixel, pooled over every spectral channel
             return chi2.sum(axis=0) <= joint_threshold
@@ -421,12 +435,17 @@ def binlets_denoise(
     # the signature advertises a tuple; the implementation returns the array
     if isinstance(result, tuple):
         result = result[0]
-    denoised = np.maximum(np.asarray(result, dtype=np.float64), 0.0)
+    result = np.asarray(result, dtype=np.float64)
+
+    # ``data`` carried [mean, variance] stacked on the channel axis, so binlets
+    # returns 2 * n_bands channels. The denoised stack is the first half; the
+    # second half is the variance, propagated through the same binning.
+    denoised = np.maximum(result[:n_bands], 0.0)
 
     logger.info(
         "binlets done: mean preserved %.6g -> %.6g, std %.1f -> %.1f",
-        float(data.mean()), float(denoised.mean()),
-        float(data.std()), float(denoised.std()),
+        float(source.mean()), float(denoised.mean()),
+        float(source.astype(np.float64).std()), float(denoised.std()),
     )
 
     if np.issubdtype(source.dtype, np.integer):

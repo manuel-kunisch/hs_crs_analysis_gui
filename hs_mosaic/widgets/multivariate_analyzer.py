@@ -539,6 +539,64 @@ class MultivariateAnalyzer(object):
             return False
         return bool(np.all(MultivariateAnalyzer._column_seeded_mask(matrix)))
 
+    def _seed_problem_report(self) -> tuple[list[str], list[str]]:
+        """Why the current seeds cannot (or only badly) start a seeded NNMF.
+
+        Returns ``(fatal, warnings)``. Fatal and aborting the run: a missing
+        matrix, or any negative entry — NMF requires >= 0 everywhere; zeros
+        are always legal. Warnings do not abort: a component whose entire
+        W column / H row is zero converges to an empty component under the
+        multiplicative update (the run works, the component comes out blank).
+        """
+        fatal: list[str] = []
+        seed_warnings: list[str] = []
+
+        if self.seed_W is None:
+            fatal.append('the W seed matrix is not set')
+        else:
+            W = np.asarray(self.seed_W)
+            for component in np.flatnonzero(np.any(W < 0, axis=0)):
+                fatal.append(
+                    f'the W seed of component {component + 1} contains negative values '
+                    f'(min {W[:, component].min():.4g})'
+                )
+            for component in np.flatnonzero(~np.any(W > 0, axis=0)):
+                seed_warnings.append(
+                    f'the W seed of component {component + 1} is all zeros; '
+                    'the MU update keeps it at zero, so this component will come out empty'
+                )
+
+        if self.seed_H is None:
+            fatal.append('the H seed matrix is not set')
+        else:
+            H = np.asarray(self.seed_H)
+            for component in np.flatnonzero(np.any(H < 0, axis=1)):
+                fatal.append(
+                    f'the H seed of component {component + 1} contains negative values '
+                    f'(min {H[component].min():.4g}) — clip or re-extract that seed spectrum'
+                )
+            for component in np.flatnonzero(~np.any(H > 0, axis=1)):
+                seed_warnings.append(
+                    f'the H seed of component {component + 1} is all zeros; '
+                    'the MU update keeps it at zero, so this component will come out empty'
+                )
+        return fatal, seed_warnings
+
+    def _check_seeds_or_raise(self) -> None:
+        """Validate the seed matrices before a seeded NNMF run.
+
+        Logs non-fatal seed warnings and raises ``ValueError`` with every
+        fatal problem, so the GUI's analysis-failed dialog names the exact
+        component and cause instead of silently keeping the old result.
+        """
+        fatal, seed_warnings = self._seed_problem_report()
+        for warning in seed_warnings:
+            logger.warning('NNMF seed check: %s', warning)
+        if fatal:
+            message = 'NNMF aborted by the seed check: ' + '; '.join(fatal)
+            logger.error(message)
+            raise ValueError(message)
+
     @staticmethod
     def _has_seed_signal(spectrum: np.ndarray | None, eps: float = 1e-8) -> bool:
         if spectrum is None:
@@ -1813,14 +1871,10 @@ class MultivariateAnalyzer(object):
             if not self._W_prepared:
                 self.estimate_W_seed_matrix_from_H()
                 # here also the seed for H is checked in the same step and filled if necessary
-            if not self._all_columns_seeded(self.seed_W):
-                logger.error('NNMF aborted: No seed W matrix available or not completely filled')
-                return False
         else:
             logger.warning('Skipping seed estimation for NNMF; seeds are assumed to be set')
-            if not (self._all_columns_seeded(self.seed_W) and self._all_columns_seeded(self.seed_H)):
-                logger.error('NNMF aborted: seed W or H matrix is not completely filled')
-                return False
+        # abort with the exact component and cause when a seed cannot start NNMF
+        self._check_seeds_or_raise()
 
         logger.info(f'{datetime.now()}: Starting NNMF with custom seeds')
 

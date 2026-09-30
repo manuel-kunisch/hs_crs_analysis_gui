@@ -26,6 +26,7 @@ from hs_mosaic.widgets.spectral_axis import (
     spectral_csv_header,
     spectral_unit_suffix,
 )
+from hs_mosaic.widgets import theme
 from hs_mosaic.widgets.color_manager import ComponentColorManager
 from hs_mosaic.widgets.hs_image_view import ColorButton
 from hs_mosaic.widgets.unmixing_diagnostics import noise_sigma_from_pixels, separability
@@ -847,17 +848,94 @@ class AnalysisManager(QtCore.QObject):
         self._finish_analysis_progress()
 
         # -----------------------------
-        # Main area: table (left) + control panel (right)
+        # Main area: resonance table with its toolbar above
         # -----------------------------
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        root.addWidget(splitter, 1)
+        table_area = QtWidgets.QWidget()
+        table_layout = QtWidgets.QVBoxLayout(table_area)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(4)
+        root.addWidget(table_area, 1)
 
-        # --- Left: table container ---
-        left = QtWidgets.QWidget()
-        left_layout = QtWidgets.QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(6)
+        def _table_tool_button(text, icon_name, tooltip, slot=None):
+            button = QtWidgets.QToolButton()
+            button.setText(text)
+            button.setIcon(theme.icon(icon_name))
+            button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+            button.setToolTip(tooltip)
+            if slot is not None:
+                button.clicked.connect(slot)
+            return button
+
+        add_button = _table_tool_button(
+            "Add resonance", 'mdi.plus-box-outline',
+            "Add a resonance row: a spectral window that finds seed pixels\n"
+            "(or defines a Gaussian model) for one component.",
+            slot=self.add_resonance_settings,
+        )
+        # H seeds are shown live in the Seed spectra plot; only the W maps
+        # still need a full build, behind this one button.
+        test_seeds_button = _table_tool_button(
+            "Preview W seeds…", 'mdi.image-multiple-outline',
+            "Build the full seed set (H and the W maps, exactly as a run would)\n"
+            "and open the seed inspector window.\n\n"
+            "H seeds are already shown live in the Seed spectra plot: solid\n"
+            "curves for ROI/spectrum rows, dashed curves for components whose\n"
+            "seed is found from the resonance table's seed pixels.",
+            slot=lambda: self.make_all_seeds_from_inputs(show_seeds=True),
+        )
+
+        # Background seed (rolling ball): three parameters and one action,
+        # kept in a dropdown form instead of a permanent side panel
+        background_button = _table_tool_button(
+            "Rolling Ball Background seed", 'mdi.image-filter-hdr',
+            "Estimate a smooth background from a rolling-ball filtered projection\n"
+            "and preview it before adding it as a background component seed.",
+        )
+        background_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        bg_menu = QtWidgets.QMenu(background_button)
+        bg_form_widget = QtWidgets.QWidget()
+        bg_form = QtWidgets.QFormLayout(bg_form_widget)
+        bg_form.setContentsMargins(10, 8, 10, 8)
+        bg_form.setHorizontalSpacing(10)
+        bg_form.setVerticalSpacing(6)
+
+        self.rolling_ball_radius = QtWidgets.QSpinBox()
+        self.rolling_ball_radius.setRange(1, 5000)
+        self.rolling_ball_radius.setValue(11)
+        self.rolling_ball_radius.setSingleStep(2)
+        bg_form.addRow("Rolling ball radius (px):", self.rolling_ball_radius)
+        # rolling ball sigma for gaussian smoothing
+        self.rolling_ball_sigma = QtWidgets.QDoubleSpinBox()
+        self.rolling_ball_sigma.setRange(0.1, 100.0)
+        self.rolling_ball_sigma.setValue(11.0)
+        self.rolling_ball_sigma.setSingleStep(0.1)
+        bg_form.addRow("Gaussian smoothing (px):", self.rolling_ball_sigma)
+
+        self.rolling_ball_projection_combo = QtWidgets.QComboBox()
+        self.rolling_ball_projection_combo.addItem("Mean Projection", "mean")
+        self.rolling_ball_projection_combo.addItem("Max Projection", "max")
+        self.rolling_ball_projection_combo.addItem("Min Projection", "min")
+        bg_form.addRow("Reference image:", self.rolling_ball_projection_combo)
+
+        rb_button = QtWidgets.QPushButton("Compute preview…")
+        rb_button.setToolTip("Rolling-ball filter the chosen projection and open the preview window.")
+        rb_button.clicked.connect(bg_menu.close)
+        rb_button.clicked.connect(self.rolling_background_component_from_projection)
+        bg_form.addRow(rb_button)
+
+        bg_widget_action = QtWidgets.QWidgetAction(bg_menu)
+        bg_widget_action.setDefaultWidget(bg_form_widget)
+        bg_menu.addAction(bg_widget_action)
+        background_button.setMenu(bg_menu)
+
+        toolbar_row = QtWidgets.QHBoxLayout()
+        toolbar_row.setContentsMargins(0, 0, 0, 0)
+        toolbar_row.setSpacing(4)
+        toolbar_row.addWidget(add_button)
+        toolbar_row.addWidget(test_seeds_button)
+        toolbar_row.addWidget(background_button)
+        toolbar_row.addStretch(1)
+        table_layout.addLayout(toolbar_row)
 
         self.resonance_table = QtWidgets.QTableWidget()
         res_settings_options = [
@@ -872,8 +950,14 @@ class AnalysisManager(QtCore.QObject):
             res_settings_options.remove("Color")
 
         self.res_settings_widget_columns = {option: i for i, option in enumerate(res_settings_options)}
+        # column KEYS stay stable (presets and lookups address them by name);
+        # only the header display text is shortened. Remove is an icon-only
+        # column (trash button), also reachable via context menu / Ctrl+D.
+        display_names = {"# Seed Pixels": "Seed pixels", "Use subtracted data": "Subtracted",
+                         "Use Gaussian": "Gaussian", "Remove": ""}
         self.resonance_table.setColumnCount(len(res_settings_options))
-        self.resonance_table.setHorizontalHeaderLabels(res_settings_options)
+        self.resonance_table.setHorizontalHeaderLabels(
+            [display_names.get(name, name) for name in res_settings_options])
         self._refresh_spectral_column_labels()
         self.resonance_table.setAcceptDrops(True)
         self.resonance_table.setAlternatingRowColors(True)
@@ -883,106 +967,15 @@ class AnalysisManager(QtCore.QObject):
         self.resonance_table.verticalHeader().setVisible(False)
         # selecting a resonance row selects the matching component's ROI
         self.resonance_table.currentCellChanged.connect(self._on_resonance_selection_changed)
+        self.resonance_table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.resonance_table.customContextMenuRequested.connect(self._show_resonance_context_menu)
         self._refresh_resonance_table_layout()
         QtCore.QTimer.singleShot(0, self._refresh_resonance_table_layout)
 
-        left_layout.addWidget(self.resonance_table, 1)
+        table_layout.addWidget(self.resonance_table, 1)
 
-        # Shortcut + hint (cleaner + readable)
         del_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+D"), self.resonance_table)
         del_shortcut.activated.connect(lambda: self.remove_res_settings(self.resonance_table.currentRow()))
-
-        hint = QtWidgets.QLabel('Tip: Press <b>Ctrl+D</b> to delete the selected resonance row.')
-        hint.setObjectName("HintLabel")
-        hint.setAlignment(QtCore.Qt.AlignRight)
-        left_layout.addWidget(hint)
-
-        splitter.addWidget(left)
-
-        # --- Right: control panel ---
-        right = QtWidgets.QWidget()
-        right.setMinimumWidth(360)
-        right_layout = QtWidgets.QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
-
-        # (1) Resonance / actions
-        actions_gb = QtWidgets.QGroupBox("Actions")
-        actions_layout = QtWidgets.QHBoxLayout(actions_gb)
-        actions_layout.setSpacing(8)
-
-        add_button = _make_btn(
-            "Add resonance settings",
-            "list-add", QtWidgets.QStyle.SP_FileDialogNewFolder,
-            slot=self.add_resonance_settings
-        )
-        # H seeds are previewed LIVE in the Seed spectra plot (dashed curves
-        # for resonance-driven components), so the only heavy preview left is
-        # the W maps — the full build stays behind this one button.
-        test_seeds_button = _make_btn(
-            "Preview W seeds…",
-            "system-run", QtWidgets.QStyle.SP_BrowserReload,
-            slot=lambda: self.make_all_seeds_from_inputs(show_seeds=True),
-            tooltip="Build the full seed set (H and the W maps, exactly as a run would)\n"
-                    "and open the seed inspector window.\n\n"
-                    "H seeds are already shown live in the Seed spectra plot: solid\n"
-                    "curves for ROI/spectrum rows, dashed curves for components whose\n"
-                    "seed is found from the resonance table's seed pixels."
-        )
-
-        actions_layout.addWidget(add_button)
-        actions_layout.addWidget(test_seeds_button)
-
-        right_layout.addWidget(actions_gb)
-
-        # (2) Background (rolling ball)
-        bg_gb = QtWidgets.QGroupBox("Background")
-        bg_gb_layout = QtWidgets.QVBoxLayout(bg_gb)
-        bg_form = QtWidgets.QFormLayout()
-        bg_gb_layout.addLayout(bg_form)
-        bg_form.setLabelAlignment(QtCore.Qt.AlignRight)
-        bg_form.setFormAlignment(QtCore.Qt.AlignTop)
-        bg_form.setHorizontalSpacing(10)
-        bg_form.setVerticalSpacing(8)
-
-        self.rolling_ball_radius = QtWidgets.QSpinBox()
-        self.rolling_ball_radius.setRange(1, 5000)
-        self.rolling_ball_radius.setValue(11)
-        self.rolling_ball_radius.setSingleStep(2)
-        self.rolling_ball_radius.setFixedWidth(90)
-        bg_form.addRow("Rolling ball radius (px):", self.rolling_ball_radius)
-        # add rolling ball sigma for gaussian smoothing
-        self.rolling_ball_sigma = QtWidgets.QDoubleSpinBox()
-        self.rolling_ball_sigma.setRange(0.1, 100.0)
-        self.rolling_ball_sigma.setValue(11.0)
-        self.rolling_ball_sigma.setSingleStep(0.1)
-        self.rolling_ball_sigma.setFixedWidth(90)
-        bg_form.addRow("Gaussian smoothing (px):", self.rolling_ball_sigma)
-
-        self.rolling_ball_projection_combo = QtWidgets.QComboBox()
-        self.rolling_ball_projection_combo.addItem("Mean Projection", "mean")
-        self.rolling_ball_projection_combo.addItem("Max Projection", "max")
-        self.rolling_ball_projection_combo.addItem("Min Projection", "min")
-        self.rolling_ball_projection_combo.setFixedWidth(120)
-        bg_form.addRow("Reference image:", self.rolling_ball_projection_combo)
-
-        bg_btn_row = QtWidgets.QHBoxLayout()
-        bg_btn_row.setSpacing(8)
-        rb_button = _make_btn(
-            "Preview Background",
-            "image-filter", QtWidgets.QStyle.SP_FileDialogContentsView,
-            slot=self.rolling_background_component_from_projection
-        )
-        bg_btn_row.addWidget(rb_button)
-        bg_btn_row.addStretch(1)
-        bg_gb_layout.addLayout(bg_btn_row)
-        right_layout.addWidget(bg_gb)
-
-        right_layout.addStretch(1)
-        splitter.addWidget(right)
-
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 1)
 
         # Done
         self.analysis_widget.setLayout(root)
@@ -1054,10 +1047,13 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_fit_info = None
         logger.error("Analysis failed:\n%s", error_text)
         if self.analysis_widget is not None:
+            # the last traceback line is the exception message itself
+            lines = [line for line in str(error_text).strip().splitlines() if line.strip()]
+            reason = lines[-1] if lines else "unknown error"
             QtWidgets.QMessageBox.critical(
                 self.analysis_widget,
                 "Analysis failed",
-                "The analysis stopped because of an error.\n\n"
+                f"The analysis stopped because of an error:\n\n{reason}\n\n"
                 "The full traceback was written to the log.",
             )
 
@@ -2500,7 +2496,7 @@ class AnalysisManager(QtCore.QObject):
             "Width": 80,
             "Use subtracted data": 140,
             "Use Gaussian": 112,
-            "Remove": 96,
+            "Remove": 40,
         }
         for name, width in default_widths.items():
             if name in self.res_settings_widget_columns:
@@ -2517,18 +2513,26 @@ class AnalysisManager(QtCore.QObject):
                     self.resonance_table.setColumnWidth(column, desired_width)
                     auto_widths[column] = desired_width
 
+        # Distribute spare width to the value-bearing columns — capped, so the
+        # full-width table does not blow single columns up to half the panel.
         flexible_columns = [
-            self.res_settings_widget_columns[name]
-            for name in ("Component", "Wavenumber", "# Seed Pixels", "Amplitude")
+            (self.res_settings_widget_columns[name], cap)
+            for name, cap in (("Component", 240), ("Wavenumber", 190),
+                              ("# Seed Pixels", 150), ("Amplitude", 150))
             if name in self.res_settings_widget_columns
         ]
         available_width = self.resonance_table.viewport().width()
-        current_width = sum(self.resonance_table.columnWidth(col) for col in range(self.resonance_table.columnCount()))
+        current_width = sum(
+            self.resonance_table.columnWidth(col)
+            for col in range(self.resonance_table.columnCount())
+            if not self.resonance_table.isColumnHidden(col)
+        )
         extra_width = available_width - current_width
         if extra_width > 0 and flexible_columns:
             extra_per_column, remainder = divmod(extra_width, len(flexible_columns))
-            for index, column in enumerate(flexible_columns):
+            for index, (column, cap) in enumerate(flexible_columns):
                 new_width = self.resonance_table.columnWidth(column) + extra_per_column + (1 if index < remainder else 0)
+                new_width = min(new_width, cap)
                 self.resonance_table.setColumnWidth(column, new_width)
                 auto_widths[column] = new_width
 
@@ -2636,8 +2640,10 @@ class AnalysisManager(QtCore.QObject):
 
         self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Component"], item_comp)
 
-        # 3. Remove button
-        widget_remove = QtWidgets.QPushButton("Remove")
+        # 3. Remove button (icon only)
+        widget_remove = QtWidgets.QToolButton()
+        widget_remove.setIcon(theme.icon('mdi.trash-can-outline'))
+        widget_remove.setToolTip("Remove this resonance row (Ctrl+D)")
         widget_remove.clicked.connect(self._on_remove_res_btn_clicked)
         self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Remove"], widget_remove)
 
@@ -2714,7 +2720,19 @@ class AnalysisManager(QtCore.QObject):
                 self.remove_res_settings(row)
                 return
 
+    def _show_resonance_context_menu(self, pos):
+        row = self.resonance_table.rowAt(pos.y())
+        if row < 0:
+            return
+        menu = QtWidgets.QMenu(self.resonance_table)
+        remove_action = menu.addAction(theme.icon('mdi.trash-can-outline'), "Remove resonance row")
+        remove_action.setShortcut(QtGui.QKeySequence("Ctrl+D"))
+        remove_action.triggered.connect(lambda: self.remove_res_settings(row))
+        menu.exec_(self.resonance_table.viewport().mapToGlobal(pos))
+
     def remove_res_settings(self, row):
+        if row is None or row < 0:
+            return
         self.resonance_table.removeRow(row)
         self._refresh_resonance_table_layout()
         self.callback_res_settings(row)
@@ -2780,8 +2798,8 @@ class AnalysisManager(QtCore.QObject):
         """Show resonance-driven H seeds live in the Seed spectra plot.
 
         Runs the same seed-pixel search and pixel-mean the analysis uses
-        (`set_H_seeds_from_spectral_info`), so the dashed preview curve IS the
-        H seed a run would start from. Debounced by `_seed_preview_timer`;
+        (`set_H_seeds_from_spectral_info`), so the dashed preview curve equals
+        the H seed a run would start from. Debounced by `_seed_preview_timer`;
         deferred while a real seed build or an analysis is running.
         """
         if self.roi_manager is None or self.resonance_table is None:
@@ -3065,8 +3083,8 @@ class AnalysisManager(QtCore.QObject):
         component_combobox: QtWidgets.QComboBox = self.resonance_table.cellWidget(row, self.res_settings_widget_columns['Component'])
         if component_combobox is None:
             return None
-        # Items are in component order, so the index IS the component number.
-        # (Item texts may carry user-facing component names.)
+        # Items are in component order, so the index is the component number.
+        # Item texts may carry user-defined names and must not be parsed.
         idx = component_combobox.currentIndex()
         return idx if idx >= 0 else None
 
@@ -3186,10 +3204,8 @@ class AnalysisManager(QtCore.QObject):
             for info_dict in info_dict_list:
                 res_indices = np.append(res_indices, self.mv_analyzer.return_resonance_indices(info_dict))
 
-            # ... (Logic for weights and subtracted data same as before) ...
-
+            # uniform weights over the collected resonance slices
             weights = np.ones(res_indices.size)
-            # Shortened for brevity: insert your existing W seed averaging code here
             data = self.mv_analyzer.data_2d
             if self.resonance_table.cellWidget(self.get_row_index(i),
                                                self.res_settings_widget_columns['Use subtracted data']).isChecked():
@@ -3865,7 +3881,7 @@ class AnalysisManager(QtCore.QObject):
             del blocker
 
     def _refresh_spectral_column_labels(self):
-        # Header text (keep your internal column keys "Wavenumber"/"Width"!)
+        # Header display text only; the internal column keys "Wavenumber"/"Width" stay stable.
         wn_col = self.res_settings_widget_columns.get("Wavenumber")
         wd_col = self.res_settings_widget_columns.get("Width")
         axis_labels = getattr(self, "axis_labels", None)

@@ -485,7 +485,7 @@ class MainApplication(QtWidgets.QMainWindow):
         # 3) analysis resonance table + seed window label
         self.analysis_manager.set_spectral_units(unit)
 
-        # 4) optional: your extra ROI plot in data_widgets.py if it exists
+        # 4) optional extra ROI plot in data_widgets.py, when it exists
         if getattr(self.data_widget, "roi_avg_plot_wid", None) is not None:
             axis_labels = getattr(self.data_handler.wavenumber_widget, "custom_axis_labels", None)
             self.data_widget.roi_avg_plot_wid.setLabel(

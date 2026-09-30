@@ -3638,8 +3638,9 @@ class ROIManager(QtCore.QObject):
         """
         col = self.widget_columns['Resonance']
 
-        # The combos are populated in component order, so the current index IS
-        # the component number — robust against renamed item texts.
+        # The combos are populated in component order, so the current index is
+        # the component number; item texts may carry user-defined names and
+        # must not be parsed.
         widget = self.roi_table.cellWidget(idx, col)
         if isinstance(widget, QtWidgets.QComboBox):
             index = widget.currentIndex()
@@ -4528,7 +4529,7 @@ class ROIManager(QtCore.QObject):
                 roi_obj = self.rois[self.roi_id_idx[roi_id]]
                 row = self.roi_id_idx[roi_id]
             else:
-                # create a base RectROI, then set shape via combobox (reuses your own change_roi_type())
+                # create a base RectROI; the shape combobox below converts it via change_roi_type()
                 pos = entry.get("pos", [0, 0])
                 size = entry.get("size", [10, 10])
                 roi_obj = pg.RectROI(pos, size, pen=(0, 9))
@@ -4607,7 +4608,7 @@ class ROIManager(QtCore.QObject):
 
             if shape_cb is not None:
                 shape_cb.setCurrentText(str(entry.get("roi_shape", "RectROI")))
-                # this triggers change_roi_type via your existing signal
+                # setCurrentText triggers change_roi_type through the combo's signal
 
             # store subtract to apply AFTER everything exists
             if sub_cb is not None and bool(entry.get("subtract", False)):
@@ -4795,8 +4796,8 @@ class ROIPlotter(pg.PlotWidget):
             )
             x_values = np.arange(len(z_data))
 
-        # Reuse the existing curve item: recreating it on every drag frame
-        # (with per-point symbols) is what made ROI drags feel sluggish.
+        # One persistent curve per ROI, updated via setData: creating a new
+        # item (or drawing per-point symbols) is too slow for live drags.
         line = self.roi_avg_lines.get(roi_id)
         if line is None:
             line = self.plot(x_values, z_data, pen=roi_pen)
@@ -4855,8 +4856,8 @@ class ROIPlotter(pg.PlotWidget):
             label = f"Component {comp_idx + 1} (model)"
             self.request_gaussian_component_plot(comp_idx, curve, label)
 
-            # ...or, if you prefer one curve per peak, you'd call
-            # request_gaussian_component_plot once per (center, hwhm, amp).
+            # (per-peak curves would instead call request_gaussian_component_plot
+            # once per (center, hwhm, amp))
 
     def set_component_gaussian(self, component_number: int, z_data: np.ndarray, label: str | None = None):
         """

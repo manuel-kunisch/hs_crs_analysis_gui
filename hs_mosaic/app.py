@@ -10,7 +10,7 @@ import numpy as np
 # PyTorch NNMF/NNLS backends remain available in source and frozen builds.
 from hs_mosaic.widgets import nnls_pytorch, torch_nmf
 import pyqtgraph as pg
-from PyQt5 import QtCore, Qt  # Import the necessary modules
+from PyQt5 import QtCore, QtGui, Qt  # Import the necessary modules
 from PyQt5 import QtWidgets
 from PyQt5.QtGui import QColor, QIcon
 from pyqtgraph.dockarea.Dock import Dock
@@ -280,8 +280,10 @@ class MainApplication(QtWidgets.QMainWindow):
         # add the dock with all thew widgets to the data section
         data_layout.addWidget(main_dock_area)
         # Add the fixed dock composite_image to the result section tab
-        self.tab_widget.addTab(data_layout_widget, "Data Section")
-        self.tab_widget.addTab(dock_window, "Result Section")
+        self.tab_widget.addTab(data_layout_widget, "Data")
+        self.tab_widget.addTab(dock_window, "Results")
+
+        self._init_menu_and_statusbar()
 
         # TODO: remove placeholder in future verions
         # global example_image2
@@ -302,6 +304,68 @@ class MainApplication(QtWidgets.QMainWindow):
 
 
 
+
+    def _init_menu_and_statusbar(self):
+        """Menu bar with the main entry points and a status-bar hover readout."""
+        from hs_mosaic.widgets import theme
+
+        file_menu = self.menuBar().addMenu("&File")
+        open_action = file_menu.addAction(theme.icon("mdi.folder-open-outline"), "&Open TIFF…")
+        open_action.setShortcut(QtGui.QKeySequence.Open)
+        open_action.triggered.connect(self.data_handler.loader_widget.load_image_from_file_dialog)
+        file_menu.addSeparator()
+        load_preset_action = file_menu.addAction(theme.icon("mdi.tray-arrow-up"), "&Load preset…")
+        load_preset_action.triggered.connect(self.load_state)
+        save_preset_action = file_menu.addAction(theme.icon("mdi.tray-arrow-down"), "&Save preset…")
+        save_preset_action.setShortcut(QtGui.QKeySequence.Save)
+        save_preset_action.triggered.connect(self.save_state)
+        file_menu.addSeparator()
+        quit_action = file_menu.addAction("&Quit")
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(self.close)
+
+        view_menu = self.menuBar().addMenu("&View")
+        data_tab_action = view_menu.addAction("&Data")
+        data_tab_action.setShortcut("Ctrl+1")
+        data_tab_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(0))
+        results_tab_action = view_menu.addAction("&Results")
+        results_tab_action.setShortcut("Ctrl+2")
+        results_tab_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(1))
+
+        help_menu = self.menuBar().addMenu("&Help")
+        docs_action = help_menu.addAction(theme.icon("mdi.book-open-variant"), "&Documentation")
+        docs_action.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl("https://manuel-kunisch.github.io/hs_crs_analysis_gui/")))
+        controls_action = help_menu.addAction("&Mouse and keyboard controls")
+        controls_action.triggered.connect(self._show_controls_help)
+
+        # Hover readout: pixel position, value and spectral coordinate of the
+        # cursor in the raw-data viewer (fed by DataWidget.hover_info_signal).
+        self.readout_label = QtWidgets.QLabel("")
+        self.readout_label.setObjectName("ReadoutLabel")
+        self.statusBar().addWidget(self.readout_label, 1)
+        self.data_widget.hover_info_signal.connect(self.readout_label.setText)
+        self.result_viewer_widget.hover_info_signal.connect(self.readout_label.setText)
+
+    def _show_controls_help(self):
+        QtWidgets.QMessageBox.information(
+            self,
+            "Controls",
+            "Image view\n"
+            "  wheel / drag\t zoom and pan; right-click > View All refits\n"
+            "  hover\t\t live spectrum in the Seed spectra plot + pixel readout below\n"
+            "  click a ROI\t select it (also selects its table row); Esc deselects\n"
+            "  Space\t\t play / pause the band sweep\n"
+            "  A / S\t\t auto-level / auto-range the image\n\n"
+            "Display modes (toolbar)\n"
+            "  Single band\t browse bands with the timeline slider\n"
+            "  Band average\t drag the shaded region on the timeline to average bands\n"
+            "  RGB composite\t drag the R/G/B regions to build a false-color image\n\n"
+            "ROI table\n"
+            "  right-click a row\t all per-ROI actions (export, background, shape…)\n"
+            "  Del\t\t remove the selected ROI\n"
+            "  selected row\t edit fine-tuning in the panel below the table",
+        )
 
     def _show_results_after_analysis(self):
         if self.analysis_manager.last_analysis_was_cancelled():
@@ -378,6 +442,9 @@ class MainApplication(QtWidgets.QMainWindow):
             current_slice_index=self.data_handler.get_current_slice_index(),
         )
         self.analysis_manager.update_image_data(img_array, self.data_handler.wavenumber_widget.wavenumbers)
+        # existing results no longer belong to the new data: stop the composite
+        # hover from reading the old cube (and release the reference to it)
+        self.result_viewer_widget.set_hover_source(None)
         self.data_widget.update_img(img_array, preserve_channel=preserve_channel)
         # make the roi manager highlight all rois again if spectral info exists
         self.data_widget.roi_manager.roi_plotter.remove_all_highlights()
@@ -476,6 +543,8 @@ class MainApplication(QtWidgets.QMainWindow):
                                                fit_info=self.analysis_manager.get_analysis_fit_info(),
                                                spectral_axis=result_spectral_axis,
                                                outer_axis_label=self.analysis_manager.get_analysis_series_label())
+        # hovering the composite compares this cube's pixel spectra with H
+        self.result_viewer_widget.set_hover_source(self.analysis_manager.get_analysis_source_stack())
 
     def import_displayed_result_component(self, target: str, component_index: int, slice_index: int):
         self.analysis_manager.import_current_result_component(target, component_index, slice_index)

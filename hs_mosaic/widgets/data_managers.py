@@ -46,23 +46,13 @@ class ImageLoader(QtWidgets.QWidget):
         data_h_layout = QtWidgets.QHBoxLayout()
 
         # Create drag & drop label
-        self.drag_label = QtWidgets.QLabel("📂 Drag & Drop TIFF Files Here")
-        #self.drag_label.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignHCenter)
+        self.drag_label = QtWidgets.QLabel("📂  Drop a TIFF stack here — or click to browse")
+        self.drag_label.setObjectName("DragDropLabel")  # styled by the app theme
+        self.drag_label.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignHCenter)
         self.drag_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        # self.drag_label.setFixedHeight(60)
-        # self.drag_label.setMaximumWidth(700)
+        self.drag_label.setCursor(QtCore.Qt.PointingHandCursor)
         # add linebreaks to the label if the text is too long
         self.drag_label.setWordWrap(True)
-        # Set style for the drag label
-        self.drag_label.setStyleSheet("""
-            QLabel {
-                border: 1px dashed #888;
-                border-radius: 6px;
-                padding: 8px;
-                background: #2b2b2b;
-                color: #ddd;
-            }
-        """)
 
         # Enable drag & drop
         self.drag_label.setAcceptDrops(True)

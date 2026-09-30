@@ -68,6 +68,9 @@ class RamanImageView(ImageViewLineRoi):
         self.wavenumber = None
         self.axis_labels = None
         self.roiPlotWidget = roi_plot_widget
+        # When set, the DataWidget owns the view title (band-average / RGB /
+        # projection modes); frame changes must not overwrite it.
+        self.title_override = None
 
     def set_spectral_units(self, unit: str):
         unit = normalize_spectral_unit(unit)
@@ -105,6 +108,10 @@ class RamanImageView(ImageViewLineRoi):
 
     def updateImage(self, show_frame_label=False, **kwargs):
         super().updateImage(**kwargs)
+        if self.title_override is not None:
+            if self.view is not None:
+                self.view.setTitle(self.title_override)
+            return
         frame = self.currentIndex
         if show_frame_label:
             self.frame_label.setText(f'Frame: {frame}')
@@ -119,7 +126,16 @@ class RamanImageView(ImageViewLineRoi):
 
     def roiChanged(self, *args, plot_widget=None):
         # args is the line roi which is passed at the event call
-        data_cur_im, coords = self.roi.getArrayRegion(self.image[self.currentIndex, ...], self.imageItem, axes=(1, 0), returnMappedCoords=True)
+        if self.image is None:
+            return
+        if self.axes.get('t') is not None:
+            frame = self.image[self.currentIndex, ...]
+        else:
+            # single-frame display modes (band average, RGB composite, projections)
+            frame = self.image
+            if frame.ndim == 3:  # RGB composite: average the channels for the linescan
+                frame = frame.mean(axis=-1)
+        data_cur_im, coords = self.roi.getArrayRegion(frame, self.imageItem, axes=(1, 0), returnMappedCoords=True)
         y_vals = data_cur_im
 
         pl = plot_widget
@@ -172,6 +188,35 @@ class RamanImageView(ImageViewLineRoi):
         self.ui.roiPlot.setVisible(showRoiPlot)
         """
         pass
+
+    @staticmethod
+    def robust_levels_of(array, clip_percent: float = 0.5):
+        """Percentile-based display levels: hot pixels no longer flatten the image."""
+        values = np.asarray(array)
+        # subsample large arrays; percentiles are stable under striding
+        while values.size > 1_000_000:
+            values = values[tuple(slice(None, None, 2) for _ in range(values.ndim))]
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return None
+        lo, hi = np.percentile(values, [clip_percent, 100.0 - clip_percent])
+        lo, hi = float(lo), float(hi)
+        if hi <= lo:
+            hi_fallback = float(values.max())
+            hi = hi_fallback if hi_fallback > lo else lo + 1.0
+        return lo, hi
+
+    def autoLevels(self):
+        """Auto contrast with robust percentiles (instead of raw min/max)."""
+        levels = self.robust_levels_of(self.image) if self.image is not None else None
+        if levels is None:
+            return super().autoLevels()
+        lo, hi = levels
+        self.setLevels(min=lo, max=hi)
+        try:
+            self.ui.histogram.setHistogramRange(lo, hi)
+        except Exception:
+            pass
 
     def stopAutoPlay(self):
         self.set_playing(False)
@@ -272,17 +317,20 @@ class RamanImageView(ImageViewLineRoi):
         # keep the current frame index
         current_frame = self.currentIndex
         logger.debug('setImage method called')
-        histogram_state = self._capture_histogram_state() if keep_viewbox else None
+        # Default axes assume a (t, y, x) grayscale stack. Callers that need
+        # to display a single RGB(A) frame (e.g. the composite mirror from
+        # the result viewer) can pass an explicit axes={'x': 1, 'y': 0, 'c': 2}.
+        axes_override = kwargs.pop('axes', {'x': 2, 'y': 1, 't': 0})
+        # Never restore a mono histogram state onto an RGB image (its levels,
+        # e.g. 0..65535 counts, would black out normalized 0..1 channels).
+        is_rgb = axes_override.get('c') is not None
+        histogram_state = self._capture_histogram_state() if (keep_viewbox and not is_rgb) else None
         if keep_viewbox:
             view = self.getView()
             view_range = view.viewRange()
             kwargs.setdefault('autoLevels', False)
             kwargs.setdefault('autoHistogramRange', False)
         self._suppress_manual_stop = True
-        # Default axes assume a (t, y, x) grayscale stack. Callers that need
-        # to display a single RGB(A) frame (e.g. the composite mirror from
-        # the result viewer) can pass an explicit axes={'x': 1, 'y': 0, 'c': 2}.
-        axes_override = kwargs.pop('axes', {'x': 2, 'y': 1, 't': 0})
         try:
             super().setImage(*args, axes=axes_override, **kwargs)
         finally:

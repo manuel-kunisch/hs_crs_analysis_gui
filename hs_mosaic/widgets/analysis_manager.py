@@ -143,6 +143,25 @@ class AnalysisManager(QtCore.QObject):
             self.roi_manager.preset_load_signal.connect(_schedule_diagnostics)
             # fires on every curve replot, including live ROI drags
             self.roi_manager.plot_roi_signal.connect(_schedule_diagnostics)
+            # keep the resonance-table component combos showing the ROI names,
+            # and link row selection between the two tables (component = link)
+            self.roi_manager.label_change_signal.connect(self._refresh_component_combo_texts)
+            self.roi_manager.component_selected_signal.connect(self._on_roi_component_selected)
+            # Live H-seed preview: components whose seed comes from the
+            # resonance table (no ROI / spectrum row) get their seed-pixel
+            # mean spectrum computed on the fly and shown as a dashed curve
+            # in the Seed spectra plot — no "Test seeds" run needed.
+            self._seed_preview_timer = QtCore.QTimer(self)
+            self._seed_preview_timer.setSingleShot(True)
+            self._seed_preview_timer.setInterval(400)
+            self._seed_preview_timer.timeout.connect(self._update_seed_previews)
+            self.roi_manager.new_roi_signal.connect(self._schedule_seed_preview)
+            self.roi_manager.remove_roi_plot_signal.connect(self._schedule_seed_preview)
+            self.roi_manager.label_change_signal.connect(self._schedule_seed_preview)
+        else:
+            self._seed_preview_timer = None
+        self._seed_preview_running = False
+        self._selection_sync_guard = False
         self.seed_window: QtWidgets.QMainWindow or None = None
         self.z3D_data = None
         # add an attribute to store fixed W components for NNMF
@@ -288,44 +307,6 @@ class AnalysisManager(QtCore.QObject):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
-        self.analysis_widget.setStyleSheet("""
-        QGroupBox {
-            font-weight: 600;
-            border: 1px solid rgba(180,180,180,0.35);
-            border-radius: 8px;
-            margin-top: 10px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 6px;
-        }
-        QPushButton, QToolButton {
-            padding: 6px 10px;
-        }
-        QToolButton#AnalyzeTool {
-            border-radius: 10px;
-            padding: 10px 14px;
-            font-weight: 700;
-            color: white;
-            background-color: #4f79aa;
-            border: 1px solid #7ea8d6;
-            border-bottom: 3px solid #2d4f75;
-        }
-        QToolButton#AnalyzeTool:hover {
-            background-color: #5c88bc;
-        }
-        QToolButton#AnalyzeTool:pressed {
-            background-color: #436a97;
-            border-bottom: 1px solid #2d4f75;
-            padding-top: 12px;
-            padding-bottom: 8px;
-        }
-        QHeaderView::section {
-            padding: 6px;
-        }
-        """)
-
         # -----------------------------
         # Top row: Analysis settings + big Analyze button
         # -----------------------------
@@ -341,7 +322,7 @@ class AnalysisManager(QtCore.QObject):
 
         def _make_section_title(text: str) -> QtWidgets.QLabel:
             label = QtWidgets.QLabel(text)
-            label.setStyleSheet("font-weight: 700; color: #d7dee8;")
+            label.setObjectName("SectionTitle")
             return label
 
         def _make_divider() -> QtWidgets.QFrame:
@@ -407,7 +388,6 @@ class AnalysisManager(QtCore.QObject):
             "Effective rank of the dataset (how many components the data can support)\n"
             "and the separability of the current component spectra."
         )
-        self.diagnostics_button.setFixedWidth(110)
         self.diagnostics_button.clicked.connect(
             lambda: self.open_diagnostics(UnmixingDiagnosticsDialog.DATASET_TAB)
         )
@@ -533,6 +513,18 @@ class AnalysisManager(QtCore.QObject):
         options_form.addRow(nnls_iters_label, self.nnls_max_iter_spinbox)
 
         options_layout.addLayout(options_form)
+        self.advanced_toggle = QtWidgets.QToolButton()
+        self.advanced_toggle.setText("Performance tuning…")
+        self.advanced_toggle.setCheckable(True)
+        self.advanced_toggle.setChecked(False)
+        self.advanced_toggle.setArrowType(QtCore.Qt.RightArrow)
+        self.advanced_toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self.advanced_toggle.setToolTip(
+            "Show the solver performance panel (tolerances, early-stop patience,\n"
+            "W-seed downsampling, torch.compile). Defaults are safe; open this\n"
+            "only to trade accuracy against speed."
+        )
+        options_layout.addWidget(self.advanced_toggle)
         options_layout.addStretch(1)
         analysis_layout.addWidget(options_panel)
         analysis_layout.addWidget(_make_divider())
@@ -675,7 +667,19 @@ class AnalysisManager(QtCore.QObject):
         perf_layout.addStretch(1)
         perf_layout.addWidget(self.nnmf_use_compile_check)
         analysis_layout.addWidget(perf_panel)
-        analysis_layout.addWidget(_make_divider())
+        perf_divider = _make_divider()
+        analysis_layout.addWidget(perf_divider)
+
+        # Performance tuning is expert territory: collapsed by default so the
+        # analysis panel leads with the choices every run actually needs.
+        def _toggle_perf(visible: bool):
+            perf_panel.setVisible(visible)
+            perf_divider.setVisible(visible)
+            self.advanced_toggle.setArrowType(
+                QtCore.Qt.DownArrow if visible else QtCore.Qt.RightArrow)
+
+        self.advanced_toggle.toggled.connect(_toggle_perf)
+        _toggle_perf(False)
 
         seed_panel = QtWidgets.QWidget()
         seed_panel.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
@@ -718,6 +722,8 @@ class AnalysisManager(QtCore.QObject):
         self.seed_pixel_mode_dropdown.currentTextChanged.connect(
             lambda text: setattr(self, "_seed_pixel_mode", text)
         )
+        # the metric changes which pixels are found → refresh the live preview
+        self.seed_pixel_mode_dropdown.currentTextChanged.connect(self._schedule_seed_preview)
         seed_pixel_metric_row.addWidget(seed_pixel_metric_label)
         seed_pixel_metric_row.addWidget(self.seed_pixel_mode_dropdown)
         seed_pixel_metric_row.addStretch(1)
@@ -826,7 +832,7 @@ class AnalysisManager(QtCore.QObject):
         progress_layout.setContentsMargins(0, 0, 0, 0)
         progress_layout.setSpacing(3)
         self.analysis_progress_label = QtWidgets.QLabel("Slice progress")
-        self.analysis_progress_label.setStyleSheet("color: #97a3af; font-size: 11px;")
+        self.analysis_progress_label.setObjectName("HintLabel")
         self.analysis_progress_bar = QtWidgets.QProgressBar()
         self.analysis_progress_bar.setRange(0, 100)
         self.analysis_progress_bar.setValue(0)
@@ -874,6 +880,9 @@ class AnalysisManager(QtCore.QObject):
         self.resonance_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         # restrict to single row selection
         self.resonance_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.resonance_table.verticalHeader().setVisible(False)
+        # selecting a resonance row selects the matching component's ROI
+        self.resonance_table.currentCellChanged.connect(self._on_resonance_selection_changed)
         self._refresh_resonance_table_layout()
         QtCore.QTimer.singleShot(0, self._refresh_resonance_table_layout)
 
@@ -884,7 +893,7 @@ class AnalysisManager(QtCore.QObject):
         del_shortcut.activated.connect(lambda: self.remove_res_settings(self.resonance_table.currentRow()))
 
         hint = QtWidgets.QLabel('Tip: Press <b>Ctrl+D</b> to delete the selected resonance row.')
-        hint.setStyleSheet("opacity: 0.75;")
+        hint.setObjectName("HintLabel")
         hint.setAlignment(QtCore.Qt.AlignRight)
         left_layout.addWidget(hint)
 
@@ -907,29 +916,22 @@ class AnalysisManager(QtCore.QObject):
             "list-add", QtWidgets.QStyle.SP_FileDialogNewFolder,
             slot=self.add_resonance_settings
         )
-        check_W_seeds_button = _make_btn(
-            "Preview W seeds",
-            "dialog-ok-apply", QtWidgets.QStyle.SP_DialogApplyButton,
-            slot=self.show_W_seeds,
-            tooltip="Preview the current W maps with the selected W seed method."
-        )
+        # H seeds are previewed LIVE in the Seed spectra plot (dashed curves
+        # for resonance-driven components), so the only heavy preview left is
+        # the W maps — the full build stays behind this one button.
         test_seeds_button = _make_btn(
-            "Test seeds",
+            "Preview W seeds…",
             "system-run", QtWidgets.QStyle.SP_BrowserReload,
             slot=lambda: self.make_all_seeds_from_inputs(show_seeds=True),
-            tooltip="Runs your seed generation and opens the seed preview window."
+            tooltip="Build the full seed set (H and the W maps, exactly as a run would)\n"
+                    "and open the seed inspector window.\n\n"
+                    "H seeds are already shown live in the Seed spectra plot: solid\n"
+                    "curves for ROI/spectrum rows, dashed curves for components whose\n"
+                    "seed is found from the resonance table's seed pixels."
         )
 
         actions_layout.addWidget(add_button)
         actions_layout.addWidget(test_seeds_button)
-        """
-        # old layout
-        check_layout = QtWidgets.QHBoxLayout()
-        check_layout.setSpacing(8)
-        check_layout.addWidget(check_W_seeds_button)
-        check_layout.addWidget(test_seeds_button)
-        actions_layout.addLayout(check_layout)
-        """
 
         right_layout.addWidget(actions_gb)
 
@@ -1794,10 +1796,12 @@ class AnalysisManager(QtCore.QObject):
         n = mv.get_n_components()
         H = None
         for seed in curves:
-            try:
-                component_index = int(str(seed["resonance"]).strip("Component ")) - 1
-            except (KeyError, ValueError):
-                continue
+            component_index = seed.get("component")
+            if component_index is None:
+                try:
+                    component_index = int(str(seed["resonance"]).strip("Component ")) - 1
+                except (KeyError, ValueError):
+                    continue
             spectrum = np.asarray(seed.get("H"), dtype=np.float64).ravel()
             if not (0 <= component_index < n) or spectrum.size == 0:
                 continue
@@ -2243,8 +2247,9 @@ class AnalysisManager(QtCore.QObject):
             self.set_fixed_W_seed(component_index, roi.fixed_W)
             logger.info(f'Setting fixed W seed for component {component_index} from ROI')
         for i, seed_dict in enumerate(seeds_list):
-            component_number = int(seed_dict['resonance'].strip('Component '))
-            component_index =  component_number - 1
+            component_index = seed_dict.get('component')
+            if component_index is None:
+                component_index = int(seed_dict['resonance'].strip('Component ')) - 1
 
             flag_bgd = bool(seed_dict.get('is_background', False))
             if component_index >= self.mv_analyzer.get_n_components():
@@ -2457,6 +2462,16 @@ class AnalysisManager(QtCore.QObject):
             return self.mv_analyzer.PCs[:n_components], self.mv_analyzer.pca_2DX[:n_components]
         return self.mv_analyzer.fixed_H, self.mv_analyzer.fixed_W_2D
 
+    def get_analysis_source_stack(self) -> np.ndarray | None:
+        """The data cube the displayed result was fitted on, by reference.
+
+        3D ``(bands, y, x)`` for single-stack runs, 4D ``(slice, bands, y, x)``
+        for series results. Used by the result viewer's hover spectrum.
+        """
+        if self._analysis_series_4d is not None:
+            return self._analysis_series_4d
+        return self.mv_analyzer.raw_data_3d
+
     def get_analysis_fit_info(self) -> dict | list[dict | None] | None:
         if self._analysis_fit_info is not None:
             return self._analysis_fit_info
@@ -2477,15 +2492,15 @@ class AnalysisManager(QtCore.QObject):
         indicator_width = self.resonance_table.style().pixelMetric(QtWidgets.QStyle.PM_IndicatorWidth) + 16
 
         default_widths = {
-            "Component": 130,
+            "Component": 140,
             "Wavenumber": 120,
             "# Seed Pixels": 120,
             "Amplitude": 110,
-            "Color": 64,
-            "Width": 72,
-            "Use subtracted data": 136,
-            "Use Gaussian": 110,
-            "Remove": 88,
+            "Color": 70,
+            "Width": 80,
+            "Use subtracted data": 140,
+            "Use Gaussian": 112,
+            "Remove": 96,
         }
         for name, width in default_widths.items():
             if name in self.res_settings_widget_columns:
@@ -2582,9 +2597,12 @@ class AnalysisManager(QtCore.QObject):
         row_position = self.resonance_table.rowCount()
         self.resonance_table.insertRow(row_position)
 
-        # 1. Component Selection
+        # 1. Component Selection (item texts mirror the ROI-table component names)
         item_comp = QtWidgets.QComboBox()
-        item_comp.addItems([f"Component {i + 1}" for i in range(9)])
+        if self.roi_manager is not None:
+            item_comp.addItems([self.roi_manager.component_display_text(i) for i in range(9)])
+        else:
+            item_comp.addItems([f"Component {i + 1}" for i in range(9)])
         item_comp.setCurrentIndex(row_position % 9)
         # Determine the initial component index
         comp_idx = row_position % 9
@@ -2734,6 +2752,77 @@ class AnalysisManager(QtCore.QObject):
         logger.info(f'new spectral info in the mv_analyzer:{self.mv_analyzer.spectral_info}')
         # TODO: lazy variant, rehighlight all resonances when something changes, hard to keep track of all changes
         self.highlight_all_resonances()
+        self._schedule_seed_preview()
+
+    # ------------------------------------------------------------------
+    # Live H-seed preview (resonance-table components without a ROI)
+    # ------------------------------------------------------------------
+    def _schedule_seed_preview(self, *_args):
+        if getattr(self, "_seed_preview_timer", None) is not None:
+            self._seed_preview_timer.start()
+
+    def _resonance_preview_components(self) -> list[int]:
+        """Components whose H seed would come from resonance-table seed pixels."""
+        wanted: list[int] = []
+        for row in range(self.resonance_table.rowCount()):
+            component = self.get_component_index(row)
+            if component is None or component in wanted:
+                continue
+            info = self.get_spectral_info_row(row)
+            if not info or info.get('Use Gaussian'):
+                continue
+            if self.roi_manager.is_component_defined(component):
+                continue  # a ROI / spectrum row already provides (and plots) the seed
+            wanted.append(component)
+        return wanted
+
+    def _update_seed_previews(self):
+        """Show resonance-driven H seeds live in the Seed spectra plot.
+
+        Runs the same seed-pixel search and pixel-mean the analysis uses
+        (`set_H_seeds_from_spectral_info`), so the dashed preview curve IS the
+        H seed a run would start from. Debounced by `_seed_preview_timer`;
+        deferred while a real seed build or an analysis is running.
+        """
+        if self.roi_manager is None or self.resonance_table is None:
+            return
+        if self._seed_preview_running or self._analysis_running or self._seed_building:
+            self._schedule_seed_preview()
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is not None and app.activeModalWidget() is not None:
+            # don't run a (possibly heavy) pixel search inside a dialog's
+            # nested event loop; try again once the dialog is gone
+            self._schedule_seed_preview()
+            return
+        plotter = self.roi_manager.roi_plotter
+        wanted = [] if self.z3D_data is None else self._resonance_preview_components()
+        self._seed_preview_running = True
+        try:
+            found: dict[int, np.ndarray] = {}
+            if wanted:
+                try:
+                    pixels_by_component = self.find_seed_pixels(components=wanted)
+                except Exception:
+                    logger.debug("Seed-preview pixel search failed", exc_info=True)
+                    pixels_by_component = {}
+                for component, pixels in pixels_by_component.items():
+                    spectra = self.z3D_data[:, pixels[0], pixels[1]]
+                    found[component] = np.mean(spectra, axis=1)
+            for component, spectrum in found.items():
+                label = f"{self.roi_manager.component_display_text(component)} (seed px)"
+                plotter.set_component_seed_spectrum(component, spectrum, label)
+                # mark the found pixels in the image view (same pixels the
+                # analysis would average into this component's H seed)
+                self.roi_manager.set_seed_pixel_overlay(component, pixels_by_component.get(component))
+            # previews of components that no longer qualify are cleared
+            # (entries that also carry a Gaussian model keep the model)
+            for component in list(plotter.component_gaussians.keys()):
+                if component not in found:
+                    plotter.set_component_seed_spectrum(component, None)
+            self.roi_manager.prune_seed_pixel_overlays(set(found))
+        finally:
+            self._seed_preview_running = False
 
     def highlight_all_resonances(self):
         self.roi_manager.roi_plotter.remove_all_highlights(delete_spectral_info=True)
@@ -2976,8 +3065,54 @@ class AnalysisManager(QtCore.QObject):
         component_combobox: QtWidgets.QComboBox = self.resonance_table.cellWidget(row, self.res_settings_widget_columns['Component'])
         if component_combobox is None:
             return None
-        idx = int(component_combobox.currentText().split(' ')[-1]) - 1
-        return idx
+        # Items are in component order, so the index IS the component number.
+        # (Item texts may carry user-facing component names.)
+        idx = component_combobox.currentIndex()
+        return idx if idx >= 0 else None
+
+    def _refresh_component_combo_texts(self, component_number: int, _label: str = ""):
+        """Mirror the ROI table's component names into the resonance-table combos."""
+        if self.roi_manager is None or self.resonance_table is None:
+            return
+        if not 0 <= component_number < 9:
+            return
+        text = self.roi_manager.component_display_text(component_number)
+        col = self.res_settings_widget_columns['Component']
+        for row in range(self.resonance_table.rowCount()):
+            combo = self.resonance_table.cellWidget(row, col)
+            if isinstance(combo, QtWidgets.QComboBox) and component_number < combo.count():
+                combo.setItemText(component_number, text)
+
+    def _on_roi_component_selected(self, component: int):
+        """A ROI row was selected: highlight the matching resonance row."""
+        if self._selection_sync_guard or component < 0 or self.resonance_table is None:
+            return
+        row = self.get_row_index(component)
+        if row is None or row == self.resonance_table.currentRow():
+            return
+        self._selection_sync_guard = True
+        try:
+            self.resonance_table.selectRow(row)
+        finally:
+            self._selection_sync_guard = False
+
+    def _on_resonance_selection_changed(self, current_row: int, *_args):
+        """A resonance row was selected: select the matching component's ROI."""
+        if self._selection_sync_guard or self.roi_manager is None or current_row < 0:
+            return
+        component = self.get_component_index(current_row)
+        if component is None:
+            return
+        for row in range(self.roi_manager.roi_table.rowCount()):
+            if self.roi_manager.component_number_from_table_index(row) == component:
+                if row == self.roi_manager.roi_table.currentRow():
+                    return
+                self._selection_sync_guard = True
+                try:
+                    self.roi_manager._select_roi_by_row(row, ensure_table_visible=True)
+                finally:
+                    self._selection_sync_guard = False
+                return
 
     def get_row_index(self, component_idx: int) -> int | None:
         """
@@ -3544,6 +3679,7 @@ class AnalysisManager(QtCore.QObject):
         if self._diagnostics_dialog is not None and self._diagnostics_dialog.isVisible():
             self._diagnostics_dialog.refresh()
         self.update_diagnostics_badges()
+        self._schedule_seed_preview()
 
     def update_modified_data(self, data: np.ndarray):
         self.mv_analyzer.update_resonance_image_data(data)

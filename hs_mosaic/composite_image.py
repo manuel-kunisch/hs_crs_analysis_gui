@@ -12,9 +12,10 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QHBoxLayout, QSpinBox, QComboBox,
     QPushButton, QColorDialog, QSizePolicy, QGridLayout, QSpacerItem, QSplitter, QSlider, QCheckBox, QFileDialog,
-    QMessageBox, QDialog, QDialogButtonBox, QFormLayout)
+    QMessageBox, QDialog, QDialogButtonBox, QFormLayout, QToolButton)
 from pyqtgraph import PlotItem
 
+from hs_mosaic.widgets import theme
 from hs_mosaic.widgets.color_manager import ComponentColorManager
 from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYXC, ImageViewLineRoiYXZ
 from hs_mosaic.widgets.fiji_saver import FIJISaver
@@ -50,6 +51,8 @@ class CompositeImageViewWidget(QMainWindow):
     # "Composite from analysis" projection mode) can connect to this to
     # mirror the composite display elsewhere in the GUI.
     compositeImageChanged = pyqtSignal(object)
+    # readout for the main-window status bar while hovering the composite
+    hover_info_signal = pyqtSignal(str)
     def __init__(self, img:np.ndarray = None, spectral_cmps: np.ndarray|None = None,
                  color_manager: ComponentColorManager=None):
         super().__init__()
@@ -82,6 +85,9 @@ class CompositeImageViewWidget(QMainWindow):
         self.export_scalebar_visible = False
         self.update_thread = QThread()
         self.timeout_callbacks = False
+        # True while update_channel_view mutates the channel widget: histogram
+        # signals fired then must not be persisted as the channel's state.
+        self._suspend_state_capture = False
 
         # Short update timer to prevent excessive level updates
         self._levels_refresh_timer = QTimer(self)
@@ -100,32 +106,32 @@ class CompositeImageViewWidget(QMainWindow):
         self.master_v_layout = QVBoxLayout(self.central_widget)
         self.master_v_layout.setContentsMargins(14, 14, 14, 14)
         self.master_v_layout.setSpacing(12)
-        self.central_widget.setStyleSheet("""
-            QWidget#resultRoot {
-                background-color: #303030;
-            }
-            QWidget#resultPanel {
-                background-color: #383838;
-                border: 1px solid #4a4a4a;
+        self.central_widget.setStyleSheet(f"""
+            QWidget#resultRoot {{
+                background-color: {theme.PANEL};
+            }}
+            QWidget#resultPanel {{
+                background-color: {theme.PANEL_2};
+                border: 1px solid {theme.BORDER_SOFT};
                 border-radius: 8px;
-            }
-            QWidget#resultSubpanel {
-                background-color: #323232;
-                border: 1px solid #505050;
+            }}
+            QWidget#resultSubpanel {{
+                background-color: {theme.PANEL};
+                border: 1px solid {theme.BORDER_SOFT};
                 border-radius: 6px;
-            }
-            QLabel[role="sectionTitle"] {
-                color: #f0f0f0;
+            }}
+            QLabel[role="sectionTitle"] {{
+                color: {theme.INK};
                 font-size: 14px;
                 font-weight: 600;
-            }
-            QLabel[role="sectionMeta"] {
-                color: #a8a8a8;
+            }}
+            QLabel[role="sectionMeta"] {{
+                color: {theme.INK_MUTED};
                 font-size: 11px;
-            }
-            QPushButton, QComboBox, QSpinBox, QSlider, QCheckBox {
+            }}
+            QPushButton, QComboBox, QSpinBox, QSlider, QCheckBox {{
                 font-size: 11px;
-            }
+            }}
         """)
 
         # Create a PyqtGraph ImageView widget for the composite image
@@ -157,6 +163,13 @@ class CompositeImageViewWidget(QMainWindow):
         self.legend = self.spectrum_view.addLegend()
         self.spectrum_lines = []
         self.seed_lines = []
+        # Hover spectrum: the analysis data cube behind the displayed result
+        # (reference, set by the app after each run) and the dashed cursor curve
+        self._hover_stack: np.ndarray | None = None
+        self._hover_gain_cache: dict = {}
+        self._component_plot_peak: float | None = None
+        self._pixel_curve: pg.PlotDataItem | None = None
+        self._hover_inside_composite = False
 
         self.custom_labels: dict = {}
 
@@ -446,8 +459,22 @@ class CompositeImageViewWidget(QMainWindow):
         spectrum_title.setProperty("role", "sectionTitle")
         spectrum_meta = QLabel("Compare extracted component spectra and optional seed spectra.")
         spectrum_meta.setProperty("role", "sectionMeta")
+        self.hover_spectrum_button = QToolButton()
+        self.hover_spectrum_button.setIcon(theme.icon('mdi.chart-bell-curve-cumulative'))
+        self.hover_spectrum_button.setCheckable(True)
+        self.hover_spectrum_button.setChecked(True)
+        self.hover_spectrum_button.setToolTip(
+            "Hover spectrum: hovering the composite shows the measured spectrum of\n"
+            "that pixel (dashed) next to the component spectra. The pixel spectrum is\n"
+            "rescaled to the components' plot range — H rows have arbitrary units, so\n"
+            "raw counts would dwarf or vanish against them; the scale factor is shown\n"
+            "in the status-bar readout."
+        )
+        self.hover_spectrum_button.toggled.connect(self._on_hover_spectrum_toggled)
+
         spectrum_header_layout.addWidget(spectrum_title)
         spectrum_header_layout.addWidget(spectrum_meta, stretch=1)
+        spectrum_header_layout.addWidget(self.hover_spectrum_button)
         spectrum_header_layout.addWidget(save_H_as_csv_button)
         spectrum_header_layout.addWidget(export_spectra_button)
         spectrum_header_layout.addWidget(self.show_h_scales_check, alignment=Qt.AlignRight)
@@ -496,6 +523,11 @@ class CompositeImageViewWidget(QMainWindow):
         # hide the gradient ticks
         self.channel_view.getHistogramWidget().gradient.showTicks(True)
         # self.lock_bottom_tick()
+
+        # live spectrum under the cursor in the composite view (throttled)
+        self._hover_proxy = pg.SignalProxy(
+            self.composite_view.scene.sigMouseMoved, rateLimit=30, slot=self._on_composite_hover
+        )
 
     def update_wavenumbers(self, wavenumbers):
         self.wavenumbers = wavenumbers
@@ -802,6 +834,8 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectrum_view.clear()
         self.spectrum_lines = []
         self.seed_lines = []
+        self._pixel_curve = None  # destroyed by clear(); recreated on next hover
+        self._component_plot_peak = None
         # Plot each component of H resp. the PCs
         if spectral_components is not None and spectral_components.ndim == 3:
             spectral_components = spectral_components[self.current_result_slice_index]
@@ -812,6 +846,11 @@ class CompositeImageViewWidget(QMainWindow):
         except AttributeError as e:
             logger.warning(e)
             return
+        finite = np.asarray(spectral_components, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size:
+            # reference amplitude the hover spectrum is rescaled to
+            self._component_plot_peak = float(np.max(np.abs(finite)))
         x_values = self._spectral_x_values(spectral_components.shape[1])
         # self.spectrum_view.setTitle(rf"{'Custom' if self.custom_model else 'Random'} NNMF H Components")
         for i in range(num_components):
@@ -823,6 +862,101 @@ class CompositeImageViewWidget(QMainWindow):
             if self.show_seeds_check.isChecked():
                 self.plot_seeds(self.spectral_cmps_seed, dashed=True)
 
+
+    # ------------------------------------------------------------------
+    # Hover spectrum: measured pixel spectrum vs. the component spectra
+    # ------------------------------------------------------------------
+    def set_hover_source(self, stack: np.ndarray | None):
+        """Analysis data cube behind the displayed result, for the hover spectrum.
+
+        ``stack`` is the cube the fit ran on — 3D (bands, y, x), or 4D
+        (slice, bands, y, x) for series results — held by reference. Pass
+        ``None`` when a new dataset is loaded, so a stale cube is neither
+        shown against newer results nor pinned in memory.
+        """
+        self._hover_stack = stack
+        self._hover_gain_cache = {}
+        self._clear_pixel_curve()
+
+    def _current_hover_cube(self) -> np.ndarray | None:
+        """3D (bands, y, x) cube matching the displayed result, or None."""
+        stack = self._hover_stack
+        if stack is None or self.img is None:
+            return None
+        if stack.ndim == 4:
+            if not 0 <= self.current_result_slice_index < stack.shape[0]:
+                return None
+            stack = stack[self.current_result_slice_index]
+        if stack.ndim != 3 or stack.shape[1:] != self.img.shape[:2]:
+            # result no longer belongs to this cube (e.g. new data was loaded)
+            return None
+        return stack
+
+    def _hover_gain(self, cube: np.ndarray) -> float:
+        """Factor mapping raw counts onto the component-spectra plot range.
+
+        H rows carry arbitrary units (and may be seed-rescaled), so the pixel
+        spectrum is scaled such that the brightest pixel in the cube reaches
+        the tallest plotted component. One global factor per cube keeps the
+        relative intensity between hovered pixels meaningful.
+        """
+        peak = self._component_plot_peak
+        if peak is None or not np.isfinite(peak) or peak <= 0:
+            return 1.0
+        key = self.current_result_slice_index if self._hover_stack is not None and self._hover_stack.ndim == 4 else 0
+        gain = self._hover_gain_cache.get(key)
+        if gain is None:
+            sample = cube[:, ::4, ::4]
+            cube_max = float(np.nanmax(sample)) if sample.size else 0.0
+            gain = peak / cube_max if np.isfinite(cube_max) and cube_max > 0 else 1.0
+            self._hover_gain_cache[key] = gain
+        return gain
+
+    def _clear_pixel_curve(self):
+        if self._pixel_curve is not None:
+            self._pixel_curve.setData([], [])
+        if self._hover_inside_composite:
+            self._hover_inside_composite = False
+            self.hover_info_signal.emit("")
+
+    def _on_hover_spectrum_toggled(self, checked: bool):
+        if not checked:
+            self._clear_pixel_curve()
+
+    def _on_composite_hover(self, args):
+        if (self.img is None or not self.hover_spectrum_button.isChecked()
+                or self.timeout_callbacks):
+            return
+        item = self.composite_view.getImageItem()
+        if item.image is None:
+            return
+        p = item.mapFromScene(args[0])
+        ix, iy = int(np.floor(p.x())), int(np.floor(p.y()))
+        if not (0 <= iy < self.img.shape[0] and 0 <= ix < self.img.shape[1]):
+            self._clear_pixel_curve()
+            return
+        self._hover_inside_composite = True
+
+        # per-component abundance readout (displayed W' values)
+        w_values = np.ravel(self.img[iy, ix])
+        w_text = "  ".join(
+            f"{self.custom_labels.get(k, f'C{k + 1}')} {float(v):.4g}"
+            for k, v in enumerate(w_values)
+        )
+        readout = f"x {ix}   y {iy}   W′: {w_text}"
+
+        cube = self._current_hover_cube()
+        if cube is not None:
+            spectrum = cube[:, iy, ix]
+            gain = self._hover_gain(cube)
+            if self._pixel_curve is None:
+                pen = pg.mkPen(theme.INK, width=1, style=Qt.DashLine)
+                self._pixel_curve = self.spectrum_view.plot([], [], pen=pen)
+                self._pixel_curve.setZValue(30)
+            x_values = self._spectral_x_values(len(spectrum))
+            self._pixel_curve.setData(x_values, np.asarray(spectrum, dtype=np.float64) * gain)
+            readout += f"    [pixel spectrum ×{gain:.3g}]"
+        self.hover_info_signal.emit(readout)
 
     def refresh_label_overlay(self, component_index: int):
         """
@@ -940,7 +1074,11 @@ class CompositeImageViewWidget(QMainWindow):
             self.img_series = None
             self.current_result_slice_index = 0
         self._sync_result_slice_controls()
-        self.composite_view.setImage(self.img)
+        # NOTE: the raw (y, x, k) result stack is never given to the composite
+        # view directly — pyqtgraph can only render 1/3/4-channel images, so a
+        # k=2 or k>4 result would raise paint errors until the false-color
+        # refresh below replaces it. The composite is built exclusively from
+        # the per-channel histogram states via get_rgba().
         # adjust slider and scrollbar to max (1-based: range 1..n_channels)
         channels = self.img.shape[-1]
         self.channel_slider.setMaximum(channels)
@@ -957,6 +1095,9 @@ class CompositeImageViewWidget(QMainWindow):
                 self.update_channel_view(i)
             self.update_channel_view(0)
             self.reset_levels()
+            # build the false-color composite synchronously so the autoRange
+            # below fits the new result instead of a stale image
+            self.update_channel_and_composite_levels()
         else:
             # self.update_channel_view(0)
             self.channel_slider.setValue(1)
@@ -993,10 +1134,9 @@ class CompositeImageViewWidget(QMainWindow):
         self.current_result_slice_index = slice_index
         self._sync_result_slice_controls()
         self.img = self.img_series[self.current_result_slice_index]
-        composite_view_range = self._capture_viewbox_range(self.composite_view)
-        self.composite_view.setImage(self.img, autoLevels=False)
+        # the composite view is refreshed from the histogram states below
+        # (a raw k-channel stack is not renderable for k not in {1, 3, 4})
         self._update_fit_info_label()
-        self._restore_viewbox_range(self.composite_view, composite_view_range)
         self.update_channel_view(min(self._channel_idx, self.img.shape[-1] - 1))
         self.plot_components(self.spectral_cmps_series if self.spectral_cmps_series is not None else self.spectral_cmps)
         self.update_channel_and_composite_levels(composite_levels=composite_levels)
@@ -1206,9 +1346,26 @@ class CompositeImageViewWidget(QMainWindow):
         except Exception:
             logger.debug('Could not restore image view range.', exc_info=True)
 
+    @staticmethod
+    def _safe_levels_for(image) -> tuple[float, float]:
+        """Fallback display levels for ``setImage(..., autoLevels=False)``.
+
+        pyqtgraph cannot render float images without levels — a repaint that
+        lands between setImage and the histogram-state restore would raise
+        'unsupported image type' and leave the view black. Callers apply the
+        real levels right afterwards; these only bridge that gap.
+        """
+        values = np.asarray(image)
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            return (0.0, 1.0)
+        lo = float(finite.min())
+        hi = float(finite.max())
+        return (lo, hi if hi > lo else lo + 1.0)
+
     def update_channel_view(self, channel_index):
         if self.img is None:
-            return 
+            return
         channel_view_range = self._capture_viewbox_range(self.channel_view)
         self.channel_slider.blockSignals(True)
         self.channel_slider.setValue(channel_index + 1)
@@ -1217,34 +1374,48 @@ class CompositeImageViewWidget(QMainWindow):
         # Get the selected channel
         selected_im = self.img[:, :, channel_index]
 
-        # Update the channel view
-        self.channel_view.setImage(selected_im, autoLevels=False)
-        self._restore_viewbox_range(self.channel_view, channel_view_range)
+        # Decide known/unknown BEFORE touching the widget: setting the image
+        # below fires histogram signals whose handler would otherwise create a
+        # default (grey) state for this channel and skip the color assignment.
+        state_known = channel_index in self.histogram_states
 
-        # Apply saved levels and histogram state if available
-        if channel_index in self.histogram_states:
-            histogram_state = self.histogram_states[channel_index]
-            self._restore_channel_histogram_widget_state(histogram_state)
-            colormap_color = self._extract_channel_color_from_ticks(
-                self._sorted_gradient_ticks(histogram_state),
-                fallback=self.colormap_colors[channel_index % len(self.colormap_colors)],
-            )
-            logger.debug("Channel known")
-        else:
-            # If levels or histogram state is not available,
-            # set default levels and histogram state
-            # Choose a predefined colormap color for the first view of each channel from the
-            # config file
-            colormap_color = self.color_manager.get_color_rgb(channel_index) if self.color_manager is not None\
-                else self.colormap_colors[channel_index % len(self.colormap_colors)]
-            self.channel_view.autoLevels()
-            # self.channel_view.setLevels(0, max_dtype_val)
-            # self.channel_view.setLevels(np.amin(selected_im), np.amax(selected_im))
-            channel_histogram_max = self._channel_histogram_upper_bound()
-            self.channel_view.ui.histogram.setHistogramRange(0, channel_histogram_max)
-            self.make_color_state(channel_index, (0, channel_histogram_max), colormap_color, colorpos='default')
-            # self.update_levels()
-            logger.debug("Channel unknown")
+        # Programmatic update: the level/LUT signals fired here reflect the
+        # PREVIOUS channel's widget state (or the default gradient) and must
+        # not be persisted into this channel's histogram state.
+        self._suspend_state_capture = True
+        try:
+            # Update the channel view (explicit levels so a float image stays
+            # renderable until the real histogram state is applied below)
+            self.channel_view.setImage(selected_im, autoLevels=False,
+                                       levels=self._safe_levels_for(selected_im))
+            self._restore_viewbox_range(self.channel_view, channel_view_range)
+
+            # Apply saved levels and histogram state if available
+            if state_known:
+                histogram_state = self.histogram_states[channel_index]
+                self._restore_channel_histogram_widget_state(histogram_state)
+                colormap_color = self._extract_channel_color_from_ticks(
+                    self._sorted_gradient_ticks(histogram_state),
+                    fallback=self.colormap_colors[channel_index % len(self.colormap_colors)],
+                )
+                logger.debug("Channel known")
+            else:
+                # If levels or histogram state is not available,
+                # set default levels and histogram state
+                # Choose a predefined colormap color for the first view of each channel from the
+                # config file
+                colormap_color = self.color_manager.get_color_rgb(channel_index) if self.color_manager is not None\
+                    else self.colormap_colors[channel_index % len(self.colormap_colors)]
+                self.channel_view.autoLevels()
+                # self.channel_view.setLevels(0, max_dtype_val)
+                # self.channel_view.setLevels(np.amin(selected_im), np.amax(selected_im))
+                channel_histogram_max = self._channel_histogram_upper_bound()
+                self.channel_view.ui.histogram.setHistogramRange(0, channel_histogram_max)
+                self.make_color_state(channel_index, (0, channel_histogram_max), colormap_color, colorpos='default')
+                # self.update_levels()
+                logger.debug("Channel unknown")
+        finally:
+            self._suspend_state_capture = False
         # Update the QSpinBox with the current channel index
         self.channel_spinbox.blockSignals(True)
         self.channel_spinbox.setValue(channel_index + 1)
@@ -1361,11 +1532,12 @@ class CompositeImageViewWidget(QMainWindow):
         self.update_plot_line_color(index, QColor(*color))
         if index == self._channel_idx:
             self.sync_colormap_current_channel_to_widget()
+            # the stored state already carries the new color, so the widget
+            # sync compares equal in _schedule_levels_refresh — request the
+            # (throttled) composite rebuild explicitly
+            self._levels_refresh_timer.start()
         else:
             self._refresh_composite_from_histogram_states()
-
-        # self.update_channel_and_composite_levels()
-        # update is automatically triggered by gradient change
 
     def save_data(self):
         options = QFileDialog.Options()
@@ -2069,6 +2241,9 @@ class CompositeImageViewWidget(QMainWindow):
 
         if index == self._channel_idx:
             self._restore_channel_histogram_widget_state(self.histogram_states[index])
+        if self.img is not None:
+            # stored state was replaced out-of-band: schedule a composite rebuild
+            self._levels_refresh_timer.start()
 
     def set_spectral_units(self, units: str):
         units = normalize_spectral_unit(units)
@@ -2161,14 +2336,24 @@ class CompositeImageViewWidget(QMainWindow):
         Saves the current channel's histogram state immediately (cheap, and must
         not be lost if the user switches channels), single-shot timer triggers only one
         get_rgba()
+
+        Skipped while `update_channel_view` mutates the widget programmatically:
+        those signals reflect the previous channel's gradient (or the default
+        grey one) and persisting them would overwrite the per-channel colors.
         """
-        if self.img is None:
+        if self.img is None or getattr(self, "_suspend_state_capture", False):
             return
         channel_index = self._channel_idx
         try:
-            self.histogram_states[channel_index] = self.channel_view.getHistogramWidget().saveState()
+            state = self.channel_view.getHistogramWidget().saveState()
         except Exception:
             return
+        if self.histogram_states.get(channel_index) == state:
+            # No actual change: the gradient widget also fires this on mere
+            # resizes (e.g. after every channel switch); rebuilding the
+            # composite then wastes a full get_rgba pass over the image.
+            return
+        self.histogram_states[channel_index] = state
         self._levels_refresh_timer.start()
 
     def _on_levels_refresh_timeout(self):
@@ -2205,7 +2390,8 @@ class CompositeImageViewWidget(QMainWindow):
             return
 
         composite_view_range = self._capture_viewbox_range(self.composite_view)
-        self.composite_view.setImage(false_color_im, autoLevels=False)
+        self.composite_view.setImage(false_color_im, autoLevels=False,
+                                     levels=self._safe_levels_for(false_color_im))
         self._restore_viewbox_range(self.composite_view, composite_view_range)
         self.composite_view.ui.histogram.setHistogramRange(0, max_dtype_val)
         if auto_min_max:

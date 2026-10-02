@@ -3,78 +3,25 @@ from typing import Optional
 
 import numpy as np
 
+from hs_mosaic.widgets import torch_devices
+
 logger = logging.getLogger(__name__)
 
-try:
-    import torch
-except Exception as exc:  # pragma: no cover - optional dependency
-    torch = None
-    _TORCH_IMPORT_ERROR = exc
-else:
-    _TORCH_IMPORT_ERROR = None
+# ``torch`` is optional. The module-level name is kept (``torch_nmf.torch``)
+# because the backend self-test in app.py reads version info through it.
+torch = torch_devices.torch
+_TORCH_IMPORT_ERROR = torch_devices.import_error()
 
-
-def torch_available() -> bool:
-    return torch is not None
-
-
-def cuda_available() -> bool:
-    """True if NVIDIA-CUDA PyTorch is installed and a CUDA device is detected."""
-    return torch is not None and torch.cuda.is_available()
-
-
-def mps_available() -> bool:
-    """True if Apple-Metal-Performance-Shaders (MPS) PyTorch is built and a
-    Metal device is detected. Supported on Apple Silicon (M1/M2/M3/M4) Macs
-    with macOS 12.3+ and a PyTorch build that includes the MPS backend
-    (the standard PyPI macOS wheel does include it)."""
-    if torch is None:
-        return False
-    mps = getattr(torch.backends, "mps", None)
-    if mps is None:
-        return False
-    is_avail = getattr(mps, "is_available", None)
-    is_built = getattr(mps, "is_built", None)
-    try:
-        return bool(is_avail and is_avail() and is_built and is_built())
-    except Exception:
-        return False
-
-
-def xpu_available() -> bool:
-    """True if Intel-XPU PyTorch is installed and an Intel GPU is detected.
-    Requires the IPEX (Intel Extension for PyTorch) or PyTorch ≥ 2.5 XPU build."""
-    if torch is None:
-        return False
-    xpu = getattr(torch, "xpu", None)
-    if xpu is None:
-        return False
-    try:
-        return bool(xpu.is_available())
-    except Exception:
-        return False
-
-
-def gpu_available() -> bool:
-    """True if ANY GPU-class accelerator is detected: CUDA, MPS, or XPU."""
-    return cuda_available() or mps_available() or xpu_available()
-
-
-def import_error() -> Exception | None:
-    return _TORCH_IMPORT_ERROR
-
-
-def default_device() -> str:
-    """Pick the best available device. Order: CUDA > MPS > XPU > CPU."""
-    if cuda_available():
-        return "cuda"
-    if mps_available():
-        return "mps"
-    if xpu_available():
-        return "xpu"
-    if torch_available():
-        return "cpu"
-    raise RuntimeError("PyTorch is not available.")
+# Device probes live in ``torch_devices`` since DirectML support was added;
+# these thin aliases keep the historical ``torch_nmf.*`` API working.
+torch_available = torch_devices.torch_available
+cuda_available = torch_devices.cuda_available
+mps_available = torch_devices.mps_available
+xpu_available = torch_devices.xpu_available
+directml_available = torch_devices.directml_available
+gpu_available = torch_devices.gpu_available
+import_error = torch_devices.import_error
+default_device = torch_devices.default_device
 
 
 def _as_nonnegative_float32(array: np.ndarray) -> np.ndarray:
@@ -83,7 +30,10 @@ def _as_nonnegative_float32(array: np.ndarray) -> np.ndarray:
     # zero-stuck-zero issue.
     arr = np.asarray(array, dtype=np.float32)
     arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-    return np.maximum(arr, 0.0)
+    # Row-major layout is essential: torch-CPU's matmul on a column-major
+    # (Fortran-ordered) matrix is several hundred times slower, and DirectML
+    # re-orders such arrays on every upload. No copy if already C-contiguous.
+    return np.ascontiguousarray(np.maximum(arr, 0.0))
 
 
 def _validate_nmf_inputs(
@@ -130,6 +80,21 @@ def reconstruction_error(data: np.ndarray, w: np.ndarray, h: np.ndarray) -> floa
     return float(np.linalg.norm(residual, ord="fro"))
 
 
+def _frobenius_norm(tensor):
+    """Frobenius norm of a tensor, accurate on every device.
+
+    Deliberately *not* ``torch.linalg.norm(..., ord="fro")``: on the CPU
+    build of PyTorch that entry point accumulates the squares sequentially
+    in float32, and for a 1024x1024x32 residual (34M elements) the result is
+    already off by ~1e-3, at 4M pixels by ~1e-2 — larger than the 1e-4
+    relative-improvement tolerance this norm feeds. ``torch.sum`` uses a
+    cascaded (pairwise) reduction on all backends (measured relative error
+    < 1e-7 on CPU and DirectML), so ``sqrt(sum(x*x))`` is both accurate and
+    made of kernels every backend has.
+    """
+    return torch.sqrt(torch.sum(tensor * tensor))
+
+
 def solve_nmf_multiplicative_updates(
         data: np.ndarray,
         *,
@@ -157,7 +122,11 @@ def solve_nmf_multiplicative_updates(
         H     : (n_components, n_features)
 
     This implementation uses dense matrix products and pointwise updates, so it
-    can run on either CPU or CUDA through PyTorch.
+    runs on every PyTorch device: CPU, CUDA, Apple MPS, Intel XPU and, through
+    the ``torch-directml`` plugin, any DirectX-12 GPU on Windows (``device="dml"``,
+    the route for AMD Radeon GPUs and APUs). ``device`` accepts the short names
+    understood by :func:`hs_mosaic.widgets.torch_devices.resolve_torch_device`;
+    ``None`` picks the best available device.
 
     Convergence
     -----------
@@ -180,9 +149,10 @@ def solve_nmf_multiplicative_updates(
     ``torch.compile()`` to fuse the matmul + pointwise ops into single fused
     kernels. Most beneficial on CUDA (~1.3-2x); modest on CPU (~1.2-1.5x);
     inconsistent on MPS / XPU where PyTorch's compiler support is still
-    evolving. The first iteration pays a one-time compile cost (~5-10 s) that
-    amortises across all subsequent iterations and is well worth it for 4D
-    stacks where the same shape is processed many times.
+    evolving, and skipped on DirectML, which has no compiler backend. The
+    first iteration pays a one-time compile cost (~5-10 s) that amortises
+    across all subsequent iterations and is well worth it for 4D stacks where
+    the same shape is processed many times.
     """
     if not torch_available():
         raise RuntimeError(f"PyTorch is not available: {_TORCH_IMPORT_ERROR}")
@@ -190,17 +160,8 @@ def solve_nmf_multiplicative_updates(
     x_np, n_components, w_init, h_init = _validate_nmf_inputs(data, n_components, w_init, h_init)
     x_np = _as_nonnegative_float32(x_np)
 
-    resolved_device = device or default_device()
-    dev = torch.device(resolved_device)
-    # Device-specific Generator (currently unused — random inits below go
-    # through NumPy — but kept seeded for future torch.rand calls that might
-    # be added). Some backends (notably older MPS) raise here, so swallow it.
-    try:
-        generator = torch.Generator(device=dev)
-        generator.manual_seed(int(seed))
-    except (RuntimeError, TypeError) as exc:
-        logger.debug("torch.Generator(device=%s) not available: %s — skipping.", dev, exc)
-        generator = None  # noqa: F841
+    dev = torch_devices.resolve_torch_device(device)
+    dev_label = torch_devices.device_label(dev)
 
     x = torch.as_tensor(x_np, device=dev)
     n_samples, n_features = x.shape
@@ -245,7 +206,9 @@ def solve_nmf_multiplicative_updates(
 
     _mu_step = _mu_step_eager
     compiled = False
-    if use_compile:
+    if use_compile and not torch_devices.supports_torch_compile(dev):
+        logger.info("torch.compile requested but not supported on %s; running eager MU.", dev_label)
+    elif use_compile:
         compile_fn = getattr(torch, "compile", None)
         if compile_fn is not None:
             try:
@@ -260,7 +223,7 @@ def solve_nmf_multiplicative_updates(
 
     logger.info(
         "Starting PyTorch NMF MU on %s with data=%s, components=%s, max_iter=%s, update_w=%s, update_h=%s, patience=%s, compiled=%s.",
-        dev,
+        dev_label,
         tuple(x.shape),
         n_components,
         max_iter,
@@ -279,6 +242,7 @@ def solve_nmf_multiplicative_updates(
     # away from true zeros. The eps lift on init above is enough to avoid the
     # zero-stuck-zero startup degeneracy.
     converged_iter = None
+    iteration = 0
     for iteration in range(1, int(max_iter) + 1):
         try:
             w, h = _mu_step(w, h, x, eps, update_w, update_h)
@@ -305,7 +269,7 @@ def solve_nmf_multiplicative_updates(
 
         if iteration % track_error_every == 0 or iteration == max_iter:
             residual = x - (w @ h)
-            current_error = torch.linalg.norm(residual, ord="fro").item()
+            current_error = _frobenius_norm(residual).item()
             history.append(float(current_error))
 
             if prev_error is not None:
@@ -331,7 +295,8 @@ def solve_nmf_multiplicative_updates(
 
     info = {
         "algorithm": "mu",
-        "device": str(dev),
+        "device": dev_label,
+        "device_kind": torch_devices.device_kind(dev),
         "n_iter": iteration,
         "final_error": final_error,
         "history": history,

@@ -26,7 +26,7 @@ Initially built for coherent Raman scattering (CARS, SRS) and related hyperspect
 - **Four analysis modes in one workflow**: PCA for variance-based diagnostics, random NNMF for unguided exploration, seeded NNMF for the main guided workflow, and fixed-H NNLS for spectral seed stability, particularly in 4D cross-slice / cross-time.
 - **Seed-first interaction**: extract pure component spectra automatically with Vertex Component Analysis (VCA), draw ROIs, load reference spectra, or build Gaussian resonance models. Every seed source feeds the same H/W building pipeline.
 - **3D and 4D stacks**: per-slice or fast multislice (NNMF on a reference slice → NNLS everywhere else) for time series and z-stacks.
-- **Optional GPU acceleration** via PyTorch with CPU fallback (scikit-learn NMF, SciPy NNLS).
+- **Optional GPU acceleration** via PyTorch — NVIDIA CUDA, Apple Silicon MPS, Intel Arc XPU, and AMD Radeon on Windows via DirectML — with CPU fallback (torch-CPU, or scikit-learn NMF + SciPy NNLS without PyTorch).
 - **Reproducible by construction**: presets save the full analysis state, ROI configuration, and seed choices. Reload the same TIFF, reload the preset, get the same result.
 - **Publication-friendly export**: Fiji/ImageJ-compatible TIFFs, CSV spectra, LUT presets, and scale-bar metadata that survive into downstream figures.
 
@@ -138,12 +138,12 @@ A pre-built standalone Windows executable is described in [docs/standalone_windo
 
 A pre-built standalone macOS app for Apple Silicon (`HS_MOSAIC_AppleSilicon_*.dmg`, Metal/MPS GPU included) is available from the release downloads. Because it is not signed with a paid Apple Developer ID, the first launch needs a one-time Gatekeeper bypass via **System Settings → Privacy & Security → Open Anyway**, or `xattr -dr com.apple.quarantine /Applications/HS-MOSAIC.app` in Terminal; see [docs/installation.md → Standalone macOS](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/#standalone-macos-apple-silicon-dmg).
 ###  Option B: PyPI
-Recommended platform-independent install method. **Prerequisites**: A (virtual) python environment with Python ≥ 3.10 on Windows, Linux, or macOS. Optionally a supported GPU for PyTorch acceleration: NVIDIA (CUDA), Apple Silicon (MPS), Intel Arc (XPU), or AMD on Linux (ROCm).
+Recommended platform-independent install method. **Prerequisites**: A (virtual) python environment with Python ≥ 3.10 on Windows, Linux, or macOS. Optionally a supported GPU for PyTorch acceleration: NVIDIA (CUDA), Apple Silicon (MPS), Intel Arc (XPU), AMD on Windows (DirectML), or AMD on Linux (ROCm).
 The package is published on PyPI as `hs-mosaic`. Install in a virtual environment with pip.
 
 **Recommended — GPU install (the right one for your hardware):**
 
-Hyperspectral NNMF and fixed-H NNLS are heavy: typical fields of view (~10⁶ pixels × tens of channels) run in seconds on a GPU and in minutes on a CPU, with 4D z- and t-stacks multiplying the cost. Since v0.9.3 HS-MOSAIC supports three GPU backends — pick the one matching your hardware:
+Hyperspectral NNMF and fixed-H NNLS are heavy: typical fields of view (~10⁶ pixels × tens of channels) run in seconds on a GPU and in minutes on a CPU, with 4D z- and t-stacks multiplying the cost. HS-MOSAIC supports four GPU backends — pick the one matching your hardware:
 
 Open a terminal, activate your virtual python environment, and install the right torch variant for your GPU **before** installing `hs-mosaic`:
 ```bash
@@ -157,6 +157,10 @@ pip install hs-mosaic torch
 # Intel Arc GPU — install XPU torch from PyTorch's index FIRST, then hs-mosaic.
 pip install torch --index-url https://download.pytorch.org/whl/xpu
 pip install hs-mosaic
+
+# AMD Radeon on Windows (discrete card or Ryzen APU) — DirectML plugin. It brings
+# its own pinned torch build, so use a FRESH venv and skip the separate torch step:
+pip install "hs-mosaic[directml]"
 ```
 
 > [!IMPORTANT]
@@ -176,25 +180,25 @@ For NVIDIA, pick the `cu124` URL to match your CUDA driver — `cu118`, `cu121`,
 Verify the right GPU is detected after the install:
 
 ```bash
-python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('MPS :', torch.backends.mps.is_available() and torch.backends.mps.is_built()); print('XPU :', hasattr(torch, 'xpu') and torch.xpu.is_available())"
+python -c "import torch, importlib.util as u; print('CUDA:', torch.cuda.is_available()); print('MPS :', torch.backends.mps.is_available() and torch.backends.mps.is_built()); print('XPU :', hasattr(torch, 'xpu') and torch.xpu.is_available()); print('DML :', u.find_spec('torch_directml') is not None and __import__('torch_directml').is_available())"
 ```
 
-Whichever line says `True` is the GPU backend HS-MOSAIC will use. The fit-summary `backend` field reports `torch-cuda`, `torch-mps`, or `torch-xpu` so you can confirm in the GUI.
+Whichever line says `True` is the GPU backend HS-MOSAIC will use (priority CUDA > MPS > XPU > DirectML). The fit-summary `backend` field reports `torch-cuda`, `torch-mps`, `torch-xpu`, or `torch-dml` so you can confirm in the GUI.
 
 **Fallback — CPU install (no supported GPU):**
 
-For machines without a compatible GPU (e.g. AMD on Windows, ARM Linux without ROCm, CI runners, older Macs), HS-MOSAIC runs on CPU using scikit-learn's NMF and SciPy's NNLS. It works correctly but expect minutes per run instead of seconds.
+For machines without a compatible GPU (e.g. ARM Linux without ROCm, CI runners, older Macs), HS-MOSAIC runs on CPU using scikit-learn's NMF and SciPy's NNLS. It works correctly but expect minutes per run instead of seconds.
 
 ```bash
 pip install hs-mosaic
 ```
 
-> A `[torch]` extra also exists for users who want the PyTorch FISTA-NNLS backend on CPU (sometimes faster than SciPy's per-pixel solver for very large fixed-H NNLS mosaics). It does **not** provide GPU acceleration on its own. See [docs/installation.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/) for the full comparison table and for the v0.9.2 → v0.9.3 `[gpu]` → `[torch]` rename recovery instructions.
+> A `[torch]` extra also exists for users who want the PyTorch backends on CPU, its batched FISTA solver is ~40× faster than SciPy's per-pixel solver for fixed-H NNLS. It does **not** provide GPU acceleration on its own. See [docs/installation.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/) for the full comparison table and for the v0.9.2 → v0.9.3 `[gpu]` → `[torch]` rename recovery instructions.
 
 ### Option C: From source with a Python environment
 Detailed installation guide and platform-specific notes: [docs/installation.md](https://manuel-kunisch.github.io/hs_crs_analysis_gui/installation/).
 
-**Prerequisites** — Python ≥ 3.10 on Windows, Linux, or macOS. Optionally a supported GPU for PyTorch acceleration: NVIDIA (CUDA), Apple Silicon (MPS), Intel Arc (XPU), or AMD on Linux (ROCm).
+**Prerequisites** — Python ≥ 3.10 on Windows, Linux, or macOS. Optionally a supported GPU for PyTorch acceleration: NVIDIA (CUDA), Apple Silicon (MPS), Intel Arc (XPU), AMD on Windows (DirectML), or AMD on Linux (ROCm).
 
 **Conda (recommended)** — use one of the packaged environment files in the repository root:
 
@@ -227,7 +231,7 @@ pip install -e ".[torch]"           # add CPU PyTorch (NNMF MU + FISTA-NNLS back
 pip install -e ".[dev]"             # add ruff, pytest, pyinstaller for development
 ```
 
-For a CUDA-enabled PyTorch install, follow the [official PyTorch selector](https://pytorch.org/get-started/locally/) *after* the editable install — PyPI hosts CPU-only torch wheels, so CUDA builds come from `https://download.pytorch.org/whl/cu124` (or the version matching your driver). The GPU paths use the standard `torch.cuda` device convention; CUDA 12.6 is the recommended target when available. See [GPU acceleration](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/02a_gpu_acceleration/) for the backend and platform notes, including Apple Silicon and AMD/ROCm.
+For a CUDA-enabled PyTorch install, follow the [official PyTorch selector](https://pytorch.org/get-started/locally/) *after* the editable install — PyPI hosts CPU-only torch wheels, so CUDA builds come from `https://download.pytorch.org/whl/cu124` (or the version matching your driver). The GPU paths use the standard `torch.cuda` device convention; CUDA 12.6 is the recommended target when available. See [GPU acceleration](https://manuel-kunisch.github.io/hs_crs_analysis_gui/tutorials/02a_gpu_acceleration/) for the backend and platform notes, including Apple Silicon, AMD Radeon on Windows (DirectML, `pip install -e ".[directml]"` in a fresh venv or `setup_windows_directml.ps1`), and AMD/ROCm on Linux.
 
 ## Run
 
@@ -257,20 +261,23 @@ hs_mosaic/                          Top-level Python package (pip-installable)
 └── widgets/                        Internal modules
     ├── analysis_manager.py         Analysis setup, seed handling, 4D orchestration
     ├── multivariate_analyzer.py    PCA / NNMF / NNLS core
+    ├── torch_devices.py            PyTorch device detection (CUDA / MPS / XPU / DirectML)
     ├── torch_nmf.py                Optional PyTorch MU-NMF backend
     ├── nnls_pytorch.py             Optional PyTorch FISTA-NNLS backend
     ├── roi_manager_pg.py           ROI management and ROI plotting
     └── data_widgets.py             Raw-data loading and image viewer
+tests/                              pytest suite (headless: QT_QPA_PLATFORM=offscreen)
 pyproject.toml                      Package metadata, deps, hs-mosaic entry point
 docs/                               User documentation (mkdocs site)
 environment.yml                     Conda environment, CPU-only
 environment-pytorch.yml             Conda environment, with PyTorch
 requirements.txt                    pip-based dependencies (legacy; pyproject.toml is authoritative)
 hs_crs_analysis_gui_cpu.spec        PyInstaller spec for standalone CPU build
-hs_crs_analysis_gui_pytorch.spec    PyInstaller spec for standalone PyTorch / CUDA build
+hs_crs_analysis_gui_pytorch.spec    PyInstaller spec for standalone PyTorch / CUDA / DirectML builds
 build_windows_cpu.ps1               Build script for the standalone CPU zip
-build_windows_pytorch.ps1           Build script for the standalone PyTorch / CUDA zip
-hs-mosaic.bat                       Windows launcher (calls `python -m hs_mosaic`)
+build_windows_pytorch.ps1           Build script for the PyTorch zips (CPU / CUDA / -DirectML)
+setup_windows_directml.ps1          One-shot DirectML dev setup (venv + plugin + self-test)
+hs-mosaic.bat                       Windows launcher (prefers .venv-directml / .venv if present)
 ```
 
 ## Repository status

@@ -2,15 +2,25 @@ param(
     [switch]$SkipInstall,
     [switch]$NoZip,
     [switch]$RequireCuda,
+    # Bundle Microsoft's torch-directml plugin instead of a torch wheel from
+    # PyTorch's index: GPU acceleration on AMD Radeon GPUs / Ryzen APUs (and
+    # any other DirectX-12 GPU) on Windows. torch-directml pins its own torch
+    # build, so -TorchIndexUrl is ignored in this mode.
+    [switch]$DirectML,
     [string]$PythonExeOverride,
     [string]$TorchIndexUrl = "https://download.pytorch.org/whl/cpu",
-    [string]$Version = "0.9.7"
+    [string]$Version = "0.9.8"
 )
 
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvDir = Join-Path $ProjectRoot ".venv-build-pytorch"
+if ($DirectML) {
+    # Keep the DirectML build environment separate: it needs torch 2.4.1,
+    # which must not be mixed with a CUDA / newer CPU torch install.
+    $VenvDir = Join-Path $ProjectRoot ".venv-build-directml"
+}
 $PythonExe = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $ProjectRoot "dist"
 $StagingDir = Join-Path $DistDir "HS_MOSAIC_PyTorch"
@@ -49,15 +59,31 @@ if (-not $UsingExternalPython -and -not (Test-Path $PythonExe)) {
 if (-not $SkipInstall) {
     & $PythonExe -m pip install --upgrade pip setuptools wheel
     & $PythonExe -m pip install -r requirements.txt pyinstaller
-    & $PythonExe -m pip install --upgrade --force-reinstall torch --index-url $TorchIndexUrl
-    if ($LASTEXITCODE -ne 0) {
-        throw "PyTorch install failed with exit code $LASTEXITCODE"
+    if ($DirectML) {
+        # Pulls the torch build the plugin was compiled against (torch 2.4.1
+        # for torch-directml 0.2.5) from PyPI.
+        & $PythonExe -m pip install --upgrade "torch-directml>=0.2.5.dev0"
+        if ($LASTEXITCODE -ne 0) {
+            throw "torch-directml install failed with exit code $LASTEXITCODE"
+        }
+    } else {
+        & $PythonExe -m pip install --upgrade --force-reinstall torch --index-url $TorchIndexUrl
+        if ($LASTEXITCODE -ne 0) {
+            throw "PyTorch install failed with exit code $LASTEXITCODE"
+        }
     }
 }
 
-& $PythonExe -c "import sys, torch; print('Torch:', torch.__version__); print('Torch CUDA build:', torch.version.cuda); print('CUDA available:', torch.cuda.is_available()); print('CUDA devices:', torch.cuda.device_count()); print('CUDA device 0:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none'); sys.exit(2 if '$RequireCuda' == 'True' and not torch.cuda.is_available() else 0)"
-if ($LASTEXITCODE -ne 0) {
-    throw "PyTorch verification failed with exit code $LASTEXITCODE"
+if ($DirectML) {
+    & $PythonExe -c "import sys, torch, torch_directml; n = torch_directml.device_count(); print('Torch:', torch.__version__); print('DirectML devices:', n); print('DirectML device 0:', torch_directml.device_name(0) if n else 'none'); sys.exit(2 if n == 0 else 0)"
+    if ($LASTEXITCODE -ne 0) {
+        throw "DirectML verification failed with exit code $LASTEXITCODE (no DirectX-12 adapter found?)"
+    }
+} else {
+    & $PythonExe -c "import sys, torch; print('Torch:', torch.__version__); print('Torch CUDA build:', torch.version.cuda); print('CUDA available:', torch.cuda.is_available()); print('CUDA devices:', torch.cuda.device_count()); print('CUDA device 0:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none'); sys.exit(2 if '$RequireCuda' == 'True' and not torch.cuda.is_available() else 0)"
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyTorch verification failed with exit code $LASTEXITCODE"
+    }
 }
 
 $TorchBuildLabel = "CUSTOM"
@@ -67,7 +93,9 @@ if ($TorchIndexUrl -match "/whl/([^/]+)/?$") {
 if ($TorchBuildLabel -match "^CU(\d+)$") {
     $TorchBuildLabel = "CUDA$($Matches[1])"
 }
-if ($TorchBuildLabel -eq "CPU") {
+if ($DirectML) {
+    $PackageName = "HS_MOSAIC_GPU_DirectML_v$Version"
+} elseif ($TorchBuildLabel -eq "CPU") {
     $PackageName = "HS_MOSAIC_PyTorch_CPU_v$Version"
 } elseif ($RequireCuda -or $TorchBuildLabel.StartsWith("CUDA")) {
     $PackageName = "HS_MOSAIC_GPU_${TorchBuildLabel}_v$Version"

@@ -199,7 +199,7 @@ Fix:
 
 - Apply spatial binning (2× or 4×) before analysis to reduce pixel count.
 - Reduce NNMF max iterations in the analysis settings.
-- Install `environment-pytorch.yml` for faster PyTorch-based NNMF/NNLS. See [GPU notes](installation.md#gpu-notes).
+- Install a GPU-enabled PyTorch for your hardware (CUDA, MPS, XPU, or the DirectML extra for AMD Radeon on Windows). See [GPU notes](installation.md#gpu-notes).
 
 ### PyTorch / CUDA backend not being used
 
@@ -209,6 +209,7 @@ Fix:
 
 - Check that the `environment-pytorch.yml` environment is active.
 - Run `python -c "import torch; print(torch.cuda.is_available())"`. If `False`, the CUDA-enabled PyTorch build is missing.
+- AMD Radeon on Windows: the **Backend** dropdown must read *Prefer GPU (DirectML: …)*. If it says *none detected: torch CPU*, the `torch-directml` plugin is not installed in the environment the GUI runs in — install `pip install "hs-mosaic[directml]"` into a fresh venv or run `setup_windows_directml.ps1`, and make sure `hs-mosaic.bat` reports `Using .venv-directml\Scripts\python.exe`. `python -m hs_mosaic --backend-self-test` prints `"directml_available"` and the backend actually used.
 - In the analysis panel, check the backend dropdown is set to **Prefer GPU** (the default since v0.9.4). If a v0.9.3 preset stored "Automatic", it loads correctly as "Prefer GPU" since both have always had identical behavior.
 - See the [GPU notes](installation.md#gpu-notes) for installation details.
 

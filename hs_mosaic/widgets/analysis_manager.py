@@ -16,7 +16,7 @@ from skimage.filters.rank import minimum
 
 from hs_mosaic.composite_image import CompositeImageViewWidget
 from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX, ImageViewYXC
-from hs_mosaic.widgets import torch_nmf
+from hs_mosaic.widgets import torch_devices, torch_nmf
 from hs_mosaic.widgets.multivariate_analyzer import HSeedScaleState, MultivariateAnalyzer
 from hs_mosaic.widgets.roi_manager_pg import ROIManager
 from hs_mosaic.widgets.spectral_axis import (
@@ -460,27 +460,38 @@ class AnalysisManager(QtCore.QObject):
         backend_label.setToolTip(
             "Controls GPU use for the multiplicative-update NNMF solver.\n\n"
             "• Prefer GPU (default): tries the first available accelerator\n"
-            "  (CUDA > MPS > XPU). Falls back to CPU torch if no GPU is detected,\n"
-            "  with a log message indicating the fallback.\n"
+            "  (CUDA > MPS > XPU > DirectML). Falls back to CPU torch if no GPU is\n"
+            "  detected, with a log message indicating the fallback. DirectML is the\n"
+            "  Windows route for AMD Radeon GPUs and APUs (package torch-directml).\n"
             "• CPU only: skips the PyTorch path entirely and runs the scikit-learn\n"
             "  MU NMF on CPU (not torch CPU). Useful for benchmarking, reproducibility\n"
             "  against the scikit-learn reference, or when the GPU is busy elsewhere.\n\n"
             "If PyTorch is not installed, this dropdown is locked to CPU only\n"
             "(there is no torch/GPU path to choose).\n\n"
             "The Coordinate Descent (cd) solver always runs on the scikit-learn CPU\n"
-            "backend regardless of this setting."
+            "backend regardless of this setting.\n\n"
+            f"Detected on this machine: {torch_devices.describe_accelerators()}"
         )
         self.nnmf_backend_dropdown = QtWidgets.QComboBox()
         # Two functional options. "Prefer GPU" tries the first available
-        # accelerator (CUDA > MPS > XPU) and gracefully falls back to CPU
-        # torch if none is present; "CPU only" skips the PyTorch path entirely
-        # and routes to the scikit-learn MU NMF (NOT torch CPU). The legacy
-        # "Automatic" item was removed in v0.9.4
-        # because it had identical behavior to "Prefer GPU"; the underlying
+        # accelerator (CUDA > MPS > XPU > DirectML) and gracefully falls back
+        # to CPU torch if none is present; "CPU only" skips the PyTorch path
+        # entirely and routes to the scikit-learn MU NMF (NOT torch CPU). The
+        # legacy "Automatic" item was removed in v0.9.4 because it had
+        # identical behavior to "Prefer GPU"; the underlying
         # `set_nnmf_backend_preference("auto")` setter still accepts "auto"
         # as a silent alias so v0.9.3 presets continue to load.
-        self.nnmf_backend_dropdown.addItem("Prefer GPU", "gpu")
+        #
+        # The "Prefer GPU" item names the accelerator that would actually be
+        # used (e.g. "DirectML: AMD Radeon(TM) Graphics") so users can see at
+        # a glance whether their GPU was picked up. Only the visible text
+        # changes; the item data stays "gpu", which is what presets store.
+        self.nnmf_backend_dropdown.addItem(self._prefer_gpu_item_text(), "gpu")
         self.nnmf_backend_dropdown.addItem("CPU only", "cpu")
+        # Do not let the (long) device name widen the whole options column;
+        # the closed combo elides it, the popup and tooltip show it in full.
+        self.nnmf_backend_dropdown.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.nnmf_backend_dropdown.setMinimumContentsLength(14)
         self.nnmf_backend_dropdown.setToolTip(backend_label.toolTip())
         self.nnmf_backend_dropdown.currentIndexChanged.connect(
             lambda index: self.mv_analyzer.set_nnmf_backend_preference(
@@ -655,7 +666,9 @@ class AnalysisManager(QtCore.QObject):
             "  • NVIDIA CUDA: typically 1.3–2× on the inner loop.\n"
             "  • CPU:         modest, around 1.2–1.5×.\n"
             "  • Apple MPS / Intel XPU: inconsistent — torch.compile support on these backends\n"
-            "    is still evolving in PyTorch. If it errors, the solver falls back to eager mode.\n\n"
+            "    is still evolving in PyTorch. If it errors, the solver falls back to eager mode.\n"
+            "  • DirectML (AMD / any DX12 GPU on Windows): no compiler backend exists, so this\n"
+            "    option is disabled there and the solver always runs eager.\n\n"
             "First iteration pays a one-shot compile cost (~5–10 s) that amortises across all\n"
             "subsequent iterations — well worth it for 4D z/t stacks where the same shape is\n"
             "processed many times.\n\n"
@@ -987,6 +1000,22 @@ class AnalysisManager(QtCore.QObject):
         self.mv_analyzer.start_analysis()
         self.analysis_data_changed.emit(*self.get_analysis_data())
     """
+
+    @staticmethod
+    def _prefer_gpu_item_text() -> str:
+        """Dropdown text for the "Prefer GPU" item, naming the detected accelerator."""
+        if not torch_nmf.torch_available():
+            return "Prefer GPU (PyTorch not installed)"
+        accelerators = torch_devices.available_accelerators()
+        if not accelerators:
+            if torch_devices.device_override() == "cpu":
+                return "Prefer GPU (forced to torch CPU by HS_MOSAIC_TORCH_DEVICE)"
+            return "Prefer GPU (none detected: torch CPU)"
+        kind = accelerators[0]
+        kind_names = {"cuda": "CUDA", "mps": "Apple MPS", "xpu": "Intel XPU", "dml": "DirectML"}
+        adapter = torch_devices.device_name(kind)
+        label = kind_names.get(kind, kind)
+        return f"Prefer GPU ({label}: {adapter})" if adapter else f"Prefer GPU ({label})"
 
     def _set_analyze_button_idle_state(self):
         if getattr(self, "analyze_button", None) is None:
@@ -2391,13 +2420,15 @@ class AnalysisManager(QtCore.QObject):
           * Backend dropdown: enabled only when NNMF mode is active AND the
             solver is set to `mu` (the only solver that goes through the
             PyTorch backend; `cd` always uses scikit-learn on CPU).
-          * "Prefer GPU" item inside the backend dropdown: disabled when no
-            GPU accelerator (CUDA / MPS / XPU) is detected, with a tooltip
-            explaining why.
+          * "Prefer GPU" item inside the backend dropdown: its text names the
+            GPU accelerator (CUDA / MPS / XPU / DirectML) that was detected,
+            or says that torch CPU will be used.
           * Patience spinbox and torch.compile checkbox: enabled only when
             the backend dropdown itself is enabled (same conditions as
             above) AND PyTorch is installed. Both controls have no effect
-            if the torch MU path is not being used.
+            if the torch MU path is not being used. The torch.compile box is
+            additionally disabled when the accelerator is DirectML, which
+            has no compiler backend.
           * W-seed downsample spinbox: enabled whenever NNMF mode is active
             (independent of solver — the W seed init runs the same way
             regardless of mu/cd choice).
@@ -2433,7 +2464,10 @@ class AnalysisManager(QtCore.QObject):
         if getattr(self, "nnmf_patience_spinbox", None) is not None:
             self.nnmf_patience_spinbox.setEnabled(mu_uses_torch)
         if getattr(self, "nnmf_use_compile_check", None) is not None:
-            self.nnmf_use_compile_check.setEnabled(mu_uses_torch)
+            compile_possible = torch_installed and torch_devices.supports_torch_compile(
+                torch_devices.default_device()
+            )
+            self.nnmf_use_compile_check.setEnabled(mu_uses_torch and compile_possible)
         # NNMF tolerance: PyTorch MU only, same gate as patience.
         if getattr(self, "nnmf_tol_combo", None) is not None:
             self.nnmf_tol_combo.setEnabled(mu_uses_torch)
@@ -2617,10 +2651,19 @@ class AnalysisManager(QtCore.QObject):
             initial_color = self.color_manager.get_qcolor(comp_idx)
             btn_color = ColorButton(initial_color)
 
-            # Define a closure to capture the row and component correctly
-            # We need to know which component is currently selected in this row
+            # The handlers below must resolve their row at call time: rows
+            # shift when an earlier row is removed, so the creation-time
+            # row_position would address the wrong (or a vanished) row.
+            def current_row_of_combo() -> int | None:
+                column = self.res_settings_widget_columns["Component"]
+                for row in range(self.resonance_table.rowCount()):
+                    if self.resonance_table.cellWidget(row, column) is item_comp:
+                        return row
+                return None
+
             def on_color_picked(new_color):
-                current_comp_idx = self.get_component_index(row_position)
+                row = current_row_of_combo()
+                current_comp_idx = None if row is None else self.get_component_index(row)
                 if current_comp_idx is not None:
                     self.color_manager.set_color(current_comp_idx, new_color)
 
@@ -2628,11 +2671,13 @@ class AnalysisManager(QtCore.QObject):
 
             # Also, if the user changes the "Component" Combobox, we must update the button color
             def on_component_changed(index):
+                row = current_row_of_combo()
+                if row is None:
+                    return  # the row is already removed; nothing to update
                 # The combo box changed, so fetch the color for the NEW component ID
-                new_c_idx = self.get_component_index(row_position)
-                c = self.color_manager.get_qcolor(new_c_idx)
+                c = self.color_manager.get_qcolor(self.get_component_index(row))
                 btn_color.setColor(c)
-                self.callback_res_settings(row_position)
+                self.callback_res_settings(row)
 
             item_comp.currentIndexChanged.connect(on_component_changed)
             # Set widgets in table
@@ -3169,7 +3214,7 @@ class AnalysisManager(QtCore.QObject):
         Important! This function cannot be moved to the MV analyzer, as it depends on the GUI elements for spectral info and ROIs.
 
         """
-        logger.info(f"Processing spectral info to create W {"and H" if make_H_seeds else ""} seeds")
+        logger.info(f"Processing spectral info to create W {'and H' if make_H_seeds else ''} seeds")
         # get the spectral information from the table
         # convert the wavenumber to indices
         seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()))

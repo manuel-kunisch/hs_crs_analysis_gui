@@ -3,7 +3,7 @@
 HS-MOSAIC ships as a regular Python package on PyPI. **For almost every user the recommended install is a `pip install hs-mosaic` into a virtual environment bacause it is platform-independent.** Conda environment files are still provided for users who prefer that workflow, and a pre-built standalone Windows `.exe` (including a CUDA build) is provided for Windows users who do not want to install Python at all.
 
 !!! tip "TL;DR — pick one"
-    * **Any platform, you have Python ≥ 3.10**: `pip install hs-mosaic` into a venv. Important: add CUDA / XPU torch *before* `hs-mosaic` if you have an NVIDIA or Intel Arc GPU. See [Default install: pip](#default-install-pip) below.
+    * **Any platform, you have Python ≥ 3.10**: `pip install hs-mosaic` into a venv. Important: add CUDA / XPU torch *before* `hs-mosaic` if you have an NVIDIA or Intel Arc GPU; for an AMD Radeon GPU or Ryzen APU on Windows use `pip install "hs-mosaic[directml]"` instead. See [Default install: pip](#default-install-pip) below.
     * **Windows, you do not want to install Python at all, and you have an NVIDIA GPU**: download the pre-built [Standalone Windows .exe (CUDA build)](standalone_windows.md). One zip, double-click to run, GPU acceleration included.
     * **Apple Silicon Mac, you do not want to install Python**: download the pre-built [Standalone macOS .dmg](#standalone-macos-apple-silicon-dmg). Metal/MPS GPU acceleration included.
     * **You prefer Conda / Mamba**: see [Alternative: Conda](#alternative-conda) below. The pip route works inside a Conda env too.
@@ -12,7 +12,7 @@ HS-MOSAIC ships as a regular Python package on PyPI. **For almost every user the
 
 | Route | Best for | Python install needed? | Page |
 |---|---|---:|---|
-| **pip install hs-mosaic** *(default)* | Any platform with Python ≥ 3.10 — Windows, Linux, macOS, Apple Silicon, Intel Arc | Yes | This page, [Default install: pip](#default-install-pip) |
+| **pip install hs-mosaic** *(default)* | Any platform with Python ≥ 3.10 — Windows, Linux, macOS, Apple Silicon, Intel Arc, AMD Radeon on Windows (DirectML) | Yes | This page, [Default install: pip](#default-install-pip) |
 | **Standalone Windows .exe** | Windows users who do not want to install Python; CUDA build available | No | [Standalone Windows .exe](standalone_windows.md) |
 | **Standalone macOS .dmg** | Apple Silicon Mac users who do not want to install Python; Metal/MPS GPU included | No | This page, [Standalone macOS](#standalone-macos-apple-silicon-dmg) |
 | **Conda** | Users who already manage scientific Python environments via Conda / Mamba | Yes | This page, [Alternative: Conda](#alternative-conda) |
@@ -51,6 +51,7 @@ Requires macOS 12.3 or newer (for the Metal/MPS GPU backend). If you would rathe
     - **NVIDIA GPU** — the recommended GPU path, using CUDA via PyTorch.
     - **Apple Silicon (M1/M2/M3/M4)** — NNMF and NNLS run on the Metal MPS backend (PyTorch ≥ 2.0). The standard PyPI macOS torch wheel already includes MPS.
     - **Intel Arc** — XPU-enabled PyTorch (≥ 2.5) gives hardware acceleration on Arc cards.
+    - **AMD Radeon on Windows** (discrete cards and the integrated Radeon graphics of Ryzen APUs) — Microsoft's DirectML plugin for PyTorch (`torch-directml`); see [AMD Radeon on Windows (DirectML)](#amd-radeon-on-windows-directml).
     - **AMD GPU on Linux** — potentially usable through ROCm; see [GPU notes](#gpu-notes).
 
 ## Default install: pip
@@ -66,6 +67,10 @@ pip install torch --index-url https://download.pytorch.org/whl/cu124
 
 # Intel Arc (XPU) — install XPU torch from PyTorch's index FIRST.
 pip install torch --index-url https://download.pytorch.org/whl/xpu
+
+# AMD Radeon on Windows (discrete or Ryzen APU) — DirectML plugin. It installs the
+# torch build it needs itself, so use a FRESH venv and skip the separate torch step:
+pip install "hs-mosaic[directml]"
 
 # Apple Silicon (MPS) — PyPI's macOS torch wheel already includes MPS, just:
 pip install torch
@@ -87,10 +92,10 @@ pip install hs-mosaic
 ### Step 3 — verify
 
 ```bash
-python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('MPS :', torch.backends.mps.is_available() and torch.backends.mps.is_built()); print('XPU :', hasattr(torch, 'xpu') and torch.xpu.is_available())"
+python -c "import torch, importlib.util as u; print('CUDA:', torch.cuda.is_available()); print('MPS :', torch.backends.mps.is_available() and torch.backends.mps.is_built()); print('XPU :', hasattr(torch, 'xpu') and torch.xpu.is_available()); print('DML :', u.find_spec('torch_directml') is not None and __import__('torch_directml').is_available())"
 ```
 
-Whichever line says `True` is the GPU backend HS-MOSAIC will use. The fit-summary `backend` field in the GUI reports `torch-cuda`, `torch-mps`, `torch-xpu`, `torch-cpu`, or `scipy-cpu` so you can confirm which path actually ran. All `False` means the install is CPU-only and that is fine — see [Performance settings](#cpu-recommended-performance-settings) below for how to keep CPU runs tolerable.
+Whichever line says `True` is the GPU backend HS-MOSAIC will use. The fit-summary `backend` field in the GUI reports `torch-cuda`, `torch-mps`, `torch-xpu`, `torch-dml`, `torch-cpu`, or `scipy-cpu` so you can confirm which path actually ran. All `False` means the install is CPU-only and that is fine — see [Performance settings](#cpu-recommended-performance-settings) below for how to keep CPU runs tolerable.
 
 ### What does pip install actually give you?
 
@@ -103,8 +108,9 @@ The five practical install variants are summarised below; the recommended one fo
 | **1. NVIDIA CUDA GPU** *(primary tested)* | NVIDIA GPU + driver | CUDA-enabled PyTorch from PyTorch's index (~2 GB) + hs-mosaic | `pip install torch --index-url https://download.pytorch.org/whl/cu124`<br>`pip install hs-mosaic` | `torch-cuda` | Any NVIDIA GPU machine. **Install order matters** (see warning above). |
 | **2. Apple Silicon (MPS)** | M1 / M2 / M3 / M4 Mac | macOS PyPI torch (includes MPS by default) + hs-mosaic | `pip install torch`<br>`pip install hs-mosaic` | `torch-mps` | Any Apple Silicon Mac on macOS 12.3+. PyPI's macOS torch wheel includes the Metal backend, so no separate index URL is needed. |
 | **3. Intel Arc (XPU)** | Intel Arc GPU on Linux/Windows | XPU-enabled PyTorch from PyTorch's index + hs-mosaic | `pip install torch --index-url https://download.pytorch.org/whl/xpu`<br>`pip install hs-mosaic` | `torch-xpu` | Intel Arc hardware with PyTorch ≥ 2.5. Same two-command order as CUDA. |
-| **4. CPU only** *(fallback)* | Anything else | hs-mosaic only | `pip install hs-mosaic` | `scipy-cpu` | Machines without a supported GPU (older Macs, AMD on Windows, ARM Linux without ROCm, CI runners). Functionally complete; minutes per FOV instead of seconds. |
-| **5. CPU + PyTorch** *(advanced)* | Anything else | hs-mosaic + CPU PyTorch from PyPI (~150 MB) | `pip install hs-mosaic torch` | `torch-cpu` | Niche. Sometimes faster than variant 4 for very large fixed-H NNLS mosaics (≥ 10⁶ pixels) where PyTorch's vectorized FISTA beats SciPy's per-pixel active-set. For typical images variant 4 is equal or faster. **Does not provide GPU acceleration.** |
+| **3b. AMD Radeon on Windows (DirectML)** | AMD Radeon GPU, or a Ryzen APU with integrated Radeon graphics, on Windows 10/11 | `torch-directml` plugin (brings its pinned torch 2.4.1) + hs-mosaic | `pip install "hs-mosaic[directml]"` in a **fresh** venv | `torch-dml` | Any DirectX-12 adapter works. On an integrated GPU the gain is modest because it shares the CPU's memory bandwidth (measured on a Ryzen 5 PRO 4650G: 1.4–2× over torch-CPU for MU-NNMF up to 1M pixels, and 12–14× over the SciPy fixed-H NNLS path that runs without a GPU). Discrete Radeon cards gain considerably more. |
+| **4. CPU only** *(fallback)* | Anything else | hs-mosaic only | `pip install hs-mosaic` | `scipy-cpu` | Machines without a supported GPU (older Macs, ARM Linux without ROCm, CI runners). Functionally complete; minutes per FOV instead of seconds. |
+| **5. CPU + PyTorch** *(advanced)* | Anything else | hs-mosaic + CPU PyTorch from PyPI (~150 MB) | `pip install hs-mosaic torch` | `torch-cpu` | NNMF (torch-CPU MU) and fixed-H NNLS (batched FISTA, measured ~40× faster than variant 4's per-pixel SciPy solver at 512×512×50) both run through PyTorch on the CPU. **Does not provide GPU acceleration.** |
 
 On macOS / zsh the quotes around `"hs-mosaic[torch]"` are required (zsh treats `[` as a glob); on Windows and Linux/bash they are harmless.
 
@@ -204,18 +210,45 @@ hs-mosaic.bat
 
 ### Supported GPU backends — at a glance
 
-Since v0.9.3, HS-MOSAIC's PyTorch NNMF and NNLS backends pick a device in this priority order: **CUDA → MPS → XPU → CPU**. Whichever PyTorch reports as available first gets used.
+HS-MOSAIC's PyTorch NNMF and NNLS backends pick a device in this priority order: **CUDA → MPS → XPU → DirectML → CPU**. Whichever PyTorch reports as available first gets used. To override the choice (e.g. to benchmark torch-CPU against your GPU) set the environment variable `HS_MOSAIC_TORCH_DEVICE` to `cpu`, `cuda`, `mps`, `xpu` or `dml` before starting the GUI.
 
 | Hardware + driver stack | Detection | Acceleration | Notes |
 |---|---|---|---|
 | **NVIDIA GPU + CUDA-enabled PyTorch** | `torch.cuda.is_available() == True` | ✅ Full, primary tested platform | Use the matching `cuXXX` wheel from PyTorch's index. The dispatch label in the fit summary is `torch-cuda`. |
 | **AMD GPU on Linux + ROCm-built PyTorch** | `torch.cuda.is_available() == True` (ROCm maps to the CUDA namespace) | ✅ Incidental | Works without code changes but is not part of the CI matrix. Install the official AMD ROCm PyTorch build for your distro. |
-| **AMD GPU on Windows** | No supported PyTorch backend | ❌ CPU only | ROCm has no Windows distribution. |
+| **AMD GPU on Windows + `torch-directml`** | `torch_directml.is_available() == True` | ✅ Supported (DirectML) | ROCm has no Windows build for consumer Radeon parts; Microsoft's DirectML plugin runs PyTorch on any DirectX-12 adapter instead — discrete Radeon cards and the integrated Radeon graphics of Ryzen APUs alike. Install with `pip install "hs-mosaic[directml]"` into a fresh venv (the plugin pins torch 2.4.1). Dispatch label: `torch-dml`. `torch.compile` does not exist on this backend, so its checkbox is greyed out. See [AMD Radeon on Windows (DirectML)](#amd-radeon-on-windows-directml). |
 | **Apple Silicon (M1/M2/M3/M4) + MPS-enabled PyTorch** | `torch.backends.mps.is_available() == True` | ✅ Supported since v0.9.3 | The standard PyPI macOS torch wheel includes the MPS backend, so `pip install hs-mosaic torch` Just Works on Apple Silicon. Dispatch label: `torch-mps`. The Lipschitz-constant `torch.linalg.eigvalsh` call in fixed-H NNLS internally falls back to CPU for that one ~1 ms op on older PyTorch builds — negligible. |
 | **Intel Arc GPU + Intel XPU PyTorch** | `torch.xpu.is_available() == True` | ✅ Supported since v0.9.3 (untested in CI) | Requires PyTorch built with XPU support (PyTorch ≥ 2.5 or IPEX). Dispatch label: `torch-xpu`. Please report issues if you have hardware to test. |
 | **CPU only (any platform)** | n/a | ❌ CPU paths used | scikit-learn NMF + SciPy NNLS for the bare install; PyTorch on CPU if `[torch]` extra installed. Dispatch label: `torch-cpu` (PyTorch path) or `scipy-cpu` (bare path). |
 
-CUDA remains the primary tested platform. MPS and XPU support is dispatch-clean (`torch_nmf.gpu_available()` returns `True`, the backend label appears as `torch-mps` or `torch-xpu` in the fit summary), but absolute throughput on those backends depends on PyTorch's own op coverage for the hardware.
+CUDA remains the primary tested platform. MPS, XPU and DirectML support is dispatch-clean (`torch_nmf.gpu_available()` returns `True`, the backend label appears as `torch-mps`, `torch-xpu` or `torch-dml` in the fit summary), but absolute throughput on those backends depends on PyTorch's own op coverage for the hardware. Device detection lives in `hs_mosaic/widgets/torch_devices.py`.
+
+### AMD Radeon on Windows (DirectML)
+
+AMD's ROCm stack has no Windows release for consumer Radeon GPUs or for the integrated graphics of Ryzen APUs, so on Windows HS-MOSAIC uses Microsoft's [DirectML](https://learn.microsoft.com/windows/ai/directml/pytorch-windows) plugin for PyTorch (`torch-directml`), which runs PyTorch tensor operations on any DirectX-12 adapter.
+
+**Install.** The plugin pins the exact PyTorch build it was compiled against (torch 2.4.1 for torch-directml 0.2.5), so it must not be dropped into an environment that already has another torch. Create a fresh virtual environment and install the extra:
+
+```bash
+python -m venv .venv-directml
+.venv-directml\Scripts\activate
+pip install "hs-mosaic[directml]"
+```
+
+From a source checkout, `setup_windows_directml.ps1` does the same (venv, plugin, editable install) and finishes with the backend self-test; `hs-mosaic.bat` then picks that environment up automatically:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows_directml.ps1
+.\hs-mosaic.bat
+```
+
+**Verify.** `python -m hs_mosaic --backend-self-test` prints a JSON report; a working install shows `"directml_available": true`, `"nmf_backend": "torch-dml"` and `"nnls_backend": "torch-dml"`. In the GUI the **Backend** dropdown reads *Prefer GPU (DirectML: <adapter name>)*, and the startup log has a `Compute backends:` line naming the device.
+
+**What to expect.** DirectML has more per-operation overhead than CUDA and, on an APU, the GPU shares the CPU's DDR4 bandwidth, so the gain is real but modest. Measured through the analyzer on a Ryzen 5 PRO 4650G (Vega 7 integrated graphics, 6 cores) against the torch-CPU path on the same machine: MU-NNMF 1.4× faster at 512×512×32 with 4 components (1.0 s vs 1.5 s per 100 iterations), 1.6× at 1024×1024×32 (4.0 s vs 6.5 s), 2.0× at 1024×1024×64 with 6 components (8.0 s vs 16.1 s), break-even around 2048×2048×32; fixed-H NNLS 12–14× faster than the SciPy per-pixel solver that previously ran when no GPU was detected (1.2 s vs 16.8 s for 1024×1024×32; since v0.9.9 a GPU-less torch install runs the much faster torch-CPU FISTA solver instead, so the gap to the CPU baseline is smaller). Discrete Radeon cards have their own memory and many more shader cores and should gain much more. Numerically the DirectML results agree with the CPU results to float32 precision.
+
+**Universal, but not the fastest on NVIDIA.** DirectML runs on *any* DirectX-12 adapter, so a DirectML install (or the `HS_MOSAIC_GPU_DirectML` standalone package) also works on Intel and NVIDIA GPUs — it is the universal GPU build. It cannot use CUDA, however: on an NVIDIA card it drives the GPU through generic DX12 compute kernels, which is clearly slower than the CUDA path, so NVIDIA users should prefer the CUDA install/package and use DirectML only as the cross-vendor fallback.
+
+**Limitations.** `torch.compile` is not available on DirectML (the checkbox is disabled). The plugin only supports Windows and Python 3.8–3.12. If you see `Prefer GPU (none detected: torch CPU)` in the dropdown, the GUI is running in an environment without the plugin — check that `hs-mosaic.bat` printed `Using .venv-directml\Scripts\python.exe`, or activate the venv before `python -m hs_mosaic`. To compare against the CPU on the same machine, start the GUI with `HS_MOSAIC_TORCH_DEVICE=cpu`.
 
 ### Apple Silicon (MPS)
 

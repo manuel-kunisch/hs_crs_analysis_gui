@@ -8,7 +8,9 @@ import numpy as np
 # On Windows, importing PyQt before torch can make torch's c10.dll fail to
 # initialize. Preload the optional torch modules before any Qt imports so the
 # PyTorch NNMF/NNLS backends remain available in source and frozen builds.
-from hs_mosaic.widgets import nnls_pytorch, torch_nmf
+# torch_devices also imports the optional torch-directml plugin (DirectML
+# backend for AMD / any DX12 GPU on Windows) at this early point.
+from hs_mosaic.widgets import nnls_pytorch, torch_devices, torch_nmf  # noqa: F401 (import order matters)
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, Qt  # Import the necessary modules
 from PyQt5 import QtWidgets
@@ -77,7 +79,13 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
         "cuda_available": False,
         "mps_available": False,
         "xpu_available": False,
+        "directml_available": False,
         "gpu_available": False,
+        "detected_accelerators": [],
+        "default_device": None,
+        "device_names": {},
+        "device_override": None,
+        "directml_import_error": None,
         "torch_version": None,
         "torch_cuda_version": None,
         "cuda_device_count": 0,
@@ -107,7 +115,14 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
             result["cuda_available"] = bool(torch.cuda.is_available())
             result["mps_available"] = bool(torch_nmf.mps_available())
             result["xpu_available"] = bool(torch_nmf.xpu_available())
+            result["directml_available"] = bool(torch_devices.directml_available())
             result["gpu_available"] = bool(torch_nmf.gpu_available())
+            summary = torch_devices.accelerator_summary()
+            result["detected_accelerators"] = summary["detected_accelerators"]
+            result["default_device"] = summary["default_device"]
+            result["device_names"] = summary["device_names"]
+            result["device_override"] = summary["device_override"]
+            result["directml_import_error"] = summary["directml_import_error"]
             result["cuda_device_count"] = int(torch.cuda.device_count())
             result["cuda_devices"] = [
                 torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())
@@ -139,9 +154,9 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
         result["nnls_backend"] = nnls_info.get("backend")
 
         # Self-test passes if torch is available AND both NMF and NNLS used
-        # a torch backend (any device: cuda/mps/xpu/cpu) or — for NNLS — the
-        # closed-form path used when k=1 components.
-        valid_nnls = {"torch-cuda", "torch-mps", "torch-xpu", "torch-cpu", "closed-form"}
+        # a torch backend (any device: cuda/mps/xpu/dml/cpu) or — for NNLS —
+        # the closed-form path used when k=1 components.
+        valid_nnls = {"torch-cuda", "torch-mps", "torch-xpu", "torch-dml", "torch-cpu", "closed-form"}
         result["ok"] = bool(
             result["torch_available"]
             and result["nmf_backend"]
@@ -450,7 +465,7 @@ class MainApplication(QtWidgets.QMainWindow):
         self.data_widget.roi_manager.roi_plotter.remove_all_highlights()
         self.analysis_manager.highlight_all_resonances()
         logger.info("Data update finished")
-        logger.info(f"{"-"*50}")
+        logger.info("-" * 50)
         # add in future here callbacks to all classes that have to be informed about the refresh!
 
     def update_fov(self, fov: tuple, unit: str):
@@ -953,6 +968,25 @@ def main(argv: list[str] | None = None) -> int:
     if sys.stderr is not None:
         faulthandler.enable(all_threads=True)
     from hs_mosaic.widgets.darkmode import set_darkmode
+
+    # PyQt5 aborts the whole process (qFatal) when a Python exception escapes
+    # a slot and sys.excepthook is still the default. Log it instead: a typo
+    # in an input field must not take the session down.
+    import traceback
+
+    def _log_unhandled_exception(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        logger.error(
+            "Unhandled exception in a GUI callback (the application keeps running):\n%s",
+            "".join(traceback.format_exception(exc_type, exc_value, exc_tb)),
+        )
+
+    sys.excepthook = _log_unhandled_exception
+
+    # One line users can grep for when asking "is my GPU actually used?"
+    logger.info("Compute backends: %s", torch_devices.describe_accelerators())
 
     app = QtWidgets.QApplication(argv)
     app.setWindowIcon(QIcon(resource_path("assets/HS-MOSAIC-logo.ico")))

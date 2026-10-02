@@ -3,76 +3,36 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from hs_mosaic.widgets import torch_devices
+
 logger = logging.getLogger(__name__)
 
-try:
-    import torch
-except Exception as exc:  # pragma: no cover - optional dependency
-    torch = None
-    _TORCH_IMPORT_ERROR = exc
-else:
-    _TORCH_IMPORT_ERROR = None
+# ``torch`` is optional; see torch_devices for the guarded import.
+torch = torch_devices.torch
+_TORCH_IMPORT_ERROR = torch_devices.import_error()
+
+# Device probes live in ``torch_devices`` since DirectML support was added;
+# these thin aliases keep the historical ``nnls_pytorch.*`` API working.
+torch_available = torch_devices.torch_available
+cuda_available = torch_devices.cuda_available
+mps_available = torch_devices.mps_available
+xpu_available = torch_devices.xpu_available
+directml_available = torch_devices.directml_available
+gpu_available = torch_devices.gpu_available
+import_error = torch_devices.import_error
+default_device = torch_devices.default_device
 
 
-def torch_available() -> bool:
-    return torch is not None
+def _l2_norm(tensor):
+    """Euclidean norm over all elements, accurate on every device.
 
-
-def cuda_available() -> bool:
-    """True if NVIDIA-CUDA PyTorch is installed and a CUDA device is detected."""
-    return torch is not None and torch.cuda.is_available()
-
-
-def mps_available() -> bool:
-    """True if Apple-Metal (MPS) PyTorch is built and a Metal device is detected.
-    Supported on Apple Silicon Macs with macOS 12.3+ and a PyTorch build that
-    includes the MPS backend (the standard PyPI macOS wheel does)."""
-    if torch is None:
-        return False
-    mps = getattr(torch.backends, "mps", None)
-    if mps is None:
-        return False
-    is_avail = getattr(mps, "is_available", None)
-    is_built = getattr(mps, "is_built", None)
-    try:
-        return bool(is_avail and is_avail() and is_built and is_built())
-    except Exception:
-        return False
-
-
-def xpu_available() -> bool:
-    """True if Intel-XPU PyTorch is installed and an Intel GPU is detected."""
-    if torch is None:
-        return False
-    xpu = getattr(torch, "xpu", None)
-    if xpu is None:
-        return False
-    try:
-        return bool(xpu.is_available())
-    except Exception:
-        return False
-
-
-def gpu_available() -> bool:
-    """True if ANY GPU-class accelerator is detected: CUDA, MPS, or XPU."""
-    return cuda_available() or mps_available() or xpu_available()
-
-
-def import_error() -> Exception | None:
-    return _TORCH_IMPORT_ERROR
-
-
-def default_device() -> str:
-    """Pick the best available device. Order: CUDA > MPS > XPU > CPU."""
-    if cuda_available():
-        return "cuda"
-    if mps_available():
-        return "mps"
-    if xpu_available():
-        return "xpu"
-    if torch_available():
-        return "cpu"
-    raise RuntimeError("PyTorch is not available.")
+    ``torch.sum`` reduces with a cascaded (pairwise) algorithm on all
+    backends, whereas ``torch.linalg.norm`` on the CPU build accumulates
+    sequentially in float32 and loses accuracy on large inputs (see
+    ``torch_nmf._frobenius_norm``). The chunk-level norms here are small, but
+    using the same accurate form keeps CPU / CUDA / DirectML consistent.
+    """
+    return torch.sqrt(torch.sum(tensor * tensor))
 
 
 def solve_batched_nnls_projected_gradient(
@@ -106,20 +66,27 @@ def solve_batched_nnls_projected_gradient(
     ``basis = H^T`` and the solved form is
 
         w_p = argmin_{w_p >= 0} ||basis @ w_p - x_p||_2^2 .
+
+    ``device`` accepts the short names understood by
+    :func:`hs_mosaic.widgets.torch_devices.resolve_torch_device` (``cpu``,
+    ``cuda``, ``mps``, ``xpu``, ``dml``); ``None`` picks the best available.
     """
     if not torch_available():
         raise RuntimeError(f"PyTorch is not available: {_TORCH_IMPORT_ERROR}")
 
-    resolved_device = device or default_device()
-    dev = torch.device(resolved_device)
+    dev = torch_devices.resolve_torch_device(device)
+    dev_label = torch_devices.device_label(dev)
 
+    # Row-major layout matters: torch-CPU matmuls on Fortran-ordered inputs
+    # are pathologically slow and DirectML re-orders them on every upload.
+    # np.ascontiguousarray is a no-op for arrays that are already C-ordered.
     x_np = np.asarray(image_data, dtype=np.float32)
     x_np = np.nan_to_num(x_np, nan=0.0, posinf=0.0, neginf=0.0)
-    x_np = np.maximum(x_np, 0.0)
+    x_np = np.ascontiguousarray(np.maximum(x_np, 0.0))
 
     b_np = np.asarray(basis, dtype=np.float32)
     b_np = np.nan_to_num(b_np, nan=0.0, posinf=0.0, neginf=0.0)
-    b_np = np.maximum(b_np, 0.0)
+    b_np = np.ascontiguousarray(np.maximum(b_np, 0.0))
 
     if x_np.ndim != 2 or b_np.ndim != 2:
         raise ValueError("image_data and basis must be 2D arrays.")
@@ -131,21 +98,13 @@ def solve_batched_nnls_projected_gradient(
     basis_t = torch.as_tensor(b_np, device=dev)
     gram = basis_t.T @ basis_t
     diag = torch.diag(gram)
-    # Lipschitz-constant estimation for the FISTA step size.
-    # `torch.linalg.eigvalsh` is supported on CUDA and CPU, and on MPS since
-    # PyTorch 2.1 (with possible internal CPU fallback for some shapes). On
-    # older builds or unsupported devices, fall back to a one-off CPU compute
-    # — gram is k×k where k = #components (≤ ~10), so the cost is negligible.
-    # TODO: forces a device→CPU synchronization via .item(); can we estimate
-    # this more cheaply for very small k?
-    try:
-        max_eig = torch.linalg.eigvalsh(gram).amax().item()
-    except (NotImplementedError, RuntimeError) as exc:
-        logger.debug(
-            "torch.linalg.eigvalsh failed on device %s (%s); using CPU fallback.",
-            dev, exc,
-        )
-        max_eig = torch.linalg.eigvalsh(gram.detach().cpu()).amax().item()
+    # Lipschitz constant for the FISTA step size: the largest eigenvalue of
+    # the k×k Gram matrix (k = #components, typically <= 10). Symmetric
+    # eigensolvers are LAPACK territory that not every backend implements
+    # (DirectML has none, older MPS builds fall back internally), and the
+    # matrix is tiny, so compute it on the CPU unconditionally. The
+    # device->host copy is a few hundred bytes and happens once per solve.
+    max_eig = torch.linalg.eigvalsh(gram.detach().cpu()).amax().item()
     step = 1.0 / max(max_eig, eps)
 
     n_pixels, _ = x_np.shape
@@ -157,7 +116,7 @@ def solve_batched_nnls_projected_gradient(
 
     logger.info(
         "Running PyTorch NNLS solver on %s with %s pixels, %s components, chunk_size=%s, max_iter=%s.",
-        dev,
+        dev_label,
         n_pixels,
         n_components,
         chunk_size,
@@ -197,8 +156,8 @@ def solve_batched_nnls_projected_gradient(
                 y = a_next
 
             if iteration % 10 == 0 or iteration == max_iter - 1:
-                delta = torch.linalg.norm(a_next - a)
-                base = torch.linalg.norm(a) + eps
+                delta = _l2_norm(a_next - a)
+                base = _l2_norm(a) + eps
                 if (delta / base).item() <= tol:
                     a = a_next
                     iterations_used = iteration + 1
@@ -214,7 +173,8 @@ def solve_batched_nnls_projected_gradient(
 
     info = {
         "algorithm": "projected_gradient_nnls",
-        "device": str(dev),
+        "device": dev_label,
+        "device_kind": torch_devices.device_kind(dev),
         "n_pixels": int(n_pixels),
         "n_components": int(n_components),
         "chunk_size": int(chunk_size),

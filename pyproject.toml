@@ -73,6 +73,18 @@ dependencies = [
 #   pip install torch --index-url https://download.pytorch.org/whl/cu124
 #   pip install hs-mosaic
 torch = ["torch>=2.0"]
+# Optional DirectML backend (Windows only): GPU acceleration on AMD Radeon
+# GPUs and Ryzen APUs with integrated Radeon graphics (and any other
+# DirectX-12 GPU) through Microsoft's torch-directml plugin. The plugin pins
+# its own PyTorch version (torch==2.4.1 for torch-directml 0.2.5), so install
+# it into a fresh virtual environment rather than next to an existing torch:
+#
+#   pip install "hs-mosaic[directml]"
+#
+# From a source checkout, setup_windows_directml.ps1 does this (venv,
+# install, backend self-test) in one go. Detected devices show up as
+# `torch-dml` in the fit summary.
+directml = ["torch-directml>=0.2.5.dev0; sys_platform == 'win32'"]
 dev = [
     "pyinstaller>=6.0",
     "ruff>=0.1",
@@ -96,6 +108,9 @@ Documentation = "https://manuel-kunisch.github.io/hs_crs_analysis_gui/"
 Repository    = "https://github.com/manuel-kunisch/hs_crs_analysis_gui"
 Issues        = "https://github.com/manuel-kunisch/hs_crs_analysis_gui/issues"
 Changelog     = "https://github.com/manuel-kunisch/hs_crs_analysis_gui/releases"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 # ── setuptools-specific configuration ─────────────────────────────────────
 [tool.setuptools.packages.find]

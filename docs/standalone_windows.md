@@ -152,7 +152,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1
 Build a DirectML package (AMD Radeon / any DirectX-12 GPU on Windows). The switch installs the `torch-directml` plugin with its pinned torch build into a separate `.venv-build-directml` environment, verifies that a DirectX-12 adapter is visible, bundles `DirectML.dll`, and labels the zip `HS_MOSAIC_GPU_DirectML_vX.Y.Z`:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -DirectML -Version 0.9.8
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -DirectML -Version 0.9.9
 ```
 
 Build a CUDA PyTorch package by installing a CUDA-enabled PyTorch wheel into the build environment:

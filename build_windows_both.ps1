@@ -9,7 +9,7 @@
 # build is substantially faster; the CPU zip needs no GPU at all.
 
 param(
-    [string]$Version = "0.9.8",
+    [string]$Version = "0.9.9",
     [string]$TorchIndexUrl = "https://download.pytorch.org/whl/cu124"
 )
 

@@ -1409,7 +1409,6 @@ class WavenumberWidget(QtWidgets.QWidget):
                 with QtCore.QSignalBlocker(self.stepsize_entry):
                     self.stepsize_entry.setValue(stepsize)
             else:
-                self.fixed_entry.setEnabled(False)
                 stepsize = float(self.stepsize_entry.value())
                 maximum = minimum + stepsize * (channels - 1)
                 with QtCore.QSignalBlocker(self.max_wavelength_entry):
@@ -2009,7 +2008,8 @@ class DataHandler(QtWidgets.QWidget):
         # --- wavelength / wavenumber handling ---
         wavelength_meta = self.loader_widget.wavelength_meta
 
-        if not self._suspend_custom_axis_warning:
+        # only if no wavelength.json comes with the new dataset a warning has to be issued
+        if wavelength_meta is None and not self._suspend_custom_axis_warning:
             self.wavenumber_widget.warn_and_switch_from_custom_source(parent=self)
 
         if wavelength_meta is not None:

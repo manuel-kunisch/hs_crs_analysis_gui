@@ -4,6 +4,97 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.9] — 2026-10-03
+
+### Added
+- **AMD Radeon GPU acceleration on Windows via DirectML.** The PyTorch
+  backends (multiplicative-update NNMF and FISTA fixed-H NNLS) can now run on
+  any DirectX-12 GPU through Microsoft's `torch-directml` plugin — the only
+  way to use AMD Radeon cards and the integrated Radeon graphics of Ryzen APUs
+  from PyTorch on Windows, where ROCm is not available for those parts. The
+  device priority is CUDA > MPS > XPU > DirectML > CPU and the fit summary
+  reports `torch-dml`. Install with `pip install "hs-mosaic[directml]"` into a
+  fresh venv (the plugin pins torch 2.4.1), or run the new
+  `setup_windows_directml.ps1` from a checkout; `hs-mosaic.bat` then prefers
+  that environment automatically, and `build_windows_pytorch.ps1 -DirectML`
+  builds a standalone `HS_MOSAIC_GPU_DirectML` zip. Measured through the
+  analyzer on a Ryzen 5 PRO 4650G APU against torch-CPU on the same machine:
+  MU-NNMF 1.4× faster at 512×512×32 (k=4), 1.6× at 1024×1024×32, 2.0× at
+  1024×1024×64 (k=6), break-even around 4M pixels; fixed-H NNLS 12–14× faster
+  than the SciPy per-pixel solver that ran before (1.2 s instead of 16.8 s for
+  a 1024×1024×32 image). Results agree with the CPU to float32 precision.
+  Documented in *Installation → GPU notes → AMD Radeon on Windows (DirectML)*.
+- **Device detection module** `hs_mosaic/widgets/torch_devices.py`: single
+  source of truth for the CUDA / MPS / XPU / DirectML probes, device labels,
+  and the new `HS_MOSAIC_TORCH_DEVICE` environment override (`cpu`, `cuda`,
+  `mps`, `xpu`, `dml`) for benchmarking or forcing a backend. The **Backend**
+  dropdown's *Prefer GPU* entry now names the detected device (e.g. *Prefer
+  GPU (DirectML: AMD Radeon(TM) Graphics)*), the startup log prints a
+  `Compute backends:` line, and `--backend-self-test` reports
+  `directml_available`, `detected_accelerators`, `device_names` and
+  `default_device`.
+
+### Fixed
+- **PyTorch-CPU NNMF was up to ~100× slower than necessary because of the
+  data layout.** The analyzer built its (pixels × bands) matrix as a
+  zero-copy, column-major (Fortran-ordered) view of the (bands, y, x) cube.
+  NumPy, scikit-learn and CUDA take that layout in stride, but the CPU build
+  of PyTorch hits a pathological path for `X @ H.T` on such a matrix: 6.9 s
+  instead of 11 ms per product for 1024×1024×32, i.e. about 6 s per
+  multiplicative-update iteration instead of 65 ms, for every torch-CPU run
+  since the PyTorch backend was introduced. The matrix (and the
+  background-subtracted variant) is now built row-major, using torch's
+  transpose kernel (0.1 s for 128 MB) when torch is installed and the old
+  zero-copy view otherwise, and the solvers guard their inputs with
+  `np.ascontiguousarray`. The per-frame PCA standardization loop was
+  vectorized to suit the new layout. DirectML profits too (no re-ordering on
+  upload).
+- **Residual norm of the PyTorch MU solver.** The convergence check used
+  `torch.linalg.norm`, which on CPU PyTorch accumulates in float32
+  sequentially and is off by ~1e-3 at 1M×32 and ~1e-2 at 4M×32 — larger than
+  the 1e-4 tolerance it feeds. The norm is now `sqrt(sum(x*x))`, a cascaded
+  reduction with relative error below 1e-7 on CPU, CUDA and DirectML.
+- The FISTA NNLS step size (largest eigenvalue of the k×k Gram matrix) is now
+  computed on the CPU on every backend; DirectML has no eigensolver and older
+  MPS builds fell back internally anyway. The unused per-device random
+  generator in the MU solver was removed.
+- **Fixed-H NNLS no longer drops to the per-pixel SciPy solver on machines
+  without a GPU.** The batched PyTorch FISTA solver was gated behind GPU
+  detection, so CPU-only installs (including the PyTorch exe on a machine
+  without a supported GPU) ran the SciPy loop — measured ~40× slower for a
+  512×512×50 fit (97 s vs 2.2 s) with results identical to within 1e-3. The
+  torch path now also runs on the CPU (fit summary: `torch-cpu`); SciPy
+  remains the fallback when PyTorch is not installed.
+- **Typing a pixel size could close the program.** The *Physical Units*
+  field parsed every keystroke: an empty or half-typed field raised inside a
+  Qt slot, which PyQt5 turns into a hard exit, typing a value before an
+  image was loaded crashed the same way, and each edit was rewritten to four
+  decimals under the cursor, so values could effectively only be pasted.
+  Input is now validated leniently (invalid text keeps the last valid
+  value), the field being edited is never rewritten, and the pixel size and
+  field of view derive from each other without feedback loops. Unhandled
+  exceptions in GUI callbacks are now logged instead of aborting the
+  application.
+- Selecting the step-size mode in the spectral-axis panel disabled the
+  fixed-beam wavelength field and nothing re-enabled it. Removed.
+- Loading data that brings its own spectral-axis metadata (`wavelength.json`)
+  no longer pops the "custom spectral axis disabled" warning first.
+- **Seeds containing NaN or Inf are rejected before the run**, with the
+  affected component named — e.g. a seed ROI averaged over NaN pixels of a
+  stitched mosaic. Such seeds previously reached the solvers, where
+  scikit-learn returned an all-NaN result without any error message and the
+  PyTorch backend silently replaced the seed values with the eps floor.
+- **The GUI launches on Python 3.10 and 3.11 again.** Two f-strings reused
+  the enclosing quotation marks inside their `{...}` expressions, which only
+  Python ≥ 3.12 accepts (PEP 701); one of them sat in `app.py`, so every
+  release since v0.9.2 failed at import with a `SyntaxError` on 3.10/3.11
+  despite the declared `requires-python >= 3.10`. The whole package now
+  byte-compiles cleanly under Python 3.11.
+
+### Changed
+- *Use torch.compile (MU)* is disabled in the GUI when the active accelerator
+  is DirectML, which has no compiler backend.
+
 ## [0.9.8] — 2026-08-25
 
 ### Added

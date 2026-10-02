@@ -1,4 +1,5 @@
 import logging
+import math
 
 from PyQt5 import QtCore
 from PyQt5.QtCore import pyqtSignal
@@ -8,6 +9,21 @@ from PyQt5.QtWidgets import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def parse_positive_float(text) -> "float | None":
+    """
+    Returns the value only when the text is a complete positive finite
+    number, and None otherwise (empty field, half-typed input like "0.",
+    zero, negatives, inf/nan).
+    """
+    try:
+        value = float(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
 
 
 class PhysicalUnitsWidget(QWidget):
@@ -23,6 +39,10 @@ class PhysicalUnitsWidget(QWidget):
         self.unit = "µm"
         self.image_shape = None  # to be set externally, as (height, width)
         self.pixel_size = .28    # default pixel size in µm
+        # True while code (not the user) writes a calibration field. Breaks
+        # the pixel-size <-> FOV update cycle so the field being edited is
+        # never rewritten under the user's cursor.
+        self._updating_calibration = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -258,27 +278,35 @@ class PhysicalUnitsWidget(QWidget):
         self.refresh_image_details()
 
     def update_fov_from_pixel_size(self):
-        if self.image_shape is None:
+        if self.image_shape is None or self._updating_calibration:
             return
+        px_size = parse_positive_float(self.pixel_size_input.text())
+        if px_size is None:
+            return  # empty or half-typed input: keep the last valid value
+        fov = (self.image_shape[1] * px_size, self.image_shape[0] * px_size)
+        self._updating_calibration = True
         try:
-            px_size = float(self.pixel_size_input.text())
-            fov = (self.image_shape[1] * px_size, self.image_shape[0] * px_size)
             self.fov_input.setText(f"{fov[0]:.2f}, {fov[1]:.2f}")
-            self.fov_change_signal.emit(fov, self.unit_dropdown.currentText())
-        except ValueError:
-            pass
+        finally:
+            self._updating_calibration = False
+        self.fov_change_signal.emit(fov, self.unit_dropdown.currentText())
 
     def update_pixel_size_from_fov(self):
-        if self.image_shape is None:
+        if self.image_shape is None or self._updating_calibration:
             return
         try:
-            fov_str = self.fov_input.text()
-            fx, fy = map(float, fov_str.split(","))
-            px_size = fx / self.image_shape[1]
+            fx, fy = map(float, self.fov_input.text().split(","))
+        except (TypeError, ValueError):
+            return  # empty or half-typed input: keep the last valid value
+        if fx <= 0 or fy <= 0 or not (math.isfinite(fx) and math.isfinite(fy)):
+            return
+        px_size = fx / self.image_shape[1]
+        self._updating_calibration = True
+        try:
             self.pixel_size_input.setText(f"{px_size:.4f}")
-            self.fov_change_signal.emit((fx, fy), self.unit_dropdown.currentText())
-        except ValueError:
-            pass
+        finally:
+            self._updating_calibration = False
+        self.fov_change_signal.emit((fx, fy), self.unit_dropdown.currentText())
 
     def emit_options_changed(self):
         self.options_changed.emit({
@@ -303,12 +331,25 @@ class PhysicalUnitsManager:
         self.pixel_size = None
         self.widget = PhysicalUnitsWidget()
         self.widget.unit_dropdown.currentTextChanged.connect(lambda text: self.update_unit(text))
-        self.widget.pixel_size_input.textChanged.connect(lambda text: self.update_pixel_size(float(text)))
-        self.widget.fov_input.textChanged.connect(lambda text: self.update_fov_from_str(text))
+        # Parse to keep the application from crashing
+        self.widget.pixel_size_input.textChanged.connect(self._on_pixel_size_text)
+        self.widget.fov_input.textChanged.connect(self._on_fov_text)
 
         # load pixel size, unit and fov from widget
         self.unit = self.widget.unit_dropdown.currentText()
         self.pixel_size = float(self.widget.pixel_size_input.text())
+
+    def _on_pixel_size_text(self, text: str):
+        if self.widget._updating_calibration:
+            return  # programmatic echo of a FOV edit; update_fov already ran
+        value = parse_positive_float(text)
+        if value is not None:
+            self.update_pixel_size(value)
+
+    def _on_fov_text(self, text: str):
+        if self.widget._updating_calibration:
+            return  # programmatic echo of a pixel-size edit
+        self.update_fov_from_str(text)
 
     def update_image_dimensions(self, image_shape):
         """
@@ -339,7 +380,13 @@ class PhysicalUnitsManager:
         self.pixel_size = pixel_size
         if self.image_shape:
             self.fov = (self.image_shape[1] * self.pixel_size, self.image_shape[0] * self.pixel_size)
-        self.widget.fov_input.setText(f"{self.fov[0]:.2f}, {self.fov[1]:.2f}")
+            # Only write the FOV field once an image exists: without one the
+            # FOV is (None, None), which cannot be formatted into the field.
+            self.widget._updating_calibration = True
+            try:
+                self.widget.fov_input.setText(f"{self.fov[0]:.2f}, {self.fov[1]:.2f}")
+            finally:
+                self.widget._updating_calibration = False
         self.dimensions_updated()
 
     def set_pixel_size_and_unit(self, pixel_size: float, unit: str):
@@ -378,8 +425,6 @@ class PhysicalUnitsManager:
         self.widget.fov_change_signal.emit(self.fov, self.unit)
 
     def update_fov(self, fov: float or tuple[float, float]):
-        # stop the widget from emitting signals
-        self.widget.pixel_size_input.blockSignals(True)
         # check if user input is single float or tuple
         if isinstance(fov, float):
             width = height = fov
@@ -393,17 +438,24 @@ class PhysicalUnitsManager:
         self.fov = (width, height)
         self.pixel_size = width / self.image_shape[1]
         logger.info(f"Updated FOV: {self.fov}, Computed Pixel Size: {self.pixel_size}")
-        self.widget.pixel_size_input.setText(f"{self.pixel_size:.4f}")
+        # Block signals only around this write-back, never across an early
+        # return: a field left blocked stops reacting to input for good.
+        self.widget.pixel_size_input.blockSignals(True)
+        try:
+            self.widget.pixel_size_input.setText(f"{self.pixel_size:.4f}")
+        finally:
+            self.widget.pixel_size_input.blockSignals(False)
         self.dimensions_updated()
-        self.widget.pixel_size_input.blockSignals(False)
         self.widget.refresh_image_details()
 
     def update_fov_from_str(self, fov_str: str):
         try:
             fov = tuple(map(float, fov_str.split(",")))
-            self.update_fov(fov)
-        except ValueError:
-            logger.error("Invalid FOV format. Expected format: 'width, height'")
+        except (TypeError, ValueError):
+            return  # empty or half-typed input while editing
+        if len(fov) != 2 or any((not math.isfinite(v)) or v <= 0 for v in fov):
+            return
+        self.update_fov(fov)
 
     def get_fov(self):
         return self.fov

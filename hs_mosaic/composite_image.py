@@ -571,7 +571,11 @@ class CompositeImageViewWidget(QMainWindow):
     def _spectral_x_values(self, length: int) -> np.ndarray:
         if self.axis_labels is not None:
             return np.arange(length, dtype=np.float32)
-        if self.wavenumbers is not None:
+        # The stored axis can belong to a different dataset than the plotted
+        # spectra (e.g. new data loaded while old results are shown): plotting
+        # mismatched x/y lengths raises inside a Qt slot, so fall back to a
+        # band index axis whenever the lengths disagree.
+        if self.wavenumbers is not None and len(self.wavenumbers) == int(length):
             return self.wavenumbers
         return np.arange(length, dtype=np.float32)
 

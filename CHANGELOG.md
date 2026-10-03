@@ -109,9 +109,21 @@ this project uses [Semantic Versioning](https://semver.org/).
   survives an unwritable temp directory, so future palette changes cannot
   ship stale check marks and a locked %TEMP% cannot block the launch.
 
+### Added
+- **Light mode.** *View → Light mode* switches the whole design system — a
+  light counterpart to the dark palette with the same accent. Applied on the
+  next start (the theme must be set before any widget exists). It can also be
+  forced per launch with `HS_MOSAIC_THEME=light` (or `dark`), which overrides
+  the saved setting.
+
 ### Changed
 - *Use torch.compile (MU)* is disabled in the GUI when the active accelerator
   is DirectML, which has no compiler backend.
+- **Tab bars were restyled.** The selected tab's label is no longer clipped
+  (Qt sizes tabs with the unselected font, so the former bold-on-selected
+  style cut off the first character); selection now shows as a filled tab
+  with an accent underline, and unselected tabs sit on a shared baseline
+  instead of floating as plain text.
 - **Lower peak memory for seed building and previews.** The seed-pixel search
   no longer uses float64 copies of the stack (float32 frames plus a
   dtype-accumulated baseline mean: 325 MB → 82 MB of transients for a

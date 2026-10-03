@@ -1,11 +1,13 @@
 """Application-wide design system for HS-MOSAIC.
 
 One place defines the palette, the Qt stylesheet, the pyqtgraph defaults and
-the dock styling, so every widget module can stay free of inline stylesheets.
+the dock styling.
 
-The palette is the validated dark-chart palette from the ENVI hyperspectral
-viewer (surface/panel/ink tones + one blue accent): categorical component
-colors stay the job of ``color_manager``; this module only owns the chrome.
+Two palettes for light and dark mode.
+``apply_theme(app, mode)`` selects one; with ``mode=None`` the choice comes
+from the ``HS_MOSAIC_THEME`` environment variable ("dark"/"light"), then the
+setting saved by the View menu. Categorical component colors stay the job of
+``color_manager``; this module only owns the chrome.
 
 Usage::
 
@@ -23,23 +25,80 @@ import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 # ── Design tokens ──────────────────────────────────────────────────────────
-SURFACE = "#1a1a19"      # chart / image backgrounds, line edits, tables
-PANEL = "#232322"        # window and panel background
-PANEL_2 = "#2c2c2a"      # raised controls (buttons, headers, tabs)
-PANEL_3 = "#3a3a37"      # hovered controls
-BORDER = "#3d3d3a"       # hairline borders
-BORDER_SOFT = "#31312f"  # subtler borders (table grid)
-INK = "#ffffff"          # primary text
-INK_2 = "#c3c2b7"        # secondary text, plot foreground
-INK_MUTED = "#898781"    # disabled text, hints
-ACCENT = "#3987e5"       # selection, highlights, primary action
-ACCENT_HOVER = "#5599ec"
-ACCENT_DIM = "#2b5f9e"
-WARN = "#d0a030"
-DANGER = "#d95940"
+# (SURFACE, INK, ...) are what every widget reads (always as `theme.X`, at
+# call time), and `set_mode()` re-points them before any widget is created.
+# Support for light and dark mode.
+_PALETTES = {
+    "dark": dict(
+        SURFACE="#1a1a19",      # chart / image backgrounds, line edits, tables
+        PANEL="#232322",        # window and panel background
+        PANEL_2="#2c2c2a",      # raised controls (buttons, headers, tabs)
+        PANEL_3="#3a3a37",      # hovered controls
+        BORDER="#3d3d3a",       # hairline borders
+        BORDER_SOFT="#31312f",  # subtler borders (table grid)
+        INK="#ffffff",          # primary text
+        INK_2="#c3c2b7",        # secondary text, plot foreground
+        INK_MUTED="#898781",    # disabled text, hints
+        ACCENT="#3987e5",       # selection, highlights, primary action
+        ACCENT_HOVER="#5599ec",
+        ACCENT_DIM="#2b5f9e",
+        WARN="#d0a030",
+        DANGER="#d95940",
+    ),
+    "light": dict(
+        SURFACE="#ffffff",
+        PANEL="#f2f1ed",
+        PANEL_2="#e7e6e0",
+        PANEL_3="#dcdbd4",
+        BORDER="#c6c5be",
+        BORDER_SOFT="#d7d6d0",
+        INK="#1c1c1a",
+        INK_2="#46453f",
+        INK_MUTED="#8c8a82",
+        ACCENT="#2b6cc9",
+        ACCENT_HOVER="#1f57a8",
+        ACCENT_DIM="#aac6e8",
+        WARN="#96700f",
+        DANGER="#b23a24",
+    ),
+}
+THEME_MODES = tuple(_PALETTES)
+CURRENT_MODE = "dark"
+ENV_THEME = "HS_MOSAIC_THEME"
+_SETTINGS_KEY = "ui/theme"
+
+globals().update(_PALETTES["dark"])
 # Selection never uses its own color for ROIs: the active ROI keeps its
 # component color (thicker + brighter) while the others drop opacity, and the
 # table row is marked with ACCENT like every other selection in the app.
+
+
+def set_mode(mode: str) -> None:
+    """Point the module-level color tokens at the dark or light palette.
+
+    Must run before any widget is created (apply_theme does): everything
+    reads the tokens as ``theme.X``, so there is nothing to restyle
+    afterwards except the stylesheet/palette apply_theme itself installs.
+    """
+    global CURRENT_MODE, _ICON_DIR
+    if mode not in _PALETTES:
+        mode = "dark"
+    globals().update(_PALETTES[mode])
+    CURRENT_MODE = mode
+    _ICON_DIR = None  # glyph SVGs are color-keyed; force re-resolution
+
+
+def resolve_mode(mode: str | None = None) -> str:
+    """Theme mode from (in order): explicit argument, HS_MOSAIC_THEME env
+    variable, the saved setting from the View menu, then dark."""
+    if mode is None:
+        mode = os.environ.get(ENV_THEME, "").strip().lower() or None
+    if mode is None:
+        try:
+            mode = str(QtCore.QSettings("HS-MOSAIC", "HS-MOSAIC").value(_SETTINGS_KEY, "dark")).lower()
+        except Exception:
+            mode = "dark"
+    return mode if mode in _PALETTES else "dark"
 
 _ICON_DIR = None
 
@@ -284,10 +343,15 @@ QGroupBox::title {{
 }}
 
 QTabWidget::pane {{ border: 1px solid {BORDER_SOFT}; border-radius: 6px; top: -1px; }}
+QTabWidget::tab-bar {{ left: 6px; }}
 QTabBar::tab {{
-    background: {PANEL};
+    /* Constant font metrics in every state: Qt sizes tabs with the
+       unselected font, so a bold :selected state clips the label. Selection
+       is signalled by the fill, full-ink text and the accent underline. */
+    background: transparent;
     color: {INK_2};
     border: 1px solid transparent;
+    border-bottom: 2px solid {BORDER_SOFT};  /* shared baseline under all tabs */
     padding: 6px 18px;
     margin-right: 2px;
     border-top-left-radius: 6px;
@@ -298,8 +362,7 @@ QTabBar::tab:selected {{
     background: {PANEL_2};
     color: {INK};
     border-color: {BORDER_SOFT};
-    border-bottom-color: {PANEL_2};
-    font-weight: 600;
+    border-bottom: 2px solid {ACCENT};
 }}
 
 QSplitter::handle {{ background: transparent; }}
@@ -480,12 +543,15 @@ def _theme_pyqtgraph_docks():
         Dock._hs_mosaic_themed = True
 
 
-def apply_theme(app: QtWidgets.QApplication):
-    """Apply the HS-MOSAIC dark theme to the whole application.
+def apply_theme(app: QtWidgets.QApplication, mode: str | None = None):
+    """Apply the HS-MOSAIC theme (dark by default, or light) to the app.
 
+    ``mode``: "dark" / "light"; ``None`` resolves from the HS_MOSAIC_THEME
+    environment variable, then the setting saved by the View menu.
     Must run before pyqtgraph widgets are created so the global plot
     background/foreground take effect.
     """
+    set_mode(resolve_mode(mode))
     app.setStyle("Fusion")
     app.setPalette(make_palette())
     app.setStyleSheet(make_stylesheet())
@@ -499,10 +565,17 @@ def accent_pen(width: float = 2.0) -> "pg.mkPen":
     return pen
 
 
-def icon(name: str, color: str = INK_2, color_active: str = INK) -> QtGui.QIcon:
-    """qtawesome icon in theme colors; falls back to an empty icon."""
+def icon(name: str, color: str | None = None, color_active: str | None = None) -> QtGui.QIcon:
+    """qtawesome icon in theme colors; falls back to an empty icon.
+
+    The color defaults are resolved at call time (not bound at import), so
+    icons created after apply_theme() pick up the active light/dark palette.
+    App restart required.
+    """
     try:
         import qtawesome as qta
-        return qta.icon(name, color=color, color_active=color_active)
+        return qta.icon(name,
+                        color=INK_2 if color is None else color,
+                        color_active=INK if color_active is None else color_active)
     except Exception:  # pragma: no cover - icon font missing
         return QtGui.QIcon()

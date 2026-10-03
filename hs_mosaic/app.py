@@ -346,6 +346,24 @@ class MainApplication(QtWidgets.QMainWindow):
         results_tab_action = view_menu.addAction("&Results")
         results_tab_action.setShortcut("Ctrl+2")
         results_tab_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(1))
+        view_menu.addSeparator()
+        # Light/dark is applied before any widget exists (see theme.apply_theme),
+        # so the toggle persists the choice and takes effect on the next start.
+        light_action = view_menu.addAction("&Light mode")
+        light_action.setCheckable(True)
+        light_action.setChecked(theme.CURRENT_MODE == "light")
+
+        def _toggle_light_mode(checked: bool):
+            QtCore.QSettings("HS-MOSAIC", "HS-MOSAIC").setValue(
+                "ui/theme", "light" if checked else "dark")
+            QtWidgets.QMessageBox.information(
+                self, "Theme",
+                "The theme is applied when HS-MOSAIC starts.\n"
+                "Restart the application to switch to "
+                f"{'light' if checked else 'dark'} mode.",
+            )
+
+        light_action.toggled.connect(_toggle_light_mode)
 
         help_menu = self.menuBar().addMenu("&Help")
         docs_action = help_menu.addAction(theme.icon("mdi.book-open-variant"), "&Documentation")

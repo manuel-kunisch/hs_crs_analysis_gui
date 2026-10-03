@@ -119,6 +119,9 @@ this project uses [Semantic Versioning](https://semver.org/).
 ### Changed
 - *Use torch.compile (MU)* is disabled in the GUI when the active accelerator
   is DirectML, which has no compiler backend.
+- The *Mouse and keyboard controls* help (Help menu) is a proper two-column
+  layout per section instead of tab-stop plain text, whose columns landed on
+  arbitrary positions and wrapped mid-line.
 - **Tab bars were restyled.** The selected tab's label is no longer clipped
   (Qt sizes tabs with the unselected font, so the former bold-on-selected
   style cut off the first character); selection now shows as a filled tab

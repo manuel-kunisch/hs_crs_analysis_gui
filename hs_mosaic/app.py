@@ -380,25 +380,57 @@ class MainApplication(QtWidgets.QMainWindow):
         self.data_widget.hover_info_signal.connect(self.readout_label.setText)
         self.result_viewer_widget.hover_info_signal.connect(self.readout_label.setText)
 
-    def _show_controls_help(self):
-        QtWidgets.QMessageBox.information(
-            self,
-            "Controls",
-            "Image view\n"
-            "  wheel / drag\t zoom and pan; right-click > View All refits\n"
-            "  hover\t\t live spectrum in the Seed spectra plot + pixel readout below\n"
-            "  click a ROI\t select it (also selects its table row); Esc deselects\n"
-            "  Space\t\t play / pause the band sweep\n"
-            "  A / S\t\t auto-level / auto-range the image\n\n"
-            "Display modes (toolbar)\n"
-            "  Single band\t browse bands with the timeline slider\n"
-            "  Band average\t drag the shaded region on the timeline to average bands\n"
-            "  RGB composite\t drag the R/G/B regions to build a false-color image\n\n"
-            "ROI table\n"
-            "  right-click a row\t all per-ROI actions (export, background, shape…)\n"
-            "  Del\t\t remove the selected ROI\n"
-            "  selected row\t edit fine-tuning in the panel below the table",
+    @staticmethod
+    def _controls_help_html() -> str:
+        """
+        Rich-text body of the Controls dialog.
+        """
+        from hs_mosaic.widgets import theme
+
+        key_style = (
+            f"color:{theme.INK}; white-space:nowrap; "
+            "padding:2px 18px 2px 12px; vertical-align:top;"
         )
+        desc_style = f"color:{theme.INK_2}; padding:2px 0;"
+
+        def section(title: str, rows: list[tuple[str, str]]) -> str:
+            body = "".join(
+                f"<tr><td style='{key_style}'><b>{key}</b></td>"
+                f"<td style='{desc_style}'>{desc}</td></tr>"
+                for key, desc in rows
+            )
+            return (
+                f"<p style='margin:10px 0 2px 0;'><b>{title}</b></p>"
+                f"<table cellspacing='0'>{body}</table>"
+            )
+
+        return (
+            section("Image view", [
+                ("wheel / drag", "zoom and pan; right-click &gt; <i>View All</i> refits"),
+                ("hover", "live spectrum in the Seed spectra plot + pixel readout in the status bar"),
+                ("click a ROI", "select it (also selects its table row); Esc deselects"),
+                ("Space", "play / pause the band sweep"),
+                ("A&nbsp;/&nbsp;S", "auto-level / auto-range the image"),
+            ])
+            + section("Display modes (toolbar)", [
+                ("Single band", "browse bands with the timeline slider"),
+                ("Band average", "drag the shaded region on the timeline to average bands"),
+                ("RGB composite", "drag the R/G/B regions to build a false-color image"),
+            ])
+            + section("ROI table", [
+                ("right-click a row", "all per-ROI actions (export, background, shape…)"),
+                ("Del", "remove the selected ROI"),
+                ("selected row", "edit fine-tuning in the panel below the table"),
+            ])
+        )
+
+    def _show_controls_help(self):
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Controls")
+        box.setIcon(QtWidgets.QMessageBox.Information)
+        box.setTextFormat(QtCore.Qt.RichText)
+        box.setText(self._controls_help_html())
+        box.exec_()
 
     def _show_results_after_analysis(self):
         if self.analysis_manager.last_analysis_was_cancelled():

@@ -483,7 +483,9 @@ class DataWidget(QtWidgets.QWidget):
         if not self._range_render_timer.isActive():
             self._range_render_timer.start()
 
-    def _render_range_mode(self):
+    def _render_range_mode(self, keep_view: bool = True):
+        # keep_view=True for the drag-debounce re-renders; a data load passes
+        # False so the view range refits the (possibly differently sized) image.
         mode = self._current_projection_mode()
         stack = self._active_stack()
         if stack is None or stack.ndim != 3:
@@ -493,7 +495,7 @@ class DataWidget(QtWidgets.QWidget):
             lo, hi = self._range_frames(self.band_region)
             mean = self._band_mean(stack, lo, hi)
             view.title_override = f"Mean of {self._region_desc(lo, hi)}"
-            view.setImage(mean, keep_viewbox=True, axes={'x': 1, 'y': 0})
+            view.setImage(mean, keep_viewbox=keep_view, axes={'x': 1, 'y': 0})
             view.getView().setTitle(view.title_override)
         elif mode == "rgb":
             channels, descs = [], []
@@ -509,7 +511,7 @@ class DataWidget(QtWidgets.QWidget):
                 descs.append(f"{name}: {self._region_desc(lo, hi)}")
             rgb = np.dstack(channels).astype(np.float32)
             view.title_override = "   ".join(descs)
-            view.setImage(rgb, keep_viewbox=True, axes={'x': 1, 'y': 0, 'c': 2},
+            view.setImage(rgb, keep_viewbox=keep_view, axes={'x': 1, 'y': 0, 'c': 2},
                           levels=(0.0, 1.0))
             view.getView().setTitle(view.title_override)
         # keep the timeline visible: it hosts the draggable regions
@@ -520,12 +522,21 @@ class DataWidget(QtWidgets.QWidget):
         view = self.raman_raw_image_view
         if mode == "none":
             view.title_override = None
-            self.display_raw_image(keep_view=keep_view)
+            # "Display Processed Image" stays authoritative in Single band:
+            # the projections read the processed stack via _active_stack(),
+            # so returning to Single band must not silently show raw data
+            # under a still-checked Processed box.
+            if (self.show_processed_image_check is not None
+                    and self.show_processed_image_check.isChecked()
+                    and self.roi_manager.subtracted_data is not None):
+                self.display_modified_image(keep_view=keep_view)
+            else:
+                self.display_raw_image(keep_view=keep_view)
             return
         if mode in ("band_range", "rgb"):
             self._ensure_region_defaults()
             view.stopAutoPlay()
-            self._render_range_mode()
+            self._render_range_mode(keep_view)
             return
         if mode == "composite":
             # Mirror the false-colour composite from the result viewer.
@@ -542,6 +553,7 @@ class DataWidget(QtWidgets.QWidget):
                 np.asarray(rgb),
                 keep_viewbox=keep_view,
                 axes={'x': 1, 'y': 0, 'c': 2},  # force rgb mode
+                levels=(0, 65535),  # the result viewer's composite is full-scale uint16
             )
             view.getView().setTitle(view.title_override)
             view.ui.roiPlot.show()
@@ -589,12 +601,13 @@ class DataWidget(QtWidgets.QWidget):
         if self.image is None:
             return
         self.display_projection_image(mode, keep_view=True)
-        # one auto-level on mode entry (RGB fixes its own 0..1 levels), and
-        # again when leaving RGB so the mono levels fit count data again
+        # one auto-level on mode entry, and again when returning to Single
+        # band from ANY mode, so projection-fitted levels never stick to the
+        # band display. RGB and the composite mirror fix their own levels.
         if mode == "none":
-            if previous_mode == "rgb":
+            if previous_mode != "none":
                 self.raman_raw_image_view.autoLevels()
-        elif mode != "rgb":
+        elif mode not in ("rgb", "composite"):
             self.raman_raw_image_view.autoLevels()
 
     def _update_mode_ui(self, mode: str):
@@ -625,7 +638,11 @@ class DataWidget(QtWidgets.QWidget):
         pos = args[0]
         p = item.mapFromScene(pos)
         ix, iy = int(np.floor(p.x())), int(np.floor(p.y()))
-        inside = 0 <= ix < item_img.shape[0] and 0 <= iy < item_img.shape[1]
+        # the histogram shares the scene: a cursor outside the image's view
+        # box can still map into array bounds and would read phantom pixels
+        view_box = item.getViewBox()
+        inside = (0 <= ix < item_img.shape[0] and 0 <= iy < item_img.shape[1]
+                  and (view_box is None or view_box.sceneBoundingRect().contains(pos)))
         if not inside:
             if self._hover_inside_image:
                 self._hover_inside_image = False
@@ -767,6 +784,8 @@ class DataWidget(QtWidgets.QWidget):
     def update_img(self, img: np.ndarray, preserve_channel: bool = False):
         self.image = img
         self._band_mean_cache.clear()
+        # the composite mirror belongs to the previous dataset/binning; clear it
+        self._cached_composite_rgb = None
         self._ensure_region_defaults()
         logger.info("Updating ROI manager data")
         self.roi_manager.update_data(img)

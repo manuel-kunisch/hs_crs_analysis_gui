@@ -2781,7 +2781,13 @@ class AnalysisManager(QtCore.QObject):
     def remove_res_settings(self, row):
         if row is None or row < 0:
             return
-        self.resonance_table.removeRow(row)
+        # removeRow moves the current cell, which would fire the ROI-table
+        # selection sync and change the active ROI as a side effect of a delete
+        self._selection_sync_guard = True
+        try:
+            self.resonance_table.removeRow(row)
+        finally:
+            self._selection_sync_guard = False
         self._refresh_resonance_table_layout()
         self.callback_res_settings(row)
 

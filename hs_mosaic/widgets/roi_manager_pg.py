@@ -3277,8 +3277,15 @@ class ROIManager(QtCore.QObject):
         background_action.setCheckable(True)
         background_action.setChecked(bool(background_widget is not None and background_widget.isChecked()))
         background_action.setToolTip("Mark this row's component as a background component")
-        background_action.toggled.connect(
-            lambda checked: background_widget.setChecked(checked) if background_widget is not None else None)
+
+        def _toggle_background(checked):
+            if background_widget is None:
+                return
+            background_widget.setChecked(checked)  # stateChanged runs the component logic
+            # the cell is hidden; the inspector checkbox is the visible copy
+            self._sync_inspector(self._selected_inspector_row())
+
+        background_action.toggled.connect(_toggle_background)
 
         seed_enabled = getattr(roi, "seed_H_enabled", True)
         toggle = menu.addAction("Disable H seed" if seed_enabled else "Re-enable H seed")
@@ -4008,6 +4015,8 @@ class ROIManager(QtCore.QObject):
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component:
                 self.roi_table.cellWidget(idx, self.widget_columns['Background']).setChecked(state)
+        # the propagation may have flipped the selected row's hidden cell
+        self._sync_inspector(self._selected_inspector_row())
         # replot is needed as the background selection requires unsubtracted data for the roi
         self.replot_all_rois()
 

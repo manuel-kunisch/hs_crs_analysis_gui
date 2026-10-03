@@ -934,6 +934,13 @@ class CompositeImageViewWidget(QMainWindow):
         item = self.composite_view.getImageItem()
         if item.image is None:
             return
+        # the histogram/LUT widget shares the scene: a cursor outside the
+        # image's view box can still map into array bounds (phantom readouts
+        # while dragging the level handles)
+        view_box = item.getViewBox()
+        if view_box is not None and not view_box.sceneBoundingRect().contains(args[0]):
+            self._clear_pixel_curve()
+            return
         p = item.mapFromScene(args[0])
         ix, iy = int(np.floor(p.x())), int(np.floor(p.y()))
         if not (0 <= iy < self.img.shape[0] and 0 <= ix < self.img.shape[1]):

@@ -90,6 +90,24 @@ this project uses [Semantic Versioning](https://semver.org/).
   release since v0.9.2 failed at import with a `SyntaxError` on 3.10/3.11
   despite the declared `requires-python >= 3.10`. The whole package now
   byte-compiles cleanly under Python 3.11.
+- **A batch of display and GUI-state fixes** from the rehaul code review:
+  Space-key playback is blocked on the 2D display modes (it walked a stale
+  band axis and crashed); *Single band* respects the *Display Processed
+  Image* checkbox again instead of silently showing raw data; the
+  *Composite (from analysis)* mirror is invalidated when new data load or
+  the binning changes (its hover read spectra from the wrong pixels) and
+  keeps its full-scale 16-bit levels instead of being auto-leveled like a
+  mono image; *Band average* / *RGB* refit the view to a newly loaded
+  dataset instead of keeping the previous zoom; returning to *Single band*
+  re-fits the display levels from any projection (not only RGB); browsing
+  the slices of a 4D series no longer disables the Results-tab pixel-spectrum
+  hover; both hover readouts ignore the cursor while it is outside the image
+  view (no more phantom readouts while dragging histogram handles); the
+  inspector's *Background comp.* checkbox follows context-menu and cross-row
+  changes; deleting a resonance row no longer switches the active ROI as a
+  side effect; and the theme's glyph cache is keyed by palette colors and
+  survives an unwritable temp directory, so future palette changes cannot
+  ship stale check marks and a locked %TEMP% cannot block the launch.
 
 ### Changed
 - *Use torch.compile (MU)* is disabled in the GUI when the active accelerator

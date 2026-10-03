@@ -15,6 +15,7 @@ Usage::
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 
@@ -48,8 +49,17 @@ def _icon_dir() -> str:
     global _ICON_DIR
     if _ICON_DIR is not None:
         return _ICON_DIR
-    path = os.path.join(tempfile.gettempdir(), "hs_mosaic_theme")
-    os.makedirs(path, exist_ok=True)
+    # Key the cache directory by the glyph colors: the SVGs below are only
+    # written when missing, so a palette change in a later release must land
+    # in a fresh directory instead of reusing another version's stale art.
+    palette_tag = hashlib.sha1(f"{INK}|{INK_MUTED}|{INK_2}".encode()).hexdigest()[:8]
+    path = os.path.join(tempfile.gettempdir(), f"hs_mosaic_theme_{palette_tag}")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        # unwritable/full temp dir: degrade to missing glyphs (like the
+        # guarded writes below) instead of failing the whole launch
+        pass
     svgs = {
         "check.svg": (
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">'

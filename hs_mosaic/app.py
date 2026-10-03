@@ -458,8 +458,11 @@ class MainApplication(QtWidgets.QMainWindow):
         )
         self.analysis_manager.update_image_data(img_array, self.data_handler.wavenumber_widget.wavenumbers)
         # existing results no longer belong to the new data: stop the composite
-        # hover from reading the old cube (and release the reference to it)
-        self.result_viewer_widget.set_hover_source(None)
+        # hover from reading the old cube (and release the reference to it).
+        # Browsing slices of a 4D series arrives with preserve_channel=True and
+        # keeps the displayed series result valid, so the hover survives it.
+        if not preserve_channel:
+            self.result_viewer_widget.set_hover_source(None)
         self.data_widget.update_img(img_array, preserve_channel=preserve_channel)
         # make the roi manager highlight all rois again if spectral info exists
         self.data_widget.roi_manager.roi_plotter.remove_all_highlights()

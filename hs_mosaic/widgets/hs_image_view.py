@@ -233,7 +233,11 @@ class RamanImageView(ImageViewLineRoi):
         was_playing = self.is_playing()
         self.autoplay = playing
 
-        if playing and self.image is not None and self.nframes() > 1:
+        # hasTimeAxis() is the real playability test: for the 2D display modes
+        # (band average / RGB / projections) nframes() returns the image
+        # HEIGHT while tVals still belongs to the previous 3D stack, so
+        # playing would index past tVals and crash in the timer slot.
+        if playing and self.image is not None and self.hasTimeAxis() and self.nframes() > 1:
             interval_ms = max(1, int(round(1000.0 / self.fps)))
             self.playTimer.start(interval_ms)
         else:
@@ -268,7 +272,7 @@ class RamanImageView(ImageViewLineRoi):
             # Qt may deliver one stale timeout event after stop() was called;
             # ignore it so we never advance frames or jump to center after a manual stop.
             return
-        if self.image is None or self.nframes() <= 1:
+        if self.image is None or not self.hasTimeAxis() or self.nframes() <= 1:
             self.set_playing(False)
             return
 

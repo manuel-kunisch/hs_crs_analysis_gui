@@ -94,6 +94,13 @@ this project uses [Semantic Versioning](https://semver.org/).
 ### Changed
 - *Use torch.compile (MU)* is disabled in the GUI when the active accelerator
   is DirectML, which has no compiler backend.
+- **Lower peak memory for seed building and previews.** The seed-pixel search
+  no longer uses float64 copies of the stack (float32 frames plus a
+  dtype-accumulated baseline mean: 325 MB → 82 MB of transients for a
+  1024×1024×32 cube), the W-seed buffers and the seed composite preview are
+  float32, and the VCA ROI-placement solve no longer pre-casts the whole
+  image to float64 just for the backend to cast it back. Results are
+  unchanged (the affected paths rank pixels and render previews).
 
 ## [0.9.8] — 2026-08-25
 

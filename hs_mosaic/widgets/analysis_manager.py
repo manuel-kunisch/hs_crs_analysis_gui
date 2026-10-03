@@ -1274,7 +1274,7 @@ class AnalysisManager(QtCore.QObject):
                     )
                     self._set_up_missing_W_seeds_for_current_scale_mode(skip_spectral_info=True)
                     if self.mv_analyzer.seed_W is None:
-                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
+                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float32)
                     for comp, fixed_W in fixed_seed_W.items():
                         if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                             self.mv_analyzer.seed_W[:, comp] = fixed_W
@@ -1402,7 +1402,7 @@ class AnalysisManager(QtCore.QObject):
                     )
                     self._set_up_missing_W_seeds_for_current_scale_mode(skip_spectral_info=True)
                     if self.mv_analyzer.seed_W is None:
-                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
+                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float32)
                     for comp, fixed_W in fixed_seed_W.items():
                         if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                             self.mv_analyzer.seed_W[:, comp] = fixed_W
@@ -1670,7 +1670,7 @@ class AnalysisManager(QtCore.QObject):
             normalize_w_seed=False,
         )
         if self.mv_analyzer.seed_W is None:
-            self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()), dtype=np.float64)
+            self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()), dtype=np.float32)
         for comp, fixed_W in (fixed_seed_W or {}).items():
             if 0 <= comp < self.mv_analyzer.seed_W.shape[1] and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                 self.mv_analyzer.seed_W[:, comp] = fixed_W
@@ -2113,7 +2113,10 @@ class AnalysisManager(QtCore.QObject):
         image_data : (n_pixels, n_bands)   basis : (n_bands, k)
         Returns abundance of shape (n_pixels, k).
         """
-        abundance, _ = self.mv_analyzer.build_nnls_abundance_matrix(np.asarray(image_data, dtype=np.float64),
+        # No float64 pre-cast of the image: the dispatcher casts per backend
+        # anyway (torch: float32, SciPy: float64), so a full-size float64 copy
+        # here would only double the peak memory of the solve.
+        abundance, _ = self.mv_analyzer.build_nnls_abundance_matrix(np.asarray(image_data),
                                                                     np.asarray(basis, dtype=np.float64), 1e-8,
                                                                     "vca-roi-placement")
         return np.asarray(abundance)
@@ -3629,7 +3632,9 @@ class AnalysisManager(QtCore.QObject):
 
             # --- Log & Data Preparation ---
             logger.info(f'Finding seed pixels for component {i} in frames {frames.tolist()}')
-            frames_of_interest = self.z3D_data[frames, ...].astype(float)
+            # float32, not float(=float64): this is a full-frames copy of the
+            # cube, and the metric below only ranks pixels of (u)int16 data.
+            frames_of_interest = self.z3D_data[frames, ...].astype(np.float32)
 
             # Exclude the background pixels by setting them to a very low score later
             # (we'll explicitly overwrite metric_frame for these).
@@ -3646,8 +3651,10 @@ class AnalysisManager(QtCore.QObject):
                 outside_frames = np.setdiff1d(all_frames, frames)
 
                 if outside_frames.size > 0:
+                    # dtype-accumulated mean: no full float copy of the
+                    # (nearly whole) stack just to average it.
                     baseline_frame = np.mean(
-                        self.z3D_data[outside_frames, ...].astype(float), axis=0
+                        self.z3D_data[outside_frames, ...], axis=0, dtype=np.float32
                     )
                 else:
                     baseline_frame = np.zeros_like(signal_frame)
@@ -4334,10 +4341,13 @@ class SeedWidget(QtWidgets.QWidget):
         if self.seed_W_3d is None or np.ndim(self.seed_W_3d) != 3:
             return
         height, width, n_components = self.seed_W_3d.shape
-        rgb = np.zeros((height, width, 3), dtype=np.float64)
+        # float32 throughout (incl. the color vectors, so no broadcast
+        # promotes back to float64): this is a display composite, and the
+        # buffers scale with the full image size.
+        rgb = np.zeros((height, width, 3), dtype=np.float32)
         for i in range(n_components):
             wmap = np.nan_to_num(
-                np.asarray(self.seed_W_3d[..., i], dtype=np.float64),
+                np.asarray(self.seed_W_3d[..., i], dtype=np.float32),
                 nan=0.0, posinf=0.0, neginf=0.0,
             )
             wmap = np.maximum(wmap, 0.0)
@@ -4345,9 +4355,9 @@ class SeedWidget(QtWidgets.QWidget):
             if peak > 0.0:
                 wmap = wmap / peak
             try:
-                color = np.asarray(self.get_color(i)[:3], dtype=np.float64) / 255.0
+                color = np.asarray(self.get_color(i)[:3], dtype=np.float32) / 255.0
             except Exception:
-                color = np.asarray(self.default_colors[i % len(self.default_colors)][:3], dtype=np.float64) / 255.0
+                color = np.asarray(self.default_colors[i % len(self.default_colors)][:3], dtype=np.float32) / 255.0
             rgb += wmap[..., None] * color
         rgb = np.clip(rgb, 0.0, 1.0)
         rgb_u16 = (rgb * 65535.0).astype(np.uint16)

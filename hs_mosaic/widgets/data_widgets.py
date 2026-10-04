@@ -1788,8 +1788,19 @@ class DataHandler(QtWidgets.QWidget):
 
         self.loader_dock = Dock("Data", size=(360, 720))
         self.loader_dock.setStretch(360, 720)
-        self.loader_dock.addWidget(self.loader_widget, 1, 0, 1, 1)
-        self.loader_dock.addWidget(self.wavenumber_widget, 0, 0, 1, 1)
+        # Put the data widgets in a scrollable layout to shrink
+        # minimum window size, so the GUI also fits laptop screens (e.g. macOS).
+        loader_panel = QtWidgets.QWidget()
+        self.loader_panel_layout = QtWidgets.QVBoxLayout(loader_panel)
+        self.loader_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self.loader_panel_layout.setSpacing(0)
+        self.loader_panel_layout.addWidget(self.wavenumber_widget)
+        self.loader_panel_layout.addWidget(self.loader_widget, 1)
+        loader_scroll = QtWidgets.QScrollArea()
+        loader_scroll.setWidgetResizable(True)
+        loader_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        loader_scroll.setWidget(loader_panel)
+        self.loader_dock.addWidget(loader_scroll)
         self.slice_selector_widget = QtWidgets.QWidget()
         self.slice_selector_widget.hide()
         slice_layout = QtWidgets.QHBoxLayout(self.slice_selector_widget)
@@ -1808,7 +1819,7 @@ class DataHandler(QtWidgets.QWidget):
         slice_layout.addWidget(self.slice_axis_title_label)
         slice_layout.addWidget(self.slice_selector_spinbox)
         slice_layout.addWidget(self.slice_selector_slider, stretch=1)
-        self.loader_dock.addWidget(self.slice_selector_widget, 2, 0, 1, 1)
+        self.loader_panel_layout.addWidget(self.slice_selector_widget)
 
         self.slice_selector_spinbox.valueChanged.connect(
             lambda value: self._set_current_slice_index(int(value) - 1)

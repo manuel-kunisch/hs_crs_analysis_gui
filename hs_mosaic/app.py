@@ -269,8 +269,8 @@ class MainApplication(QtWidgets.QMainWindow):
         loader_dock = self.data_handler.get_dock_widget()
         main_dock_area.addDock(loader_dock, 'right',
                                self.data_widget.image_view_dock)
-        self.data_widget.image_view_dock.setStretch(1400, 720)
-        loader_dock.setStretch(420, 720)
+        self.data_widget.image_view_dock.setStretch(900, 1100)
+        loader_dock.setStretch(1300, 1100)
         dock_state_save_widget, save_dock_state = self.get_dock_state_widget()
         # main_dock_area.addDock(dock_state_save_widget, 'right', self.data_widget.roi_manager.roi_table_dock)
 
@@ -1053,9 +1053,18 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as e:
         logger.error(f"Could not load example data: {e}")
 
-    main_app.resize(1920, 1080)
+    # Fit the window to the screen it opens on: a fixed 1920x1080 overflows
+    # smaller displays such as MacBooks (1440x900 / 1512x982 points).
+    available = app.primaryScreen().availableGeometry()
+    width = min(1920, available.width())
+    height = min(1080, available.height() - 40)  # leave room for the title bar
+    main_app.resize(width, height)
+    main_app.move(available.x() + (available.width() - width) // 2, available.y())
     main_app.setWindowTitle("HS-MOSAIC")
     main_app.show()
+    # pyqtgraph splits docks by stretch using the size at construction time;
+    # redo it now that the window has its final size.
+    main_app.data_widget.dock_area.topContainer.updateStretch()
     return app.exec_()
 
 

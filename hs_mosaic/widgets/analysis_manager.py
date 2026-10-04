@@ -857,7 +857,9 @@ class AnalysisManager(QtCore.QObject):
         progress_layout.addWidget(self.analysis_progress_bar)
         run_layout.addWidget(self.analysis_progress_widget)
 
-        top_row.addWidget(run_group_box)
+        # Below (not beside) the analysis settings, so the Run button stays
+        # visible when the data panel is narrow (e.g. laptop screens).
+        root.addWidget(run_group_box)
         self._finish_analysis_progress()
 
         # -----------------------------

@@ -4,6 +4,19 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.10] — 2026-10-05
+
+### Fixed
+- **The main window fits laptop screens.** It used to open at a fixed
+  1920×1080 and overflow smaller displays such as MacBooks (1440×900 /
+  1512×982 points); it now sizes itself to the available area of the screen
+  it opens on and is centred horizontally. The Data panel's contents scroll
+  instead of dictating a minimum window size, the Data panel gets a larger
+  share of the width by default (the split is applied once the window has its
+  final size), and the analysis **Run** box sits below the analysis settings
+  instead of beside them, so the Run button stays visible when the panel is
+  narrow.
+
 ## [0.9.9] — 2026-10-03
 
 ### Added

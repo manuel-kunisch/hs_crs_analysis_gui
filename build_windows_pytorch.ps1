@@ -9,7 +9,7 @@ param(
     [switch]$DirectML,
     [string]$PythonExeOverride,
     [string]$TorchIndexUrl = "https://download.pytorch.org/whl/cpu",
-    [string]$Version = "0.9.9"
+    [string]$Version = "0.9.10"
 )
 
 $ErrorActionPreference = "Stop"

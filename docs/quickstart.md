@@ -98,14 +98,14 @@ In the **Analysis** panel:
 
 1. Set **Number of components** to match the number of ROIs or seeds.
 2. Select **NNMF**.
-3. Keep **Custom initialization** enabled. This is the seeded NNMF workflow.
+3. Keep **Custom initialization** enabled. This is the seeded NNMF workflow: the factorization starts from your seed spectra instead of random numbers (see [Concepts](concepts.md) for the model).
 4. Leave **Fixed-H NNLS mode** disabled for the first run.
-5. Leave **W map from H** at **NNLS abundance map (recommended)** unless you have a reason to change it.
+5. Leave **W map from H** at **NNLS abundance map (recommended)** unless you have a reason to change it. This controls how the starting concentration map for each component is estimated from its seed spectrum (details in [Seeds, spectra, and W maps](tutorials/03_seeds_spectral_and_spatial.md)).
 6. Click **Run Analysis**.
 
 The analysis runs in a background thread. A progress bar shows status. When it finishes, the result viewer opens.
 
-To run fixed-H NNLS later, keep **NNMF** and **Custom initialization** enabled, enable **Fixed-H NNLS mode**, and make sure every component has an H seed.
+To run fixed-H NNLS later (the seed spectra are then locked and only the maps are fitted), keep **NNMF** and **Custom initialization** enabled, enable **Fixed-H NNLS mode**, and make sure every component has a seed spectrum.
 
 ## Step 6: Inspect the result
 
@@ -113,14 +113,14 @@ In the result viewer:
 
 - The **Composite** tab shows a false-color overlay of all component maps.
 - The **Channel** tab shows one component map at a time.
-- The spectral plot shows the fitted H spectra for each component.
+- The spectral plot shows the fitted component spectra (the rows of `H`) for each component.
 
 Adjust histogram levels if maps look flat. Use the color picker to change component colors. Check whether the component spectra resemble the expected chemical signatures.
 
 If the result looks wrong:
 - Go back to the ROI manager and adjust or add ROIs.
 - Try **Fixed-H NNLS** if the spectra look good but the maps are noisy.
-- Try **PCA** first to see the dominant variance patterns.
+- Try **PCA** (principal component analysis) first: it needs no seeds and sorts the strongest variation patterns in the data, which gives a quick impression of how many components there are.
 
 For guidance on choosing the right mode, see [Analysis modes](tutorials/02_analysis_modes.md).
 

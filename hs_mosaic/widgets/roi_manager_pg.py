@@ -11,11 +11,14 @@ from scipy.ndimage import gaussian_filter1d, gaussian_filter, label, maximum_fil
 from scipy.cluster.hierarchy import linkage, fcluster
 
 from hs_mosaic.composite_image import max_dtype_val, CompositeImageViewWidget as ci
+from hs_mosaic.widgets import theme
 from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX
-from hs_mosaic.widgets.hs_image_view import ROITableDelegate, ColorButton
+from hs_mosaic.widgets.hs_image_view import ColorButton
 from hs_mosaic.widgets.spectrum_loader import SpectrumLoader
 from hs_mosaic.widgets.spectral_axis import normalize_spectral_unit, spectral_axis_label, spectral_csv_header
 from hs_mosaic.widgets.vca import extract_endmember_spectra
+from hs_mosaic.widgets.unmixing_diagnostics import purify_spectrum, separability
+from hs_mosaic.widgets.unmixing_diagnostics_dialog import apply_badge, separability_badge
 
 logger = logging.getLogger('ROI Manager')
 
@@ -65,6 +68,7 @@ class ROIManager(QtCore.QObject):
     color_change_signal = QtCore.pyqtSignal(int, tuple)  # Signal when color is changed in the ROI table
     label_change_signal = QtCore.pyqtSignal(int, str)  # Signal when label is changed in the ROI table
     preset_load_signal = QtCore.pyqtSignal(int, object, object)  # Signal to load a preset
+    component_selected_signal = QtCore.pyqtSignal(int)  # 0-based component of the selected ROI row, -1 = none
 
     def __init__(self, image_view: pg.ImageView, color_manager=None):
         super().__init__()
@@ -88,125 +92,439 @@ class ROIManager(QtCore.QObject):
         self.spectrum_loaders = dict()
         self.auto_roi_settings = AutoROISuggestionSettings()
         self.fixed_w_seed_view = None
-        # Creating a dock
-        # Set up the ROI table and add it to the ROI table dock
+        # Wired up by the AnalysisManager, which owns the diagnostics dialog.
+        self._diagnostics_open_callback = None
+        self._diagnostics_dirty_callback = None
+        self._diagnostics_badge = None
+        self._diagnostics_button = None
+        self._purify_button = None
+        # Per-ROI timers for live drag updates (keeps dragging fluid
+        # on large stacks: at most one full ROI-mean recompute per interval).
+        self._live_update_timers: dict[str, QtCore.QTimer] = {}
+        # Live seed-pixel overlay in the image view (one scatter per
+        # resonance-driven component, fed by the analysis manager's preview)
+        self._seed_pixel_scatters: dict[int, pg.ScatterPlotItem] = {}
+        self._seed_overlay_visible = True
+        # component index -> user-facing name, mirrored into the combo items
+        self._component_display_labels: dict[int, str] = {}
+        self._inspector_syncing = False
+
+        # ── Seed table dock ────────────────────────────────────────────
+        # Column KEYS stay stable (presets and the analysis manager address
+        # columns by these names); only the header display text differs, and
+        # rarely-used columns are hidden — their widgets keep existing so all
+        # state import/export and per-row logic is unchanged. The hidden
+        # controls are surfaced through the inspector panel + context menu.
         self.roi_table_dock = Dock("Seed ROIs", size=(810, 500))
         self.roi_table = QtWidgets.QTableWidget()
         cols = ['Name', 'Color', 'Resonance', 'Background', 'Subtract', 'Scale', 'Offset', 'Gaussian σ', 'Export',
                 'ROI Shape', 'Live Update', 'Plot', 'Show', 'Remove']
         self.widget_columns = dict(**{col: idx for idx, col in enumerate(cols)})
+        self._column_display_names = {'Resonance': 'Component', 'Gaussian σ': 'Smooth σ', 'Show': 'Locate'}
+        self._hidden_column_names = ['Background', 'Subtract', 'Scale', 'Offset', 'Gaussian σ',
+                                     'Export', 'ROI Shape', 'Live Update', 'Remove']
         self.roi_table.setColumnCount(len(cols))
-        self.roi_table.setHorizontalHeaderLabels(cols)
+        self.roi_table.setHorizontalHeaderLabels([self._column_display_names.get(c, c) for c in cols])
         self.roi_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.roi_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.roi_table.setAlternatingRowColors(True)
+        self.roi_table.verticalHeader().setVisible(False)
+        for name in self._hidden_column_names:
+            self.roi_table.setColumnHidden(self.widget_columns[name], True)
 
         self.color_manager = color_manager
 
         # Connect the selection changed signal of the table to a slot
         self.roi_table.currentCellChanged.connect(self.update_selected_roi)
-        self.roi_table.setItemDelegateForColumn(3, ROITableDelegate(self.roi_table))
-        button_style = self.roi_table.style()
 
-        def themed_button_icon(theme_names, fallback):
-            for theme_name in theme_names:
-                icon = QtGui.QIcon.fromTheme(theme_name)
-                if not icon.isNull():
-                    return icon
-            return button_style.standardIcon(fallback)
+        # ── Toolbar above the table ────────────────────────────────────
+        def _tool_button(text, icon_name, tooltip, slot=None):
+            button = QtWidgets.QToolButton()
+            button.setText(text)
+            button.setIcon(theme.icon(icon_name))
+            button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+            button.setToolTip(tooltip)
+            if slot is not None:
+                button.clicked.connect(slot)
+            return button
 
-        def plus_button_icon():
-            icon = QtGui.QIcon.fromTheme("list-add")
-            if not icon.isNull():
-                return icon
-            size = 16
-            pixmap = QtGui.QPixmap(size, size)
-            pixmap.fill(QtCore.Qt.transparent)
-            painter = QtGui.QPainter(pixmap)
-            painter.setRenderHint(QtGui.QPainter.Antialiasing)
-            pen = QtGui.QPen(self.roi_table.palette().color(QtGui.QPalette.ButtonText), 2)
-            pen.setCapStyle(QtCore.Qt.RoundCap)
-            painter.setPen(pen)
-            margin = 4
-            center = size // 2
-            painter.drawLine(center, margin, center, size - margin)
-            painter.drawLine(margin, center, size - margin, center)
-            painter.end()
-            return QtGui.QIcon(pixmap)
-
-        # Create a button for adding a line ROI
-        add_line_roi_button = QtWidgets.QPushButton("Add ROI")
-        add_line_roi_button.setIcon(plus_button_icon())
-        add_line_roi_button.clicked.connect(lambda: self.add_roi())
-
-        remove_all_rois_button = QtWidgets.QPushButton("Clear ROIs")
-        trash_icon = button_style.standardIcon(
-            getattr(QtWidgets.QStyle, "SP_TrashIcon", QtWidgets.QStyle.SP_DialogDiscardButton)
+        add_roi_button = _tool_button(
+            "Add ROI", 'mdi.plus-box-outline',
+            "Draw a new rectangular seed ROI in the image (asks for its component).",
+            slot=lambda: self.add_roi(),
         )
-        remove_all_rois_button.setIcon(trash_icon)
-        remove_all_rois_button.setToolTip("Remove all ROIs from the image and ROI table")
-        remove_all_rois_button.clicked.connect(self.remove_all_rois)
-
-        suggest_spectra_button = QtWidgets.QPushButton("Suggest spectra/ROIs (VCA)")
-        suggest_spectra_button.setIcon(
-            themed_button_icon(
-                ["system-search", "edit-find", "help-hint", "dialog-question"],
-                QtWidgets.QStyle.SP_MessageBoxQuestion,
-            )
-        )
-        suggest_spectra_button.setToolTip(
+        suggest_spectra_button = _tool_button(
+            "Suggest (VCA)", 'mdi.auto-fix',
             "Automatically estimate pure component spectra (H seeds) from the data "
-            "with Vertex Component Analysis, and add them as dummy ROI rows. "
-            "Best when each component has at least one near-pure pixel; less "
-            "reliable for strongly overlapping spectra.\n\n"
-            "The deprecated clustering-based 'Suggest ROIs' method is still "
-            "available via a toggle inside this dialog."
+            "with Vertex Component Analysis, and add them as ROIs or spectrum rows. "
+            "Best when each component has at least one near-pure pixel.\n\n"
+            "The legacy clustering-based 'Suggest ROIs' method is available "
+            "via a toggle inside the dialog.",
+            slot=self.suggest_spectra_vca,
         )
-        suggest_spectra_button.clicked.connect(self.suggest_spectra_vca)
+        import_button = _tool_button(
+            "Import", 'mdi.folder-open-outline',
+            "Add seed spectra from measured files or from a saved .preset.",
+        )
+        import_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        import_menu = QtWidgets.QMenu(import_button)
+        import_menu.addAction(theme.icon('mdi.chart-line'), "Spectra from file…", self.load_spectra)
+        import_menu.addAction(theme.icon('mdi.palette-swatch-outline'),
+                              "LUT + spectra preset (.preset)…", self.load_presets)
+        import_button.setMenu(import_menu)
 
-        load_spectra_button = QtWidgets.QPushButton("Load Spectra from File")
-        load_spectra_button.setIcon(button_style.standardIcon(QtWidgets.QStyle.SP_DialogOpenButton))
-        load_spectra_button.clicked.connect(self.load_spectra)
-
-        load_preset_button = QtWidgets.QPushButton("Load Lookup Table and Spectra Preset")
-        load_preset_button.setIcon(button_style.standardIcon(QtWidgets.QStyle.SP_FileIcon))
-        load_preset_button.clicked.connect(self.load_presets)
+        clear_button = QtWidgets.QToolButton()
+        clear_button.setIcon(theme.icon('mdi.delete-sweep-outline'))
+        clear_button.setToolTip("Remove all ROIs from the image and the table")
+        clear_button.clicked.connect(self._confirm_remove_all_rois)
 
         # Palette selector — bidirectionally synced with the matching selector
         # in the result-viewer toolbar
         from hs_mosaic.widgets.color_manager import create_palette_selector
         palette_label, palette_combobox = create_palette_selector(self.color_manager)
 
-        # add buttons on top of the table
-        button_layout = QtWidgets.QHBoxLayout()
-        button_layout.addWidget(add_line_roi_button, alignment=QtCore.Qt.AlignCenter)
-        button_layout.addWidget(remove_all_rois_button, alignment=QtCore.Qt.AlignCenter)
-        button_layout.addWidget(suggest_spectra_button, alignment=QtCore.Qt.AlignCenter)
-        button_layout.addWidget(load_spectra_button, alignment=QtCore.Qt.AlignCenter)
-        button_layout.addWidget(load_preset_button, alignment=QtCore.Qt.AlignCenter)
-        palette_layout = QtWidgets.QHBoxLayout()
-        palette_layout.addWidget(palette_label, alignment=QtCore.Qt.AlignCenter)
-        palette_layout.addWidget(palette_combobox, alignment=QtCore.Qt.AlignCenter)
-        palette_widget = QtWidgets.QWidget()
-        palette_widget.setLayout(palette_layout)
-        button_layout.addWidget(palette_widget, alignment=QtCore.Qt.AlignCenter)
-        button_widget = QtWidgets.QWidget()
-        button_widget.setLayout(button_layout)
-        self.roi_table_dock.addWidget(button_widget)
-        # add the table to the dock
-        self.roi_table_dock.addWidget(self.roi_table)
+        toolbar_layout = QtWidgets.QHBoxLayout()
+        toolbar_layout.setContentsMargins(4, 2, 4, 0)
+        toolbar_layout.setSpacing(4)
+        toolbar_layout.addWidget(add_roi_button)
+        toolbar_layout.addWidget(suggest_spectra_button)
+        toolbar_layout.addWidget(import_button)
+        toolbar_layout.addStretch(1)
+        toolbar_layout.addWidget(palette_label)
+        toolbar_layout.addWidget(palette_combobox)
+        toolbar_layout.addWidget(clear_button)
+        toolbar_widget = QtWidgets.QWidget()
+        toolbar_widget.setLayout(toolbar_layout)
+        self.roi_table_dock.addWidget(toolbar_widget)
+        # table on the left, the selected-ROI inspector as a sidebar
+        center_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        center_splitter.setChildrenCollapsible(False)
+        center_splitter.addWidget(self.roi_table)
+        center_splitter.addWidget(self._build_inspector_panel())
+        center_splitter.setStretchFactor(0, 1)
+        center_splitter.setStretchFactor(1, 0)
+        self.roi_table_dock.addWidget(center_splitter)
+
+        # ── Footer: separability badge + seed tools ───────────────────
+        diag_layout = QtWidgets.QHBoxLayout()
+        diag_layout.setContentsMargins(6, 0, 6, 2)
+        self._diagnostics_badge = QtWidgets.QLabel("")
+        self._diagnostics_badge.setWordWrap(True)
+        self._diagnostics_badge.setToolTip(
+            "Smallest eta among the current component spectra: the fraction of the\n"
+            "hardest component's fingerprint that no combination of the others can\n"
+            "imitate. Small values mean noise and spectral errors are strongly\n"
+            "amplified when unmixing."
+        )
+        self._diagnostics_button = QtWidgets.QPushButton("Separability…")
+        self._diagnostics_button.setIcon(theme.icon('mdi.scale-balance'))
+        self._diagnostics_button.setToolTip(
+            "Open the unmixing diagnostics on the separability tab"
+        )
+        self._diagnostics_button.setEnabled(False)
+        self._diagnostics_button.clicked.connect(self._open_diagnostics)
+        diag_layout.addWidget(self._diagnostics_badge, stretch=1)
+        diag_layout.addWidget(self._diagnostics_button)
+        self._purify_button = QtWidgets.QPushButton("Purify seed…")
+        self._purify_button.setIcon(theme.icon('mdi.filter-outline'))
+        self._purify_button.setToolTip(
+            "Remove another component's contribution from a mixed seed spectrum.\n"
+            "Subtracts the largest multiple of a reference seed that keeps the\n"
+            "result non-negative, the extrapolation to the pure spectrum when\n"
+            "no pure pixel exists."
+        )
+        self._purify_button.clicked.connect(lambda: self.purify_seed())
+        diag_layout.addWidget(self._purify_button)
+        diag_widget = QtWidgets.QWidget()
+        diag_widget.setLayout(diag_layout)
+        self.roi_table_dock.addWidget(diag_widget)
+        self.update_diagnostics_badge(None)
         # bind shortcut on del press to remove the selected row / ROI
         del_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Del"), self.roi_table)
         del_shortcut.activated.connect(self._remove_selected_or_active_roi)
         esc_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Escape"), self.roi_table)
         esc_shortcut.activated.connect(lambda: self._select_roi(None))
+        # Right-click menu: all per-row actions (the hidden columns' controls)
+        self.roi_table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.roi_table.customContextMenuRequested.connect(self._show_roi_table_context_menu)
         self._refresh_roi_table_layout()
         QtCore.QTimer.singleShot(0, self._refresh_roi_table_layout)
+        self._sync_inspector(None)
 
         # %% ROI plot
-        self.roi_plot_dock= Dock("ROI Average Plot", size=(320, 240), closable=False)
+        self.roi_plot_dock= Dock("Seed spectra", size=(320, 240), closable=False)
         self.roi_plot_dock.setStretch(320, 240)
         self.roi_plotter = ROIPlotter(self)
         self.roi_plot_dock.addWidget(self.roi_plotter)
+
+    # ------------------------------------------------------------------
+    # Inspector panel: fine-tuning controls for the selected row.
+    # Each control proxies the (hidden) table-cell widget of that row, so
+    # every existing handler, preset import/export and analysis lookup keeps
+    # working on the table widgets as before.
+    # ------------------------------------------------------------------
+    def _build_inspector_panel(self) -> QtWidgets.QWidget:
+        panel = QtWidgets.QWidget()
+        panel.setObjectName("InspectorPanel")
+        panel.setMinimumWidth(210)
+        panel.setMaximumWidth(300)
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(6)
+
+        header = QtWidgets.QHBoxLayout()
+        self._insp_title = QtWidgets.QLabel("No ROI selected")
+        header.addWidget(self._insp_title, stretch=1)
+        self._insp_export = QtWidgets.QToolButton()
+        self._insp_export.setIcon(theme.icon('mdi.export-variant'))
+        self._insp_export.setToolTip("Export the selected seed spectrum as CSV")
+        self._insp_export.clicked.connect(
+            lambda: self._call_for_selected_roi(self.export_roi))
+        header.addWidget(self._insp_export)
+        self._insp_remove = QtWidgets.QToolButton()
+        self._insp_remove.setIcon(theme.icon('mdi.trash-can-outline'))
+        self._insp_remove.setToolTip("Remove the selected ROI (Del)")
+        self._insp_remove.clicked.connect(self._remove_selected_or_active_roi)
+        header.addWidget(self._insp_remove)
+        layout.addLayout(header)
+
+        form = QtWidgets.QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(4)
+        form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        def _add_form_row(label_text, widget, tooltip):
+            label = QtWidgets.QLabel(label_text)
+            label.setToolTip(tooltip)
+            widget.setToolTip(tooltip)
+            form.addRow(label, widget)
+            return widget
+
+        self._insp_shape = QtWidgets.QComboBox()
+        self._insp_shape.addItems(["LineROI", "RectROI", "EllipseROI", "RotatableRectROI"])
+        _add_form_row("Shape", self._insp_shape, "Geometry of the selected ROI")
+        self._insp_shape.currentTextChanged.connect(
+            lambda text: self._forward_inspector_combo('ROI Shape', text))
+
+        self._insp_scale = QtWidgets.QDoubleSpinBox()
+        self._insp_scale.setRange(1e-2, 1e6)
+        self._insp_scale.setDecimals(2)
+        _add_form_row("Scale", self._insp_scale,
+                      "Multiply the ROI's mean spectrum before it is used as a seed")
+        self._insp_scale.valueChanged.connect(
+            lambda value: self._forward_inspector_value('Scale', value))
+
+        self._insp_offset = QtWidgets.QDoubleSpinBox()
+        self._insp_offset.setRange(-max_dtype_val, max_dtype_val)
+        self._insp_offset.setSingleStep(500)
+        _add_form_row("Offset", self._insp_offset,
+                      "Add a constant to the ROI's mean spectrum (negative values are clipped at 0)")
+        self._insp_offset.valueChanged.connect(
+            lambda value: self._forward_inspector_value('Offset', value))
+
+        self._insp_sigma = QtWidgets.QDoubleSpinBox()
+        self._insp_sigma.setRange(0, 100)
+        self._insp_sigma.setSingleStep(0.5)
+        _add_form_row("Smooth σ", self._insp_sigma,
+                      "Gaussian smoothing of the ROI's mean spectrum (in channels)")
+        self._insp_sigma.valueChanged.connect(
+            lambda value: self._forward_inspector_value('Gaussian σ', value))
+
+        layout.addLayout(form)
+
+        self._insp_live = QtWidgets.QCheckBox("Live update")
+        self._insp_live.setToolTip("Update the seed spectrum while dragging the ROI "
+                                   "(uncheck to update only when the drag ends)")
+        layout.addWidget(self._insp_live)
+        self._insp_live.toggled.connect(
+            lambda state: self._forward_inspector_check('Live Update', state))
+
+        self._insp_background = QtWidgets.QCheckBox("Background comp.")
+        self._insp_background.setToolTip(
+            "Mark this row's component as a background component "
+            "(its seed is computed from unsubtracted data)")
+        layout.addWidget(self._insp_background)
+        self._insp_background.toggled.connect(
+            lambda state: self._forward_inspector_check('Background', state))
+
+        self._insp_subtract = QtWidgets.QCheckBox("Subtract BG")
+        self._insp_subtract.setToolTip(
+            "Subtract this ROI's mean spectrum from every pixel of the stack "
+            "(only one ROI can be the subtraction source)")
+        layout.addWidget(self._insp_subtract)
+        self._insp_subtract.toggled.connect(self._forward_inspector_subtract)
+
+        layout.addStretch(1)
+
+        self._inspector_panel = panel
+        self._inspector_row_widgets = {
+            'ROI Shape': self._insp_shape,
+            'Scale': self._insp_scale,
+            'Offset': self._insp_offset,
+            'Gaussian σ': self._insp_sigma,
+            'Live Update': self._insp_live,
+            'Background': self._insp_background,
+            'Subtract': self._insp_subtract,
+        }
+        return panel
+
+    def _selected_inspector_row(self) -> int | None:
+        row = self.roi_table.currentRow()
+        if 0 <= row < len(self.rois):
+            return row
+        return None
+
+    def _call_for_selected_roi(self, func):
+        row = self._selected_inspector_row()
+        if row is not None:
+            func(self.rois[row])
+
+    def _forward_inspector_value(self, column: str, value: float):
+        if self._inspector_syncing:
+            return
+        row = self._selected_inspector_row()
+        if row is None:
+            return
+        widget = self.roi_table.cellWidget(row, self.widget_columns[column])
+        if widget is not None:
+            widget.setValue(value)  # the cell widget's own handler does the work
+
+    def _forward_inspector_combo(self, column: str, text: str):
+        if self._inspector_syncing:
+            return
+        row = self._selected_inspector_row()
+        if row is None:
+            return
+        widget = self.roi_table.cellWidget(row, self.widget_columns[column])
+        if widget is not None and widget.currentText() != text:
+            widget.setCurrentText(text)
+
+    def _forward_inspector_check(self, column: str, state: bool):
+        if self._inspector_syncing:
+            return
+        row = self._selected_inspector_row()
+        if row is None:
+            return
+        widget = self.roi_table.cellWidget(row, self.widget_columns[column])
+        if widget is not None:
+            widget.setChecked(state)  # stateChanged handlers fire from here
+
+    def _forward_inspector_subtract(self, state: bool):
+        if self._inspector_syncing:
+            return
+        row = self._selected_inspector_row()
+        if row is None:
+            return
+        widget = self.roi_table.cellWidget(row, self.widget_columns['Subtract'])
+        if widget is None:
+            return
+        # the Subtract checkbox is wired to `clicked`, which programmatic
+        # setChecked does not emit — call the handler explicitly
+        with QtCore.QSignalBlocker(widget):
+            widget.setChecked(state)
+        self._handle_subtract_toggled(widget, state)
+
+    def _sync_inspector(self, row: int | None):
+        """Mirror the selected row's (hidden) cell widgets into the inspector."""
+        panel = getattr(self, "_inspector_panel", None)
+        if panel is None:
+            return
+        if row is None or not 0 <= row < len(self.rois):
+            self._inspector_syncing = True
+            try:
+                self._insp_title.setText("No ROI selected")
+                for widget in self._inspector_row_widgets.values():
+                    widget.setEnabled(False)
+                self._insp_export.setEnabled(False)
+                self._insp_remove.setEnabled(False)
+            finally:
+                self._inspector_syncing = False
+            return
+
+        roi = self.rois[row]
+        self._inspector_syncing = True
+        try:
+            color = self._get_roi_base_color(roi)
+            name_widget = self.roi_table.cellWidget(row, self.widget_columns['Name'])
+            name = name_widget.text() if name_widget is not None else getattr(roi, 'label', '')
+            self._insp_title.setText(
+                f"<span style='color:{color.name()};'>◼</span> <b>{name}</b>")
+            for column, widget in self._inspector_row_widgets.items():
+                cell = self.roi_table.cellWidget(row, self.widget_columns[column])
+                if cell is None:
+                    widget.setEnabled(False)
+                    continue
+                widget.setEnabled(cell.isEnabled())
+                if isinstance(widget, QtWidgets.QComboBox):
+                    widget.setCurrentText(cell.currentText())
+                elif isinstance(widget, QtWidgets.QCheckBox):
+                    widget.setChecked(cell.isChecked())
+                else:
+                    widget.setValue(cell.value())
+            self._insp_export.setEnabled(True)
+            self._insp_remove.setEnabled(True)
+        finally:
+            self._inspector_syncing = False
+
+    # ------------------------------------------------------------------
+    # Live seed-pixel overlay (markers in the image view, one per component)
+    # ------------------------------------------------------------------
+    def set_seed_pixel_overlay(self, component: int, pixels):
+        """Show (or clear, with ``pixels=None``) a component's seed pixels.
+
+        ``pixels`` is the ``(y_coords, x_coords)`` tuple that
+        ``find_seed_pixels`` returns; markers are drawn as crosses in the
+        component's color, on top of the image but below the ROIs' handles.
+        """
+        scatter = self._seed_pixel_scatters.get(component)
+        if pixels is None or len(pixels[0]) == 0:
+            if scatter is not None:
+                self.image_view.getView().removeItem(scatter)
+                del self._seed_pixel_scatters[component]
+            return
+        color = self._component_qcolor(component) or QtGui.QColor(255, 255, 255)
+        pen = pg.mkPen(color, width=1)
+        if scatter is None:
+            scatter = pg.ScatterPlotItem(symbol='+', size=7, brush=None, pxMode=True)
+            scatter.setZValue(50)
+            scatter.setVisible(self._seed_overlay_visible)
+            self._seed_pixel_scatters[component] = scatter
+            self.image_view.getView().addItem(scatter)
+        scatter.setData(
+            x=np.asarray(pixels[1], dtype=float) + 0.5,
+            y=np.asarray(pixels[0], dtype=float) + 0.5,
+            pen=pen,
+        )
+
+    def prune_seed_pixel_overlays(self, keep_components: set[int]):
+        """Remove overlays of components that no longer have a live preview."""
+        for component in list(self._seed_pixel_scatters):
+            if component not in keep_components:
+                self.set_seed_pixel_overlay(component, None)
+
+    def set_seed_overlay_visible(self, visible: bool):
+        self._seed_overlay_visible = bool(visible)
+        for scatter in self._seed_pixel_scatters.values():
+            scatter.setVisible(self._seed_overlay_visible)
+
+    def refresh_seed_overlay_colors(self):
+        for component, scatter in self._seed_pixel_scatters.items():
+            color = self._component_qcolor(component)
+            if color is not None:
+                scatter.setPen(pg.mkPen(color, width=1))
+
+    def _confirm_remove_all_rois(self):
+        if not self.rois:
+            return
+        answer = QtWidgets.QMessageBox.question(
+            None, "Clear all ROIs",
+            f"Remove all {len(self.rois)} ROI rows (including loaded spectra)?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if answer == QtWidgets.QMessageBox.Yes:
+            self.remove_all_rois()
 
     def update_data(self, data_cyx: np.ndarray = None):
         """
@@ -296,19 +614,42 @@ class ROIManager(QtCore.QObject):
                     )
         return super().eventFilter(watched, event)
 
-    def _register_table_selection_widget(self, widget: QtWidgets.QWidget | None):
+    def _register_table_selection_widget(self, widget: QtWidgets.QWidget | None, roi_id: str | None = None):
         """
         Install event filters on the given widget and all its child widgets to synchronize selection with the image view.
+        The stable ROI id is tagged onto the widgets so `_row_for_table_widget` resolves the row in O(1)
+        (rows shift on removal, ids do not).
         """
         if widget is None:
             return
         for child in [widget, *widget.findChildren(QtWidgets.QWidget)]:
+            if roi_id is not None:
+                child.setProperty("hs_roi_id", roi_id)
             if child.property("roi_selection_filter_installed"):
                 continue
             child.setProperty("roi_selection_filter_installed", True)
             child.installEventFilter(self)
 
+    def _retag_row_widgets(self, row: int, roi_id: str):
+        """Update the ROI-id tag on every cell widget of a row (after the ROI object was replaced)."""
+        for col in range(self.roi_table.columnCount()):
+            cell = self.roi_table.cellWidget(row, col)
+            if cell is None:
+                continue
+            for child in [cell, *cell.findChildren(QtWidgets.QWidget)]:
+                child.setProperty("hs_roi_id", roi_id)
+
     def _row_for_table_widget(self, widget: QtCore.QObject | None) -> int | None:
+        # Fast path: the widgets carry their ROI's stable id as a property.
+        current = widget
+        while isinstance(current, QtCore.QObject):
+            roi_id = current.property("hs_roi_id")
+            if roi_id:
+                row = self.roi_id_idx.get(str(roi_id))
+                if row is not None:
+                    return row
+            current = current.parent() if hasattr(current, "parent") else None
+        # Fallback: exhaustive scan (widgets created before tagging existed)
         current = widget
         while isinstance(current, QtCore.QObject):
             for row in range(self.roi_table.rowCount()):
@@ -321,29 +662,21 @@ class ROIManager(QtCore.QObject):
     def _refresh_roi_table_layout(self):
         """
         Adjust column widths based on content and available space, with special handling for checkbox columns.
+        Only the visible columns matter; hidden columns keep their widgets but take no space.
         """
         header = self.roi_table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
         auto_widths = getattr(self, "_roi_table_auto_widths", {})
-        checkbox_columns = {"Background", "Subtract", "Live Update", "Plot"}
+        checkbox_columns = {"Plot"}
         indicator_width = self.roi_table.style().pixelMetric(QtWidgets.QStyle.PM_IndicatorWidth) + 16
 
         default_widths = {
-            "Name": 140,
-            "Resonance": 160,
-            "Color": 58,
-            "Background": 40,
-            "Subtract": 40,
-            "Scale": 72,
-            "Offset": 58,
-            "Gaussian σ": 86,
-            "Export": 70,
-            "ROI Shape": 122,
-            "Live Update": 96,
+            "Name": 170,
+            "Resonance": 150,
+            "Color": 48,
             "Plot": 52,
             "Show": 64,
-            "Remove": 84,
         }
         for name, width in default_widths.items():
             if name in self.widget_columns:
@@ -361,20 +694,26 @@ class ROIManager(QtCore.QObject):
                     self.roi_table.setColumnWidth(column, desired_width)
                     auto_widths[column] = desired_width
 
-        # ...........
-        # After setting default widths, distribute any remaining space to the "Name" and "Resonance" columns
+        # After setting default widths, distribute remaining space to the "Name"
+        # and "Resonance" columns — capped, so a very wide table does not blow
+        # the first two columns up to half the window each.
         flexible_columns = [
-            self.widget_columns[name]
-            for name in ("Name", "Resonance")
+            (self.widget_columns[name], cap)
+            for name, cap in (("Name", 340), ("Resonance", 260))
             if name in self.widget_columns
         ]
         available_width = self.roi_table.viewport().width()
-        current_width = sum(self.roi_table.columnWidth(col) for col in range(self.roi_table.columnCount()))
+        current_width = sum(
+            self.roi_table.columnWidth(col)
+            for col in range(self.roi_table.columnCount())
+            if not self.roi_table.isColumnHidden(col)
+        )
         extra_width = available_width - current_width
         if extra_width > 0 and flexible_columns:
             extra_per_column, remainder = divmod(extra_width, len(flexible_columns))
-            for index, column in enumerate(flexible_columns):
+            for index, (column, cap) in enumerate(flexible_columns):
                 new_width = self.roi_table.columnWidth(column) + extra_per_column + (1 if index < remainder else 0)
+                new_width = min(new_width, cap)
                 self.roi_table.setColumnWidth(column, new_width)
                 auto_widths[column] = new_width
 
@@ -424,11 +763,13 @@ class ROIManager(QtCore.QObject):
             name_widget.setProperty("roi_base_style", base_style)
 
         if highlighted:
+            accent = QtGui.QColor(theme.ACCENT)
+            r, g, b = accent.red(), accent.green(), accent.blue()
             highlight_style = (
                 f"{base_style}\n"
                 "QLineEdit {"
-                " border: 2px solid rgb(255, 215, 64);"
-                " background-color: rgba(255, 215, 64, 0.12);"
+                f" border: 2px solid rgb({r}, {g}, {b});"
+                f" background-color: rgba({r}, {g}, {b}, 0.15);"
                 " }"
             )
             name_widget.setStyleSheet(highlight_style)
@@ -522,6 +863,8 @@ class ROIManager(QtCore.QObject):
             for other_roi in self.rois:
                 self.set_roi_highlight(other_roi, highlighted=False)
             self._set_table_row_highlight(None)
+            self._sync_inspector(None)
+            self.component_selected_signal.emit(-1)
             return
 
         self.active_roi = roi
@@ -538,6 +881,9 @@ class ROIManager(QtCore.QObject):
         for other_roi in self.rois:
             self.set_roi_highlight(other_roi, highlighted=other_roi == roi)
         self._set_table_row_highlight(row)
+        self._sync_inspector(row)
+        component = self.component_number_from_table_index(row)
+        self.component_selected_signal.emit(-1 if component is None else int(component))
 
         if ensure_image_visible:
             self._ensure_roi_visible(roi)
@@ -756,6 +1102,29 @@ class ROIManager(QtCore.QObject):
         except Exception:
             return ""
 
+    def component_display_text(self, component_number: int) -> str:
+        """Combo-item text for a component: its number plus the user's name for it."""
+        label = self._component_display_labels.get(component_number, "")
+        default = f"Component {component_number + 1}"
+        if label and label != default:
+            return f"C{component_number + 1} · {label}"
+        return default
+
+    def _refresh_component_combo_texts(self, component_number: int):
+        """Show the user-facing component name inside every row's component combo.
+
+        Only the item TEXT changes — every lookup uses the combo's currentIndex,
+        so renaming components never breaks the component mapping.
+        """
+        if not 0 <= component_number < self.max_component_slots:
+            return
+        text = self.component_display_text(component_number)
+        col = self.widget_columns['Resonance']
+        for row in range(self.roi_table.rowCount()):
+            combo = self.roi_table.cellWidget(row, col)
+            if isinstance(combo, QtWidgets.QComboBox) and component_number < combo.count():
+                combo.setItemText(component_number, text)
+
     def _emit_label_for_component(self, component_number: int, preferred_row: int | None = None):
         candidate_rows = []
         if preferred_row is not None and 0 <= preferred_row < self.roi_table.rowCount():
@@ -769,9 +1138,13 @@ class ROIManager(QtCore.QObject):
             if self.component_number_from_table_index(row) != component_number:
                 continue
             text = self._component_label_text_from_row(row)
+            self._component_display_labels[component_number] = text or f"Component {component_number + 1}"
+            self._refresh_component_combo_texts(component_number)
             self.label_change_signal.emit(component_number, text or f"Component {component_number}")
             return
 
+        self._component_display_labels.pop(component_number, None)
+        self._refresh_component_combo_texts(component_number)
         self.label_change_signal.emit(component_number, f"Component {component_number}")
 
     def _emit_all_component_labels(self):
@@ -2336,7 +2709,7 @@ class ROIManager(QtCore.QObject):
 
         max_cmp_number = self.max_component_slots
         resonance_combobox = QtWidgets.QComboBox()
-        resonance_combobox.addItems("Component %i" % i for i in range(1, max_cmp_number+1))
+        resonance_combobox.addItems(self.component_display_text(i) for i in range(max_cmp_number))
         index = new_row_idx
         if component_number is not None:
             index = component_number
@@ -2346,7 +2719,8 @@ class ROIManager(QtCore.QObject):
         remove_button = QtWidgets.QPushButton("Remove")
         remove_button.clicked.connect(lambda state, button=remove_button: self._handle_remove_button_clicked(button))
 
-        show_button = QtWidgets.QPushButton("Show")
+        show_button = QtWidgets.QToolButton()
+        show_button.setIcon(theme.icon('mdi.crosshairs-gps'))
         show_button.setToolTip("Center the image view on this ROI.")
         show_button.clicked.connect(lambda state, button=show_button: self._show_roi_for_table_widget(button))
 
@@ -2396,22 +2770,23 @@ class ROIManager(QtCore.QObject):
         offset_spinbox.setSingleStep(500)
         offset_spinbox.valueChanged.connect(lambda value, widget=offset_spinbox: self._handle_roi_update_widget_changed(widget))
 
+        row_roi_id = new_roi_id if new_roi_id is not None else str(roi)
         self.roi_table.setCellWidget(new_row_idx, 0, label_item)
-        self._register_table_selection_widget(label_item)
+        self._register_table_selection_widget(label_item, roi_id=row_roi_id)
         roi_table_items = [color_button, resonance_combobox, background_checkbox, subtract_button, scale_spinbox, offset_spinbox,
                            smooth_spinbox, export_button, type_item, update_checkbox, plot_checkbox, show_button, remove_button]
         for col, item in enumerate(roi_table_items):
             self.roi_table.setCellWidget(new_row_idx, col + 1, item)
-            self._register_table_selection_widget(item)
+            self._register_table_selection_widget(item, roi_id=row_roi_id)
         # adjust cell widths to contents
         logger.debug(roi)
         type_item.currentTextChanged.connect(lambda shape, combo=type_item: self._handle_shape_changed(combo, shape))
         type_item.setEnabled(not dummy)
         has_fixed_w = hasattr(roi, "fixed_W")
         show_button.setEnabled((not dummy) or has_fixed_w)
-        # Modify show button text depending on ROI type (dummys from other results have special treatment)
+        # Modify show button icon depending on ROI type (dummys from other results have special treatment)
         if has_fixed_w:
-            show_button.setText("Show W")
+            show_button.setIcon(theme.icon('mdi.image-outline'))
             show_button.setToolTip("Show the stored W seed image for this row.")
         if not getattr(roi, "seed_H_enabled", True):
             plot_checkbox.setChecked(False)
@@ -2698,6 +3073,10 @@ class ROIManager(QtCore.QObject):
         cur_index = self.add_last_roi_to_table(new_roi_id=roi_id, component_number=comp_idx, dummy=True,
                                                roi_name=spectrum_name,
                                                is_background=is_background)  # Use the loaded name
+        if not seed_H_enabled:
+            # Rows created disabled (preset restore, result-import W rows) must
+            # look disabled, same as rows disabled later.
+            self._style_row_seed_state(cur_index, False)
         self.request_plot_avg_intensity(roi_id)
         self.new_roi_signal.emit(self.component_number_from_table_index(cur_index))
         return roi_id
@@ -2791,14 +3170,488 @@ class ROIManager(QtCore.QObject):
         return self.color_manager.get_color_rgb(component_number) + (255,) if self.color_manager else self.default_colors[
             component_number % len(self.default_colors)] + (255,)
 
+    def set_diagnostics_provider(self, open_callback, dirty_callback=None) -> None:
+        """Wire the separability badge to the shared diagnostics dialog.
+
+        The ROI manager does not own the dialog; the AnalysisManager does,
+        because it also holds the data and the fitted spectra. This keeps the
+        dependency pointing one way. ``dirty_callback`` is invoked for seed
+        changes that no ROI signal covers (e.g. toggling a row's H seed).
+        """
+        self._diagnostics_open_callback = open_callback
+        self._diagnostics_dirty_callback = dirty_callback
+        if self._diagnostics_button is not None:
+            self._diagnostics_button.setEnabled(open_callback is not None)
+
+    def _notify_diagnostics_dirty(self) -> None:
+        if self._diagnostics_dirty_callback is not None:
+            try:
+                self._diagnostics_dirty_callback()
+            except Exception:  # pragma: no cover - callback is app code
+                logger.debug("Diagnostics dirty callback failed", exc_info=True)
+
+    def set_row_seed_enabled(self, row: int, enabled: bool) -> None:
+        """Toggle whether a row's spectrum participates as an H seed.
+
+        A disabled row stays in the table (its ROI, plots, and subtraction
+        role keep working) but the seed assembly skips it. The Name cell is
+        grayed out so the state is visible; the row's context menu toggles it
+        back.
+        """
+        if not (0 <= row < len(self.rois)):
+            return
+        self.rois[row].seed_H_enabled = bool(enabled)
+        self._style_row_seed_state(row, enabled)
+        logger.info("Row %d H seed %s", row + 1, "enabled" if enabled else "disabled")
+        self._notify_diagnostics_dirty()
+
+    def _style_row_seed_state(self, row: int, enabled: bool) -> None:
+        """Gray out the Name cell of rows whose H seed is disabled.
+
+        Kept separate from ``set_row_seed_enabled`` because rows can also
+        be *created* disabled (preset restore, result-import W rows), and those
+        must look disabled too.
+
+        The gray style is written as the row's *base* style, because the
+        selection highlight (``_apply_table_row_highlight``) layers a
+        border on top of a cached ``roi_base_style`` and restores that cache on
+        deselect; writing the stylesheet directly would be wiped by the next
+        select/deselect cycle.
+        """
+        name_widget = self.roi_table.cellWidget(row, self.widget_columns["Name"])
+        if name_widget is None:
+            return
+        if enabled:
+            base_style = ""
+            name_widget.setToolTip("")
+        else:
+            base_style = "QLineEdit { color: #909090; font-style: italic; }"
+            name_widget.setToolTip(
+                "H seed disabled: this row does not contribute a seed spectrum.\n"
+                "Right-click the row to re-enable it."
+            )
+        name_widget.setProperty("roi_base_style", base_style)
+        if self._highlighted_table_row == row:
+            # Rebuild the highlight on top of the new base so a selected row
+            # shows gray text and the selection border at the same time.
+            self._apply_table_row_highlight(row, highlighted=True)
+        else:
+            name_widget.setStyleSheet(base_style)
+
+    def _show_roi_table_context_menu(self, pos) -> None:
+        row = self.roi_table.rowAt(pos.y())
+        if not (0 <= row < len(self.rois)):
+            return
+        roi = self.rois[row]
+        is_dummy = isinstance(roi, DummyROI)
+        menu = QtWidgets.QMenu(self.roi_table)
+
+        locate = menu.addAction(theme.icon('mdi.crosshairs-gps'), "Show in image")
+        locate.setEnabled((not is_dummy) or hasattr(roi, "fixed_W"))
+        locate.triggered.connect(lambda: self._show_roi_by_row(row) if not hasattr(roi, "fixed_W")
+                                 else self._show_fixed_w_seed(roi))
+
+        export = menu.addAction(theme.icon('mdi.export-variant'), "Export spectrum as CSV…")
+        export.triggered.connect(lambda: self.export_roi(roi))
+
+        menu.addSeparator()
+
+        subtract_widget = self.roi_table.cellWidget(row, self.widget_columns['Subtract'])
+        subtract_action = menu.addAction("Use as background subtraction")
+        subtract_action.setCheckable(True)
+        subtract_action.setChecked(bool(subtract_widget is not None and subtract_widget.isChecked()))
+        subtract_action.setToolTip("Subtract this ROI's mean spectrum from every pixel of the stack")
+
+        def _toggle_subtract(checked):
+            if subtract_widget is None:
+                return
+            with QtCore.QSignalBlocker(subtract_widget):
+                subtract_widget.setChecked(checked)
+            self._handle_subtract_toggled(subtract_widget, checked)
+            self._sync_inspector(self._selected_inspector_row())
+
+        subtract_action.toggled.connect(_toggle_subtract)
+
+        background_widget = self.roi_table.cellWidget(row, self.widget_columns['Background'])
+        background_action = menu.addAction("Background component")
+        background_action.setCheckable(True)
+        background_action.setChecked(bool(background_widget is not None and background_widget.isChecked()))
+        background_action.setToolTip("Mark this row's component as a background component")
+
+        def _toggle_background(checked):
+            if background_widget is None:
+                return
+            background_widget.setChecked(checked)  # stateChanged runs the component logic
+            # the cell is hidden; the inspector checkbox is the visible copy
+            self._sync_inspector(self._selected_inspector_row())
+
+        background_action.toggled.connect(_toggle_background)
+
+        seed_enabled = getattr(roi, "seed_H_enabled", True)
+        toggle = menu.addAction("Disable H seed" if seed_enabled else "Re-enable H seed")
+        toggle.setToolTip("A disabled row keeps its ROI and plots but does not contribute a seed spectrum")
+        toggle.triggered.connect(lambda: self.set_row_seed_enabled(row, not seed_enabled))
+
+        if not is_dummy:
+            shape_widget = self.roi_table.cellWidget(row, self.widget_columns['ROI Shape'])
+            if shape_widget is not None:
+                shape_menu = menu.addMenu(theme.icon('mdi.shape-outline'), "ROI shape")
+                current_shape = shape_widget.currentText()
+                for shape_name in ("LineROI", "RectROI", "EllipseROI", "RotatableRectROI"):
+                    shape_action = shape_menu.addAction(shape_name)
+                    shape_action.setCheckable(True)
+                    shape_action.setChecked(shape_name == current_shape)
+                    shape_action.triggered.connect(
+                        lambda _checked, s=shape_name, w=shape_widget: w.setCurrentText(s))
+
+        menu.addSeparator()
+        remove = menu.addAction(theme.icon('mdi.trash-can-outline'), "Remove ROI")
+        remove.triggered.connect(lambda: self.remove_roi(roi))
+
+        menu.exec_(self.roi_table.viewport().mapToGlobal(pos))
+
+    def _open_diagnostics(self) -> None:
+        if self._diagnostics_open_callback is not None:
+            self._diagnostics_open_callback()
+
+    def update_diagnostics_badge(self, sep=None) -> None:
+        """Show how separable the current component spectra are.
+
+        ``sep`` is a ``Separability`` result from ``unmixing_diagnostics``
+        or ``None`` when no spectra are defined yet.
+        """
+        if self._diagnostics_badge is None:
+            return
+        apply_badge(self._diagnostics_badge, separability_badge(sep))
+
+    # ------------------------------------------------------------------
+    # Seed purification
+    # ------------------------------------------------------------------
+
+    def _seed_row_label(self, row: int) -> str:
+        name_widget = self.roi_table.cellWidget(row, self.widget_columns["Name"])
+        text = name_widget.text().strip() if name_widget is not None else ""
+        return text or f"row {row + 1}"
+
+    def _enabled_seed_rows(self) -> list[tuple[int, str, int]]:
+        """Rows usable as purification inputs: ``(row, label, component0)``.
+
+        A row qualifies when its H seed is enabled, it maps to a component,
+        and its mean spectrum is currently computable (spatial ROIs need
+        loaded data; dummy rows always work).
+        """
+        rows = []
+        for row, roi in enumerate(self.rois):
+            if not getattr(roi, "seed_H_enabled", True):
+                continue
+            comp = self.component_number_from_table_index(row)
+            if comp is None or comp < 0:
+                continue
+            try:
+                self.get_roi_average(roi)
+            except Exception:
+                continue
+            rows.append((row, self._seed_row_label(row), comp))
+        return rows
+
+    def _seed_matrix_from_table(self) -> tuple[np.ndarray | None, list[str]]:
+        """Component seed matrix from the ROI table, rows = components.
+
+        Mirrors the parsing the analysis uses (``'Component N'`` resonance
+        strings, rows sharing a component averaged), for the eta preview in
+        the purify dialog. Unseeded components stay zero rows.
+        """
+        try:
+            curves = self.get_roi_mean_curves()
+        except Exception:
+            return None, []
+        parsed = []
+        for seed in curves:
+            comp = seed.get("component")
+            if comp is None:
+                try:
+                    comp = int(str(seed["resonance"]).strip("Component ")) - 1
+                except (KeyError, ValueError):
+                    continue
+            spectrum = np.asarray(seed.get("H"), dtype=np.float64).ravel()
+            if comp >= 0 and spectrum.size:
+                parsed.append((comp, spectrum))
+        if not parsed:
+            return None, []
+        n = max(comp for comp, _ in parsed) + 1
+        n_channels = parsed[0][1].size
+        H = np.zeros((n, n_channels))
+        for comp, spectrum in parsed:
+            if spectrum.size == n_channels:
+                H[comp] = spectrum
+        labels = [self.get_component_label(i) for i in range(n)]
+        return H, labels
+
+    def add_purified_seed_row(
+        self,
+        target_row: int,
+        reference_row: int,
+        fraction: float = 1.0,
+        original_action: str = "disable",
+    ) -> str | None:
+        """Subtract the reference row's spectrum from the target row's and add
+        the result as a new dummy seed row on the target's component.
+
+        ``original_action`` decides what happens to the target row, because
+        rows sharing a component are averaged and would re-mix the purified
+        spectrum with the mixture it came from:
+
+        - ``"disable"``: the row stays (region, plots, subtraction keep
+          working) but stops contributing its H seed; shown grayed out.
+        - ``"delete"``: the row is removed from the table entirely.
+        - ``"keep"``: nothing happens -- only sensible when the user intends
+          the averaging.
+        """
+        if not (0 <= target_row < len(self.rois) and 0 <= reference_row < len(self.rois)):
+            logger.error("Purify: row out of range (%s, %s)", target_row, reference_row)
+            return None
+        if target_row == reference_row:
+            logger.error("Purify: target and reference are the same row")
+            return None
+        target_roi = self.rois[target_row]
+        try:
+            mixed = self.get_roi_average(target_roi)
+            reference = self.get_roi_average(self.rois[reference_row])
+            result = purify_spectrum(mixed, reference, fraction=fraction)
+        except Exception as exc:
+            logger.error("Purify failed: %s", exc)
+            return None
+        comp0 = self.component_number_from_table_index(target_row)
+        if comp0 is None or comp0 < 0:
+            logger.error("Purify: target row %d has no component", target_row)
+            return None
+        # Labels before any table mutation: deleting the target shifts indices.
+        target_label = self._seed_row_label(target_row)
+        reference_label = self._seed_row_label(reference_row)
+        roi_id = self.add_dummy_roi(
+            result.spectrum,
+            component_number=comp0 + 1,
+            spectrum_name=f"{target_label} purified",
+        )
+        if original_action == "disable":
+            self.set_row_seed_enabled(target_row, False)
+        elif original_action == "delete":
+            self.remove_roi(target_roi)
+        logger.info(
+            "Purified seed for component %d: subtracted %.4g x '%s' "
+            "(b* = %.4g, anchor channel %d, residual %.0f%%)",
+            comp0 + 1, result.subtracted, reference_label,
+            result.b_star, result.anchor_channel, 100 * result.residual_fraction,
+        )
+        return roi_id
+
+    def purify_seed(self, *, exec_dialog: bool = True):
+        """Dialog: preview and apply seed purification against a reference row.
+
+        ``exec_dialog`` is keyword-only on purpose: Qt's ``clicked`` signal
+        passes its ``checked`` bool positionally, which would otherwise be
+        swallowed as ``exec_dialog=False`` and silently suppress the dialog.
+        """
+        rows = self._enabled_seed_rows()
+        if len(rows) < 2:
+            QtWidgets.QMessageBox.information(
+                None, "Purify seed",
+                "Purification needs at least two seed rows: the mixed target "
+                "and a reference for the component to remove.",
+            )
+            return None
+
+        dialog = QtWidgets.QDialog()
+        dialog.setWindowTitle("Purify seed")
+        dialog.setModal(True)
+        dialog.resize(640, 560)
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        form = QtWidgets.QFormLayout()
+        target_combo = QtWidgets.QComboBox()
+        reference_combo = QtWidgets.QComboBox()
+        for row, label, comp in rows:
+            display = f"{label} (Component {comp + 1})"
+            target_combo.addItem(display, row)
+            reference_combo.addItem(display, row)
+        target_combo.setToolTip("The mixed seed to purify")
+        reference_combo.setToolTip(
+            "The component to remove. Its largest non-negativity-preserving\n"
+            "multiple is subtracted from the target."
+        )
+        form.addRow("Target (mixed):", target_combo)
+        form.addRow("Reference (remove):", reference_combo)
+
+        slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        slider.setRange(0, 120)
+        slider.setValue(100)
+        slider.setToolTip(
+            "How far to extrapolate. 100% subtracts the full b* (the\n"
+            "non-negativity boundary); less is conservative when the target\n"
+            "has no truly reference-free channel."
+        )
+        slider_label = QtWidgets.QLabel("100 %")
+        slider_row = QtWidgets.QHBoxLayout()
+        slider_row.addWidget(slider, stretch=1)
+        slider_row.addWidget(slider_label)
+        form.addRow("Subtraction:", slider_row)
+        layout.addLayout(form)
+
+        plot = pg.PlotWidget()
+        plot.addLegend()
+        plot.setLabel("left", "Intensity")
+        plot.setLabel("bottom", spectral_axis_label(self.spectral_units))
+        mixed_curve = plot.plot([], [], pen=pg.mkPen((150, 150, 150), width=2), name="mixed target")
+        ref_curve = plot.plot(
+            [], [], pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine),
+            name="subtracted reference",
+        )
+        purified_curve = plot.plot([], [], pen=pg.mkPen((255, 0, 0), width=2), name="purified")
+        layout.addWidget(plot, stretch=1)
+
+        eta_label = QtWidgets.QLabel("")
+        layout.addWidget(eta_label)
+        warn_label = QtWidgets.QLabel("")
+        warn_label.setWordWrap(True)
+        warn_label.setStyleSheet("color: #d0a030;")
+        layout.addWidget(warn_label)
+
+        original_row_layout = QtWidgets.QHBoxLayout()
+        original_row_layout.addWidget(QtWidgets.QLabel("Original row after apply:"))
+        original_combo = QtWidgets.QComboBox()
+        original_combo.addItem("Disable its H seed (recommended)", "disable")
+        original_combo.addItem("Delete the row", "delete")
+        original_combo.addItem("Keep it seeding", "keep")
+        original_combo.setToolTip(
+            "Rows sharing a component are averaged into one seed, so the original\n"
+            "mixed row would re-mix the purified spectrum.\n"
+            "Disable: the row stays (grayed out, region and plots keep working)\n"
+            "but stops seeding; re-enable it via right-click on the row.\n"
+            "Delete: remove the row entirely.\n"
+            "Keep: leave it seeding -- only sensible if you want the average."
+        )
+        original_row_layout.addWidget(original_combo, stretch=1)
+        layout.addLayout(original_row_layout)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        ok_button = buttons.button(QtWidgets.QDialogButtonBox.Ok)
+        ok_button.setText("Add purified seed")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        spectra_cache: dict[int, np.ndarray] = {}
+
+        def _row_spectrum(row: int) -> np.ndarray:
+            if row not in spectra_cache:
+                spectra_cache[row] = np.asarray(
+                    self.get_roi_average(self.rois[row]), dtype=np.float64
+                )
+            return spectra_cache[row]
+
+        state: dict = {"result": None}
+        dialog.purify_state = state
+
+        def _update(*_args):
+            target_row = target_combo.currentData()
+            reference_row = reference_combo.currentData()
+            fraction = slider.value() / 100.0
+            slider_label.setText(f"{slider.value()} %")
+            if target_row is None or reference_row is None:
+                return
+            if target_row == reference_row:
+                warn_label.setText("Target and reference are the same row.")
+                ok_button.setEnabled(False)
+                state["result"] = None
+                return
+            mixed = _row_spectrum(target_row)
+            try:
+                result = purify_spectrum(mixed, _row_spectrum(reference_row), fraction=fraction)
+            except ValueError as exc:
+                warn_label.setText(str(exc))
+                ok_button.setEnabled(False)
+                state["result"] = None
+                return
+            state.update(result=result, target_row=target_row,
+                         reference_row=reference_row, fraction=fraction)
+            ok_button.setEnabled(True)
+
+            x = self.wavenumbers if self.wavenumbers is not None else np.arange(mixed.size)
+            x = np.asarray(x, dtype=np.float64)
+            if x.size != mixed.size:
+                x = np.arange(mixed.size, dtype=np.float64)
+            mixed_curve.setData(x, mixed)
+            ref_curve.setData(x, result.subtracted * _row_spectrum(reference_row))
+            comp0 = self.component_number_from_table_index(target_row) or 0
+            purified_curve.setPen(pg.mkPen(self.get_color_rgba(comp0)[:3], width=2))
+            purified_curve.setData(x, result.spectrum)
+
+            warnings = []
+            if result.b_star <= 1e-9:
+                warnings.append("The target already contains no measurable amount of the reference.")
+            elif result.residual_fraction < 0.05:
+                warnings.append("The spectra are nearly proportional: almost nothing remains "
+                                "after subtraction.")
+            warn_label.setText(" ".join(warnings))
+
+            H, labels = self._seed_matrix_from_table()
+            if H is not None and 0 <= comp0 < H.shape[0]:
+                eta_before = separability(H, labels=labels).eta[comp0]
+                H_after = H.copy()
+                H_after[comp0] = result.spectrum
+                eta_after = separability(H_after, labels=labels).eta[comp0]
+                eta_label.setText(
+                    f"Separability of this component: η = {eta_before:.3f} → {eta_after:.3f}"
+                )
+            else:
+                eta_label.setText("")
+
+        target_combo.currentIndexChanged.connect(_update)
+        reference_combo.currentIndexChanged.connect(_update)
+        slider.valueChanged.connect(_update)
+
+        # Defaults: the selected table row as target; the most similar other
+        # row as reference (that is the contamination one wants to remove).
+        current = self.roi_table.currentRow()
+        target_default = next((i for i, (row, _, _) in enumerate(rows) if row == current), 0)
+        target_combo.setCurrentIndex(target_default)
+        target_spec = _row_spectrum(rows[target_default][0])
+        best_i, best_cos = None, -1.0
+        for i, (row, _, _) in enumerate(rows):
+            if i == target_default:
+                continue
+            other = _row_spectrum(row)
+            denom = np.linalg.norm(target_spec) * np.linalg.norm(other)
+            cos = abs(float(target_spec @ other) / denom) if denom > 0 else 0.0
+            if cos > best_cos:
+                best_i, best_cos = i, cos
+        reference_combo.setCurrentIndex(best_i if best_i is not None else 0)
+        _update()
+
+        if not exec_dialog:
+            return dialog
+        if dialog.exec_() != QtWidgets.QDialog.Accepted or state["result"] is None:
+            return None
+        return self.add_purified_seed_row(
+            state["target_row"], state["reference_row"],
+            fraction=state["fraction"], original_action=original_combo.currentData(),
+        )
+
     def component_number_from_table_index(self, idx: int) -> int | None:
         """
         Returns the 0-based index of the component, i.e. the first component "Component 1" will return 0.
         """
         col = self.widget_columns['Resonance']
 
-        # Try as a widget (QComboBox)
+        # The combos are populated in component order, so the current index is
+        # the component number; item texts may carry user-defined names and
+        # must not be parsed.
         widget = self.roi_table.cellWidget(idx, col)
+        if isinstance(widget, QtWidgets.QComboBox):
+            index = widget.currentIndex()
+            return index if index >= 0 else None
         if widget is not None:
             text = widget.currentText()
         else:
@@ -2951,9 +3804,11 @@ class ROIManager(QtCore.QObject):
                 self.roi_id_idx[str(roi)] -= 1
 
             # remove from signal dict
-            if roi_id in self.roi_region_change_signals:
-                self.disconnect(self.roi_region_change_signals[roi_id])
-                del self.roi_region_change_signals[roi_id]
+            self._disconnect_region_signals(roi_id)
+            timer = self._live_update_timers.pop(roi_id, None)
+            if timer is not None:
+                timer.stop()
+                timer.deleteLater()
             if roi_id in self.roi_click_signals:
                 self.disconnect(self.roi_click_signals[roi_id])
                 del self.roi_click_signals[roi_id]
@@ -2973,20 +3828,10 @@ class ROIManager(QtCore.QObject):
             self._refresh_roi_table_layout()
 
 
-            new_cmp = False
-            # check if another roi for this component exists and update the label name
-            for idx in range(self.roi_table.rowCount()):
-                if self.component_number_from_table_index(idx) == cmp:
-                    # update the label name
-                    self.label_change_signal.emit(
-                        cmp,
-                        self.roi_table.cellWidget(idx, self.widget_columns['Name']).text(),
-                    )
-                    new_cmp = True
-                    break
-            if not new_cmp and cmp is not None:
-                # if no other roi exists for this component, set back to default name
-                self.label_change_signal.emit(cmp, f"Component {cmp}")
+            # re-emit the component's label from the remaining rows (or the
+            # default), keeping the combo display names in sync as well
+            if cmp is not None:
+                self._emit_label_for_component(cmp)
             if self.active_roi in self.rois:
                 self._select_roi(self.active_roi, ensure_image_visible=False, ensure_table_visible=False)
             elif was_active:
@@ -3032,6 +3877,7 @@ class ROIManager(QtCore.QObject):
             if qcolor is not None:
                 self.update_roi_color(idx, qcolor, emit_signal=False)
         self.roi_plotter.refresh_all_component_fallbacks()
+        self.refresh_seed_overlay_colors()
 
     def update_selected_roi(self, *_):
         if self._selection_sync_in_progress:
@@ -3086,31 +3932,64 @@ class ROIManager(QtCore.QObject):
         if old_roi_id in self.roi_id_idx:
             del self.roi_id_idx[old_roi_id]
         self.roi_id_idx[str(new_roi)] = row_idx
-        if old_roi_id in self.roi_region_change_signals:
-            self.disconnect(self.roi_region_change_signals[old_roi_id])
-            del self.roi_region_change_signals[old_roi_id]
+        self._disconnect_region_signals(old_roi_id)
+        old_timer = self._live_update_timers.pop(old_roi_id, None)
+        if old_timer is not None:
+            old_timer.stop()
+            old_timer.deleteLater()
         if old_roi_id in self.roi_click_signals:
             self.disconnect(self.roi_click_signals[old_roi_id])
             del self.roi_click_signals[old_roi_id]
         self.connect_signals_to_roi(
             new_roi,
         )
+        # the row's widgets must resolve to the new ROI object from now on
+        self._retag_row_widgets(row_idx, str(new_roi))
         self.request_plot_avg_intensity(str(new_roi))
         if was_active:
             self._select_roi(new_roi, ensure_image_visible=False, ensure_table_visible=True)
         else:
             self.set_roi_highlight(new_roi, highlighted=False)
 
+    def _throttled_plot_request(self, roi_id: str):
+        """Coalesce live-drag updates: at most one ROI-mean recompute per interval."""
+        timer = self._live_update_timers.get(roi_id)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(40)
+            timer.timeout.connect(lambda rid=roi_id: self.request_plot_avg_intensity(rid))
+            self._live_update_timers[roi_id] = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _disconnect_region_signals(self, roi_id: str):
+        connections = self.roi_region_change_signals.pop(roi_id, None)
+        if connections is None:
+            return
+        if not isinstance(connections, (list, tuple)):
+            connections = [connections]
+        for connection in connections:
+            try:
+                self.disconnect(connection)
+            except TypeError:
+                pass
+
     def connect_signals_to_roi(self, roi: pg.ROI, on_region_change=True):
         roi_id = str(roi)
-        if roi_id in self.roi_region_change_signals:
-            self.disconnect(self.roi_region_change_signals[roi_id])
+        self._disconnect_region_signals(roi_id)
+        connections = []
         if on_region_change:
-            sig = roi.sigRegionChanged.connect(lambda: self.request_plot_avg_intensity(roi_id))
+            # throttle live drags, then deliver one exact update at drag end
+            connections.append(roi.sigRegionChanged.connect(
+                lambda *_a, rid=roi_id: self._throttled_plot_request(rid)))
+            connections.append(roi.sigRegionChangeFinished.connect(
+                lambda *_a, rid=roi_id: self.request_plot_avg_intensity(rid)))
         else:
-            sig = roi.sigRegionChangeFinished.connect(lambda: self.request_plot_avg_intensity(roi_id))
-            logger.warning(f'Switched to region change finished for {roi_id}')
-        self.roi_region_change_signals[roi_id] = sig
+            connections.append(roi.sigRegionChangeFinished.connect(
+                lambda *_a, rid=roi_id: self.request_plot_avg_intensity(rid)))
+            logger.info(f'Switched to region change finished for {roi_id}')
+        self.roi_region_change_signals[roi_id] = connections
         if not isinstance(roi, DummyROI) and hasattr(roi, "sigClicked"):
             roi.setAcceptedMouseButtons(QtCore.Qt.LeftButton)
             if roi_id in self.roi_click_signals:
@@ -3136,6 +4015,8 @@ class ROIManager(QtCore.QObject):
         for idx in range(self.roi_table.rowCount()):
             if self.component_number_from_table_index(idx) == component:
                 self.roi_table.cellWidget(idx, self.widget_columns['Background']).setChecked(state)
+        # the propagation may have flipped the selected row's hidden cell
+        self._sync_inspector(self._selected_inspector_row())
         # replot is needed as the background selection requires unsubtracted data for the roi
         self.replot_all_rois()
 
@@ -3176,14 +4057,41 @@ class ROIManager(QtCore.QObject):
                     return True
         return False
 
+    def curve_pen_for_roi(self, roi) -> QtGui.QPen:
+        """Selection-aware pen for a row's spectrum curve.
+
+        The selected row's curve keeps its component color at full strength and
+        gains weight; while something is selected, every other curve fades so
+        selection reads as figure/ground contrast instead of a special color
+        (a highlight color would collide with the component palette).
+        """
+        color = QtGui.QColor(self._get_roi_base_color(roi))
+        if roi is self.active_roi:
+            return pg.mkPen(color, width=3)
+        if self.active_roi is not None:
+            color.setAlpha(90)
+            return pg.mkPen(color, width=1.2)
+        return pg.mkPen(color, width=2)
+
     def set_roi_highlight(self, roi, highlighted=True):
         """
-        Change the color of the ROI to highlight it
+        Emphasize the selected ROI and de-emphasize the rest.
+
+        The selected ROI keeps its own component color (slightly brightened)
+        at double stroke width; unselected ROIs drop to reduced opacity while
+        a selection exists. No dedicated highlight color is used, so the
+        selection can never be confused with a component color.
         Args:
             roi: (pg.ROI) The ROI object to be highlighted
             highlighted: (bool) If True, the ROI will be highlighted, otherwise it will be unhighlighted
         """
-        if roi is None or isinstance(roi, DummyROI):
+        if roi is None:
+            return
+
+        # the curve emphasis applies to every row type, including
+        # spectrum-only rows that have no visible ROI in the image
+        self.roi_plotter.update_curve_pen(str(roi), self.curve_pen_for_roi(roi))
+        if isinstance(roi, DummyROI):
             return
 
         roi_idx = self.roi_id_idx.get(str(roi))
@@ -3201,57 +4109,60 @@ class ROIManager(QtCore.QObject):
         if not hasattr(roi, "base_z_value"):
             roi.base_z_value = roi.zValue()
 
+        base_color = QtGui.QColor(roi.base_pen.color())
         if highlighted:
-            pen = pg.mkPen((255, 235, 120), width=4)
+            pen = pg.mkPen(base_color.lighter(125), width=4)
             pen.setCosmetic(True)
             roi.hoverPen = pg.mkPen((255, 255, 255), width=5)
             roi.hoverPen.setCosmetic(True)
             roi.setZValue(float(roi.base_z_value) + 1000.0)
+        elif self.active_roi is not None:
+            # another ROI is selected: recede, but recover full color on hover
+            base_color.setAlpha(90)
+            pen = pg.mkPen(base_color, width=2)
+            pen.setCosmetic(True)
+            roi.hoverPen = pg.mkPen(getattr(roi, "base_hover_pen", roi.base_pen))
+            roi.setZValue(float(roi.base_z_value))
         else:
             pen = pg.mkPen(roi.base_pen)
             roi.hoverPen = pg.mkPen(getattr(roi, "base_hover_pen", roi.base_pen))
             roi.setZValue(float(roi.base_z_value))
 
         roi.setPen(pen)
-        # replot the ROI with the correct pen
-        if roi_idx is not None:
-            name_widget = self.roi_table.cellWidget(roi_idx, self.widget_columns['Name'])
-            if name_widget is not None:
-                self.plot_roi(roi, label=name_widget.text())
 
     def get_roi_mean_curves(self) -> list[dict]:
-        # iterate over all entries in the table, sort them by their resonance given in the combobox and average identical resonances together
-        resonances = []
-        # find all resonances
+        # iterate over all entries in the table, group them by their component and average rows sharing a component
+        components = []
         for idx in range(self.roi_table.rowCount()):
             roi = self.rois[idx]
             if not getattr(roi, "seed_H_enabled", True):
                 continue
-            # get the resonance of the current ROI
-            resonance = self.roi_table.cellWidget(idx, self.widget_columns['Resonance']).currentText()
-            # find all ROIs with the same resonance
-            if resonance not in resonances:
-                resonances.append(resonance)
-        # create a list of lists with the mean curves for each resonance
+            component = self.component_number_from_table_index(idx)
+            if component is not None and component not in components:
+                components.append(component)
+        # create a list of lists with the mean curves for each component
         mean_curves = []
-        for resonance in resonances:
+        for component in components:
             curves = []
             res_index = None
             for idx in range(self.roi_table.rowCount()):
                 roi = self.rois[idx]
                 if not getattr(roi, "seed_H_enabled", True):
                     continue
-                if self.roi_table.cellWidget(idx, self.widget_columns['Resonance']).currentText() == resonance:
+                if self.component_number_from_table_index(idx) == component:
                     xy_avg = self.get_roi_average(roi)
                     curves.append(xy_avg)
                     res_index = idx
             if not curves or res_index is None:
                 continue
-            # average the curves and add them to the list of dictionaries where 'H' stores the mean curve, 'resonance' the resonance and 'label' the user defined label
-            logger.info(f"Averaging {len(curves)} curves for  H[{resonance}]]")
+            # average the curves; 'component' is the stable 0-based index, the
+            # legacy 'resonance' string stays parseable for older consumers
+            # (combo item TEXTS may carry user-facing names and must not be parsed)
+            logger.info(f"Averaging {len(curves)} curves for  H[Component {component + 1}]")
             mean_curves.append({
                 'H': np.mean(curves, axis=0),
-                'resonance': resonance,
+                'component': int(component),
+                'resonance': f"Component {component + 1}",
                 'label': self.roi_table.cellWidget(res_index, self.widget_columns['Name']).text(),
                 'is_background': bool(self.roi_table.cellWidget(res_index, self.widget_columns['Background']).isChecked()),
             })
@@ -3357,6 +4268,35 @@ class ROIManager(QtCore.QObject):
                 if self.roi_table.cellWidget(idx, self.widget_columns['Plot']).isChecked():
                     self.plot_roi(roi, xy_avg, self.roi_table.cellWidget(idx, self.widget_columns['Name']).text())
 
+    def _rect_roi_mean(self, roi: pg.ROI, stack: np.ndarray) -> np.ndarray | None:
+        """Fast mean spectrum for an axis-aligned rectangle ROI.
+
+        pyqtgraph's getArrayRegion affine-slices (interpolates) the full band
+        stack, which takes seconds on large mosaics — this integer-bounds slice
+        is equivalent up to sub-pixel edge coverage and orders of magnitude
+        faster. Bounds are rounded to whole pixels (the same convention the
+        seed-pixel machinery uses in get_pixels_in_roi). Returns None when the
+        ROI is not a plain unrotated RectROI, so callers fall back to
+        getArrayRegion for ellipses, lines and rotated rectangles.
+        """
+        if type(roi) is not pg.RectROI or stack is None or stack.ndim != 3:
+            return None
+        try:
+            if float(roi.angle()) % 360.0 != 0.0:
+                return None
+        except Exception:
+            return None
+        x0, y0 = float(roi.pos().x()), float(roi.pos().y())
+        w, h = float(roi.size().x()), float(roi.size().y())
+        if w <= 0 or h <= 0:
+            return None
+        height, width = stack.shape[1], stack.shape[2]
+        xi0 = int(np.clip(np.round(x0), 0, width - 1))
+        yi0 = int(np.clip(np.round(y0), 0, height - 1))
+        xi1 = int(np.clip(np.round(x0 + w), xi0 + 1, width))
+        yi1 = int(np.clip(np.round(y0 + h), yi0 + 1, height))
+        return stack[:, yi0:yi1, xi0:xi1].mean(axis=(1, 2), dtype=np.float64)
+
     def get_roi_average(self, roi: pg.ROI, apply_smoothing=True, apply_scale=True, apply_offset=True,
                         clip_negative=True) -> np.array:
         # check if the roi is flagged as background via the checkbox
@@ -3364,10 +4304,12 @@ class ROIManager(QtCore.QObject):
         background_checK = self.roi_table.cellWidget(self.roi_id_idx[str(roi)], self.widget_columns['Background']).isChecked()
         if not background_checK and self.subtracted_data is not None:
             processed_im = self.subtracted_data
-        z_stack = roi.getArrayRegion(processed_im, self.image_view.imageItem, axes=(2, 1),
-                                     returnMappedCoords=False)
-        logger.debug('Shape of ROI selection', z_stack.shape)
-        xy_avg = np.mean(z_stack, axis=(1, 2))
+        xy_avg = self._rect_roi_mean(roi, processed_im)
+        if xy_avg is None:
+            z_stack = roi.getArrayRegion(processed_im, self.image_view.imageItem, axes=(2, 1),
+                                         returnMappedCoords=False)
+            logger.debug('Shape of ROI selection', z_stack.shape)
+            xy_avg = np.mean(z_stack, axis=(1, 2))
         # check if the roi should be smoothed
         idx = self.roi_id_idx[str(roi)]
         smooth = self.roi_table.cellWidget(idx, self.widget_columns['Gaussian σ']).value()
@@ -3540,11 +4482,15 @@ class ROIManager(QtCore.QObject):
 
             is_dummy = isinstance(roi, DummyROI)
             row_state["dummy"] = bool(is_dummy)
+            # For every row type: a row disabled by Purify seed must stay
+            # disabled after a preset round-trip, or the reloaded original
+            # re-mixes with its purified replacement. Legacy presets lack the
+            # key and default to enabled on import, matching their old behavior.
+            row_state["seed_H_enabled"] = bool(getattr(roi, "seed_H_enabled", True))
 
             if is_dummy:
                 row_state["spectrum_name"] = getattr(roi, "spectrum_name", row_state["name"])
                 row_state["spectrum_data"] = roi.spectrum_data.tolist()
-                row_state["seed_H_enabled"] = bool(getattr(roi, "seed_H_enabled", True))
                 row_state["result_seed_dummy"] = bool(getattr(roi, "is_result_seed_dummy", False))
             else:
                 row_state["pos"] = [float(roi.pos()[0]), float(roi.pos()[1])]
@@ -3592,7 +4538,7 @@ class ROIManager(QtCore.QObject):
                 roi_obj = self.rois[self.roi_id_idx[roi_id]]
                 row = self.roi_id_idx[roi_id]
             else:
-                # create a base RectROI, then set shape via combobox (reuses your own change_roi_type())
+                # create a base RectROI; the shape combobox below converts it via change_roi_type()
                 pos = entry.get("pos", [0, 0])
                 size = entry.get("size", [10, 10])
                 roi_obj = pg.RectROI(pos, size, pen=(0, 9))
@@ -3606,6 +4552,15 @@ class ROIManager(QtCore.QObject):
                                                  roi_name=entry.get("name", None))
                 self.connect_signals_to_roi(roi_obj, on_region_change=True)
                 self.request_plot_avg_intensity(roi_id)
+
+            # Restore the H-seed flag for every row type (legacy presets lack
+            # the key and default to enabled). Dummy rows already got the flag
+            # via add_dummy_roi; spatial rows only here. Styling included, so a
+            # disabled row also looks disabled after the reload.
+            seed_enabled = bool(entry.get("seed_H_enabled", True))
+            if roi_obj is not None:
+                roi_obj.seed_H_enabled = seed_enabled
+            self._style_row_seed_state(row, seed_enabled)
 
             # --- Apply table/widget states (block signals to avoid cascades) ---
             name_w = self.roi_table.cellWidget(row, self.widget_columns["Name"])
@@ -3662,7 +4617,7 @@ class ROIManager(QtCore.QObject):
 
             if shape_cb is not None:
                 shape_cb.setCurrentText(str(entry.get("roi_shape", "RectROI")))
-                # this triggers change_roi_type via your existing signal
+                # setCurrentText triggers change_roi_type through the combo's signal
 
             # store subtract to apply AFTER everything exists
             if sub_cb is not None and bool(entry.get("subtract", False)):
@@ -3806,41 +4761,73 @@ class ROIPlotter(pg.PlotWidget):
         # keyed by component index (0, 1, 2, ...)
         self.component_gaussians: dict[int, dict] = {}
         self.component_gaussian_lines: dict[int, pg.PlotDataItem] = {}
+        # Live spectrum under the image cursor (dashed, no legend churn)
+        self._cursor_curve: pg.PlotDataItem | None = None
+
+    def update_curve_pen(self, roi_id: str, pen):
+        """Restyle an existing ROI curve without recomputing its data."""
+        line = self.roi_avg_lines.get(roi_id)
+        if line is not None:
+            line.setPen(pen)
+
+    def set_cursor_spectrum(self, spectrum):
+        """Show/clear the live spectrum under the image cursor."""
+        if spectrum is None or (hasattr(spectrum, "__len__") and len(spectrum) == 0):
+            if self._cursor_curve is not None:
+                self._cursor_curve.setData([], [])
+            return
+        if self._cursor_curve is None:
+            pen = pg.mkPen(theme.INK, width=1, style=QtCore.Qt.DashLine)
+            self._cursor_curve = self.plot([], [], pen=pen, name="cursor")
+            self._cursor_curve.setZValue(30)
+        values = self.roi_manager.curve_for_roi_plot(np.asarray(spectrum, dtype=np.float64))
+        x_values = self.roi_manager.wavenumbers
+        if x_values is None or len(x_values) != len(values):
+            x_values = np.arange(len(values))
+        self._cursor_curve.setData(x_values, values)
 
     def set_normalize_to_unity(self, enabled: bool):
         self.setLabel('left', text='Normalized intensity' if enabled else 'Intensity [a.u.]')
 
     def plot_roi_average(self, roi_id, z_data, label):
         roi_index = self.roi_manager.roi_id_idx.get(roi_id)
-        roi_pen = self.roi_manager.rois[roi_index].pen
+        if roi_index is None or not 0 <= roi_index < len(self.roi_manager.rois):
+            return
+        roi_pen = self.roi_manager.curve_pen_for_roi(self.roi_manager.rois[roi_index])
 
-        if roi_id in self.roi_avg_lines and self.roi_avg_lines[roi_id]:
-            line_item = self.roi_avg_lines[roi_id]
-            self.removeItem(line_item)
         # Plot against the spectral axis only if it matches the ROI signal length.
         x_values = self.roi_manager.wavenumbers
         if x_values is None or len(x_values) != len(z_data):
-            logger.warning(
+            logger.debug(
                 "ROI manager plot axis length mismatch (%s vs %s). Falling back to channel indices.",
                 None if x_values is None else len(x_values),
                 len(z_data),
             )
             x_values = np.arange(len(z_data))
-        l = self.plot(
-            x_values,
-            z_data,
-            pen=roi_pen,
-            name=label,
-            symbol='o',  # Shape: 'o' (circle), 's' (square), 't' (triangle), 'x' (cross) etc.
-            symbolSize=6,
-            symbolBrush=roi_pen.color(),
-            symbolPen='w'  # White border for better visibility
-        )
 
-        self.roi_avg_lines[roi_id] = l
+        # One persistent curve per ROI, updated via setData: creating a new
+        # item (or drawing per-point symbols) is too slow for live drags.
+        line = self.roi_avg_lines.get(roi_id)
+        if line is None:
+            line = self.plot(x_values, z_data, pen=roi_pen)
+            line._hs_legend_name = None
+            self.roi_avg_lines[roi_id] = line
+        else:
+            line.setData(x_values, z_data)
+            line.setPen(roi_pen)
+
+        # keep the legend entry in sync with the (renamable) row label
+        legend_name = label if len(z_data) else None
+        if getattr(line, "_hs_legend_name", None) != legend_name:
+            try:
+                self.legend.removeItem(line)
+            except Exception:
+                pass
+            if legend_name:
+                self.legend.addItem(line, legend_name)
+            line._hs_legend_name = legend_name
+
         self.update_highight(roi_id)
-        # Add any additional configurations you need
-        # ...
 
     # ------------------------------------------------------------------
     #  Fallback model curves (Gaussian / seed spectra per component)
@@ -3878,8 +4865,8 @@ class ROIPlotter(pg.PlotWidget):
             label = f"Component {comp_idx + 1} (model)"
             self.request_gaussian_component_plot(comp_idx, curve, label)
 
-            # ...or, if you prefer one curve per peak, you'd call
-            # request_gaussian_component_plot once per (center, hwhm, amp).
+            # (per-peak curves would instead call request_gaussian_component_plot
+            # once per (center, hwhm, amp))
 
     def set_component_gaussian(self, component_number: int, z_data: np.ndarray, label: str | None = None):
         """
@@ -3909,26 +4896,37 @@ class ROIPlotter(pg.PlotWidget):
             self.remove_component_fallback(comp)
         self.component_gaussians.clear()
 
-    def plot_component_gaussian(self, component_number: int, z_data: np.ndarray, label: str):
+    def plot_component_gaussian(self, component_number: int, z_data: np.ndarray, label: str,
+                                dashed: bool = False):
         """
         Draw or update the fallback curve for one component.
         """
         if self.roi_manager.wavenumbers is None or z_data is None:
             return
         z_plot = self.roi_manager.curve_for_roi_plot(z_data)
+        x_values = self.roi_manager.wavenumbers
+        if len(x_values) != len(z_plot):
+            x_values = np.arange(len(z_plot))
+        pen = pg.mkPen(self.roi_manager.get_color_rgba(component_number),
+                       style=QtCore.Qt.DashLine if dashed else QtCore.Qt.SolidLine)
 
         # Update existing line
         if component_number in self.component_gaussian_lines:
             line = self.component_gaussian_lines[component_number]
-            line.setData(self.roi_manager.wavenumbers, z_plot)
-            line.setName(label)
-            line.setPen(pg.mkPen(self.roi_manager.get_color_rgba(component_number)))
+            line.setData(x_values, z_plot)
+            line.setPen(pen)
+            # PlotDataItem has no setName in pyqtgraph 0.13: rename via the legend
+            if line.name() != label:
+                try:
+                    self.legend.removeItem(line)
+                except Exception:
+                    pass
+                line.opts['name'] = label
+                self.legend.addItem(line, label)
             return
 
         # New line
-        color_rgba = self.roi_manager.get_color_rgba(component_number)
-        pen = pg.mkPen(color_rgba)
-        line = self.plot(self.roi_manager.wavenumbers, z_plot, pen=pen, name=label)
+        line = self.plot(x_values, z_plot, pen=pen, name=label)
         self.component_gaussian_lines[component_number] = line
         logger.info(f"Plotted fallback model for component {component_number}")
 
@@ -3940,6 +4938,33 @@ class ROIPlotter(pg.PlotWidget):
         line = self.component_gaussian_lines.pop(component_number, None)
         if line is not None:
             self.removeItem(line)
+
+    def set_component_seed_spectrum(self, component_number: int, z_data, label: str | None = None):
+        """Live seed-pixel preview spectrum for a component (drawn dashed).
+
+        Uses the same fallback slot as the Gaussian models, so it is shown
+        only while no ROI of that component is plotted. Passing ``None``
+        clears the preview; an entry that also carries a Gaussian model
+        keeps the model.
+        """
+        entry = self.component_gaussians.get(component_number)
+        if z_data is None:
+            if entry is None:
+                return
+            entry["seed"] = None
+            if entry.get("gaussian") is None:
+                self.component_gaussians.pop(component_number, None)
+                self.remove_component_fallback(component_number)
+            else:
+                self.update_component_fallback(component_number)
+            return
+        if entry is None:
+            entry = {"gaussian": None, "seed": None, "label": ""}
+            self.component_gaussians[component_number] = entry
+        entry["seed"] = np.asarray(z_data, dtype=float)
+        if label:
+            entry["label"] = label
+        self.update_component_fallback(component_number)
 
     def update_component_fallback(self, component_number: int):
         """
@@ -3960,8 +4985,9 @@ class ROIPlotter(pg.PlotWidget):
             self.remove_component_fallback(component_number)
             return
 
-        # Prefer seed spectrum (future WIP) if available, otherwise Gaussian
+        # Prefer the live seed-pixel preview if available, otherwise Gaussian
         z_data = info.get("seed")
+        dashed = z_data is not None
         if z_data is None:
             z_data = info.get("gaussian")
 
@@ -3970,7 +4996,7 @@ class ROIPlotter(pg.PlotWidget):
             return
 
         logger.info(f"Showing fallback model for component {component_number}")
-        self.plot_component_gaussian(component_number, z_data, info["label"])
+        self.plot_component_gaussian(component_number, z_data, info["label"], dashed=dashed)
 
     def refresh_all_component_fallbacks(self):
         """
@@ -4022,7 +5048,9 @@ class ROIPlotter(pg.PlotWidget):
         else:
             self.roi_highlights[roi_id] = []
         # find the associated roi plot
-        curve_of_interest = self.roi_avg_lines[roi_id]
+        curve_of_interest = self.roi_avg_lines.get(roi_id)
+        if curve_of_interest is None or curve_of_interest.yData is None:
+            return
         y = curve_of_interest.yData
         x_min, x_max = np.amin(spectral_range), np.amax(spectral_range)
         logger.debug('Highlighting ROI %s over spectral range [%s, %s].', roi_id, x_min, x_max)
@@ -4068,8 +5096,12 @@ class ROIPlotter(pg.PlotWidget):
     def update_highight(self, roi_id):
         # Callback function when ROI is moved, updating y-values of the masked curve
         if roi_id in self.roi_highlights:
-            curve_of_interest = self.roi_avg_lines[roi_id]  # Get the main ROI curve
+            curve_of_interest = self.roi_avg_lines.get(roi_id)  # Get the main ROI curve
+            if curve_of_interest is None:
+                return
             y = curve_of_interest.yData  # Get the new y-values
+            if y is None:
+                return
 
             for fill in self.roi_highlights[roi_id]:
                 curve_masked, curve_zero = fill.curves  # Get the highlight curves
@@ -4104,8 +5136,12 @@ class ROIPlotter(pg.PlotWidget):
             self.spectral_range.clear()
 
     def remove_plot_roi(self, roi_id):
-        if roi_id in self.roi_avg_lines and self.roi_avg_lines[roi_id]:
-            line_item = self.roi_avg_lines[roi_id]
+        line_item = self.roi_avg_lines.pop(roi_id, None)
+        if line_item is not None:
+            try:
+                self.legend.removeItem(line_item)
+            except Exception:
+                pass
             self.removeItem(line_item)
         if roi_id in self.roi_highlights:
             self.remove_highlight(roi_id)

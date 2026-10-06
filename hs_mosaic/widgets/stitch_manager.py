@@ -87,15 +87,7 @@ class StitchManager(QtCore.QObject):
         self.drop_label.setAcceptDrops(True)
         self.drop_label.dragEnterEvent = self._drag_enter
         self.drop_label.dropEvent = self._drop
-        self.drop_label.setStyleSheet("""
-            QLabel {
-                border: 1px dashed #888;
-                border-radius: 6px;
-                padding: 8px;
-                background: #2b2b2b;
-                color: #ddd;
-            }
-        """)
+        self.drop_label.setObjectName("DragDropLabel")  # styled by the app theme
         top.addWidget(self.drop_label, 1)
 
         self.choose_folder_btn = QtWidgets.QPushButton("Choose folder…")

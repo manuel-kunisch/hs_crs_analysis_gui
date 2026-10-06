@@ -8,16 +8,16 @@ For installation instructions, environment files, and platform-specific notes, s
 
 GPU acceleration is currently relevant for:
 
-- multiplicative-update NNMF through the PyTorch backend;
+- NNMF with the multiplicative-update solver (`mu`, the default iteration scheme in the Analysis panel) through the PyTorch backend;
 - batched fixed-H NNLS through the PyTorch/CUDA NNLS backend.
 
-The coordinate-descent NNMF solver uses the scikit-learn CPU backend.
+The alternative coordinate-descent solver (`cd` in the NNMF solver dropdown) always runs on the CPU through scikit-learn, so the Backend setting does not affect it. The two solvers are compared in [02 Analysis modes](02_analysis_modes.md#advanced-settings) and [NNMF and NNLS modes](../methods/nnmf_nnls_modes.md).
 
 ## Backend Selection
 
 The analysis panel exposes a **Backend** dropdown for the PyTorch multiplicative-update NNMF path with two options (since v0.9.4):
 
-- **Prefer GPU** (default): tries the first available accelerator in priority order CUDA > MPS > XPU. If no GPU is detected, falls back to CPU torch and logs the fallback.
+- **Prefer GPU** (default): tries the first available accelerator in priority order CUDA (NVIDIA) > MPS (Apple Silicon) > XPU (Intel) > DirectML (AMD Radeon on Windows, or any other DirectX-12 GPU). If no GPU is detected, falls back to CPU torch and logs the fallback. The entry names the device it found, e.g. *Prefer GPU (DirectML: AMD Radeon(TM) Graphics)* or *Prefer GPU (none detected: torch CPU)*, so you can tell at a glance whether the GPU is in use.
 - **CPU only**: skips the PyTorch MU path entirely and runs the scikit-learn MU NMF on CPU (not torch CPU). Useful for benchmarking, reproducibility against the scikit-learn reference, or when the GPU is busy with another job.
 
 If PyTorch is not installed, the Backend dropdown is locked to **CPU only** — there is no torch/GPU path to choose, so the multiplicative-update NMF runs on scikit-learn. A machine that has PyTorch but no GPU keeps the dropdown enabled: **Prefer GPU** then runs a torch-CPU fit.
@@ -27,6 +27,14 @@ The Coordinate Descent (cd) solver always runs on the scikit-learn CPU backend r
 The legacy **Automatic** item from v0.9.3 was removed in v0.9.4 because it had identical behavior to **Prefer GPU**. Presets saved as `"auto"` load as **Prefer GPU** automatically.
 
 ![Backend dropdown in the analysis panel with options for GPU acceleration: Prefer GPU (tries CUDA > MPS > XPU, falls back to CPU if no GPU) and CPU only (skips PyTorch path, runs scikit-learn on CPU)](../assets/images/02a.png)
+
+## AMD Radeon On Windows (DirectML)
+
+AMD GPUs — dedicated Radeon cards and the integrated Radeon graphics of Ryzen APUs — are supported on Windows through Microsoft's DirectML plugin for PyTorch. Install `pip install "hs-mosaic[directml]"` into a fresh virtual environment (the plugin brings its own pinned torch build), or run `setup_windows_directml.ps1` from a source checkout. The fit summary then reports `torch-dml`. Expect a moderate speedup on integrated graphics (they share the CPU's memory bandwidth) and a larger one on discrete cards; `torch.compile` is not available on this backend. Details, measured numbers and troubleshooting: [Installation → AMD Radeon on Windows (DirectML)](../installation.md#amd-radeon-on-windows-directml).
+
+## Forcing A Device
+
+Set the environment variable `HS_MOSAIC_TORCH_DEVICE` to `cpu`, `cuda`, `mps`, `xpu` or `dml` before starting the GUI to override the automatic priority order — for example `cpu` to benchmark the torch-CPU path against your GPU on the same machine. Requesting a device that is not available logs a warning and falls back to the automatic choice.
 
 ## CUDA Requirements
 

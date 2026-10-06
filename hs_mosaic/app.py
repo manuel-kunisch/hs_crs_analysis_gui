@@ -8,9 +8,11 @@ import numpy as np
 # On Windows, importing PyQt before torch can make torch's c10.dll fail to
 # initialize. Preload the optional torch modules before any Qt imports so the
 # PyTorch NNMF/NNLS backends remain available in source and frozen builds.
-from hs_mosaic.widgets import nnls_pytorch, torch_nmf
+# torch_devices also imports the optional torch-directml plugin (DirectML
+# backend for AMD / any DX12 GPU on Windows) at this early point.
+from hs_mosaic.widgets import nnls_pytorch, torch_devices, torch_nmf  # noqa: F401 (import order matters)
 import pyqtgraph as pg
-from PyQt5 import QtCore, Qt  # Import the necessary modules
+from PyQt5 import QtCore, QtGui, Qt  # Import the necessary modules
 from PyQt5 import QtWidgets
 from PyQt5.QtGui import QColor, QIcon
 from pyqtgraph.dockarea.Dock import Dock
@@ -77,7 +79,13 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
         "cuda_available": False,
         "mps_available": False,
         "xpu_available": False,
+        "directml_available": False,
         "gpu_available": False,
+        "detected_accelerators": [],
+        "default_device": None,
+        "device_names": {},
+        "device_override": None,
+        "directml_import_error": None,
         "torch_version": None,
         "torch_cuda_version": None,
         "cuda_device_count": 0,
@@ -107,7 +115,14 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
             result["cuda_available"] = bool(torch.cuda.is_available())
             result["mps_available"] = bool(torch_nmf.mps_available())
             result["xpu_available"] = bool(torch_nmf.xpu_available())
+            result["directml_available"] = bool(torch_devices.directml_available())
             result["gpu_available"] = bool(torch_nmf.gpu_available())
+            summary = torch_devices.accelerator_summary()
+            result["detected_accelerators"] = summary["detected_accelerators"]
+            result["default_device"] = summary["default_device"]
+            result["device_names"] = summary["device_names"]
+            result["device_override"] = summary["device_override"]
+            result["directml_import_error"] = summary["directml_import_error"]
             result["cuda_device_count"] = int(torch.cuda.device_count())
             result["cuda_devices"] = [
                 torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())
@@ -139,9 +154,9 @@ def _run_backend_self_test(output_path: str | None = None) -> int:
         result["nnls_backend"] = nnls_info.get("backend")
 
         # Self-test passes if torch is available AND both NMF and NNLS used
-        # a torch backend (any device: cuda/mps/xpu/cpu) or — for NNLS — the
-        # closed-form path used when k=1 components.
-        valid_nnls = {"torch-cuda", "torch-mps", "torch-xpu", "torch-cpu", "closed-form"}
+        # a torch backend (any device: cuda/mps/xpu/dml/cpu) or — for NNLS —
+        # the closed-form path used when k=1 components.
+        valid_nnls = {"torch-cuda", "torch-mps", "torch-xpu", "torch-dml", "torch-cpu", "closed-form"}
         result["ok"] = bool(
             result["torch_available"]
             and result["nmf_backend"]
@@ -254,8 +269,8 @@ class MainApplication(QtWidgets.QMainWindow):
         loader_dock = self.data_handler.get_dock_widget()
         main_dock_area.addDock(loader_dock, 'right',
                                self.data_widget.image_view_dock)
-        self.data_widget.image_view_dock.setStretch(1400, 720)
-        loader_dock.setStretch(420, 720)
+        self.data_widget.image_view_dock.setStretch(900, 1100)
+        loader_dock.setStretch(1300, 1100)
         dock_state_save_widget, save_dock_state = self.get_dock_state_widget()
         # main_dock_area.addDock(dock_state_save_widget, 'right', self.data_widget.roi_manager.roi_table_dock)
 
@@ -280,8 +295,10 @@ class MainApplication(QtWidgets.QMainWindow):
         # add the dock with all thew widgets to the data section
         data_layout.addWidget(main_dock_area)
         # Add the fixed dock composite_image to the result section tab
-        self.tab_widget.addTab(data_layout_widget, "Data Section")
-        self.tab_widget.addTab(dock_window, "Result Section")
+        self.tab_widget.addTab(data_layout_widget, "Data")
+        self.tab_widget.addTab(dock_window, "Results")
+
+        self._init_menu_and_statusbar()
 
         # TODO: remove placeholder in future verions
         # global example_image2
@@ -302,6 +319,118 @@ class MainApplication(QtWidgets.QMainWindow):
 
 
 
+
+    def _init_menu_and_statusbar(self):
+        """Menu bar with the main entry points and a status-bar hover readout."""
+        from hs_mosaic.widgets import theme
+
+        file_menu = self.menuBar().addMenu("&File")
+        open_action = file_menu.addAction(theme.icon("mdi.folder-open-outline"), "&Open TIFF…")
+        open_action.setShortcut(QtGui.QKeySequence.Open)
+        open_action.triggered.connect(self.data_handler.loader_widget.load_image_from_file_dialog)
+        file_menu.addSeparator()
+        load_preset_action = file_menu.addAction(theme.icon("mdi.tray-arrow-up"), "&Load preset…")
+        load_preset_action.triggered.connect(self.load_state)
+        save_preset_action = file_menu.addAction(theme.icon("mdi.tray-arrow-down"), "&Save preset…")
+        save_preset_action.setShortcut(QtGui.QKeySequence.Save)
+        save_preset_action.triggered.connect(self.save_state)
+        file_menu.addSeparator()
+        quit_action = file_menu.addAction("&Quit")
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(self.close)
+
+        view_menu = self.menuBar().addMenu("&View")
+        data_tab_action = view_menu.addAction("&Data")
+        data_tab_action.setShortcut("Ctrl+1")
+        data_tab_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(0))
+        results_tab_action = view_menu.addAction("&Results")
+        results_tab_action.setShortcut("Ctrl+2")
+        results_tab_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(1))
+        view_menu.addSeparator()
+        # Light/dark is applied before any widget exists (see theme.apply_theme),
+        # so the toggle persists the choice and takes effect on the next start.
+        light_action = view_menu.addAction("&Light mode")
+        light_action.setCheckable(True)
+        light_action.setChecked(theme.CURRENT_MODE == "light")
+
+        def _toggle_light_mode(checked: bool):
+            QtCore.QSettings("HS-MOSAIC", "HS-MOSAIC").setValue(
+                "ui/theme", "light" if checked else "dark")
+            QtWidgets.QMessageBox.information(
+                self, "Theme",
+                "The theme is applied when HS-MOSAIC starts.\n"
+                "Restart the application to switch to "
+                f"{'light' if checked else 'dark'} mode.",
+            )
+
+        light_action.toggled.connect(_toggle_light_mode)
+
+        help_menu = self.menuBar().addMenu("&Help")
+        docs_action = help_menu.addAction(theme.icon("mdi.book-open-variant"), "&Documentation")
+        docs_action.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl("https://manuel-kunisch.github.io/hs_crs_analysis_gui/")))
+        controls_action = help_menu.addAction("&Mouse and keyboard controls")
+        controls_action.triggered.connect(self._show_controls_help)
+
+        # Hover readout: pixel position, value and spectral coordinate of the
+        # cursor in the raw-data viewer (fed by DataWidget.hover_info_signal).
+        self.readout_label = QtWidgets.QLabel("")
+        self.readout_label.setObjectName("ReadoutLabel")
+        self.statusBar().addWidget(self.readout_label, 1)
+        self.data_widget.hover_info_signal.connect(self.readout_label.setText)
+        self.result_viewer_widget.hover_info_signal.connect(self.readout_label.setText)
+
+    @staticmethod
+    def _controls_help_html() -> str:
+        """
+        Rich-text body of the Controls dialog.
+        """
+        from hs_mosaic.widgets import theme
+
+        key_style = (
+            f"color:{theme.INK}; white-space:nowrap; "
+            "padding:2px 18px 2px 12px; vertical-align:top;"
+        )
+        desc_style = f"color:{theme.INK_2}; padding:2px 0;"
+
+        def section(title: str, rows: list[tuple[str, str]]) -> str:
+            body = "".join(
+                f"<tr><td style='{key_style}'><b>{key}</b></td>"
+                f"<td style='{desc_style}'>{desc}</td></tr>"
+                for key, desc in rows
+            )
+            return (
+                f"<p style='margin:10px 0 2px 0;'><b>{title}</b></p>"
+                f"<table cellspacing='0'>{body}</table>"
+            )
+
+        return (
+            section("Image view", [
+                ("wheel / drag", "zoom and pan; right-click &gt; <i>View All</i> refits"),
+                ("hover", "live spectrum in the Seed spectra plot + pixel readout in the status bar"),
+                ("click a ROI", "select it (also selects its table row); Esc deselects"),
+                ("Space", "play / pause the band sweep"),
+                ("A&nbsp;/&nbsp;S", "auto-level / auto-range the image"),
+            ])
+            + section("Display modes (toolbar)", [
+                ("Single band", "browse bands with the timeline slider"),
+                ("Band average", "drag the shaded region on the timeline to average bands"),
+                ("RGB composite", "drag the R/G/B regions to build a false-color image"),
+            ])
+            + section("ROI table", [
+                ("right-click a row", "all per-ROI actions (export, background, shape…)"),
+                ("Del", "remove the selected ROI"),
+                ("selected row", "edit fine-tuning in the panel below the table"),
+            ])
+        )
+
+    def _show_controls_help(self):
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Controls")
+        box.setIcon(QtWidgets.QMessageBox.Information)
+        box.setTextFormat(QtCore.Qt.RichText)
+        box.setText(self._controls_help_html())
+        box.exec_()
 
     def _show_results_after_analysis(self):
         if self.analysis_manager.last_analysis_was_cancelled():
@@ -378,12 +507,18 @@ class MainApplication(QtWidgets.QMainWindow):
             current_slice_index=self.data_handler.get_current_slice_index(),
         )
         self.analysis_manager.update_image_data(img_array, self.data_handler.wavenumber_widget.wavenumbers)
+        # existing results no longer belong to the new data: stop the composite
+        # hover from reading the old cube (and release the reference to it).
+        # Browsing slices of a 4D series arrives with preserve_channel=True and
+        # keeps the displayed series result valid, so the hover survives it.
+        if not preserve_channel:
+            self.result_viewer_widget.set_hover_source(None)
         self.data_widget.update_img(img_array, preserve_channel=preserve_channel)
         # make the roi manager highlight all rois again if spectral info exists
         self.data_widget.roi_manager.roi_plotter.remove_all_highlights()
         self.analysis_manager.highlight_all_resonances()
         logger.info("Data update finished")
-        logger.info(f"{"-"*50}")
+        logger.info("-" * 50)
         # add in future here callbacks to all classes that have to be informed about the refresh!
 
     def update_fov(self, fov: tuple, unit: str):
@@ -418,7 +553,7 @@ class MainApplication(QtWidgets.QMainWindow):
         # 3) analysis resonance table + seed window label
         self.analysis_manager.set_spectral_units(unit)
 
-        # 4) optional: your extra ROI plot in data_widgets.py if it exists
+        # 4) optional extra ROI plot in data_widgets.py, when it exists
         if getattr(self.data_widget, "roi_avg_plot_wid", None) is not None:
             axis_labels = getattr(self.data_handler.wavenumber_widget, "custom_axis_labels", None)
             self.data_widget.roi_avg_plot_wid.setLabel(
@@ -476,6 +611,8 @@ class MainApplication(QtWidgets.QMainWindow):
                                                fit_info=self.analysis_manager.get_analysis_fit_info(),
                                                spectral_axis=result_spectral_axis,
                                                outer_axis_label=self.analysis_manager.get_analysis_series_label())
+        # hovering the composite compares this cube's pixel spectra with H
+        self.result_viewer_widget.set_hover_source(self.analysis_manager.get_analysis_source_stack())
 
     def import_displayed_result_component(self, target: str, component_index: int, slice_index: int):
         self.analysis_manager.import_current_result_component(target, component_index, slice_index)
@@ -885,6 +1022,25 @@ def main(argv: list[str] | None = None) -> int:
         faulthandler.enable(all_threads=True)
     from hs_mosaic.widgets.darkmode import set_darkmode
 
+    # PyQt5 aborts the whole process (qFatal) when a Python exception escapes
+    # a slot and sys.excepthook is still the default. Log it instead: a typo
+    # in an input field must not take the session down.
+    import traceback
+
+    def _log_unhandled_exception(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        logger.error(
+            "Unhandled exception in a GUI callback (the application keeps running):\n%s",
+            "".join(traceback.format_exception(exc_type, exc_value, exc_tb)),
+        )
+
+    sys.excepthook = _log_unhandled_exception
+
+    # One line users can grep for when asking "is my GPU actually used?"
+    logger.info("Compute backends: %s", torch_devices.describe_accelerators())
+
     app = QtWidgets.QApplication(argv)
     app.setWindowIcon(QIcon(resource_path("assets/HS-MOSAIC-logo.ico")))
     # On Windows, dark mode is not auto-applied by Qt — apply manually.
@@ -897,9 +1053,18 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as e:
         logger.error(f"Could not load example data: {e}")
 
-    main_app.resize(1920, 1080)
+    # Fit the window to the screen it opens on: a fixed 1920x1080 overflows
+    # smaller displays such as MacBooks (1440x900 / 1512x982 points).
+    available = app.primaryScreen().availableGeometry()
+    width = min(1920, available.width())
+    height = min(1080, available.height() - 40)  # leave room for the title bar
+    main_app.resize(width, height)
+    main_app.move(available.x() + (available.width() - width) // 2, available.y())
     main_app.setWindowTitle("HS-MOSAIC")
     main_app.show()
+    # pyqtgraph splits docks by stretch using the size at construction time;
+    # redo it now that the window has its final size.
+    main_app.data_widget.dock_area.topContainer.updateStretch()
     return app.exec_()
 
 

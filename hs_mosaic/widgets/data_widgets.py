@@ -5,11 +5,11 @@ import os
 import sys
 import numpy as np
 import pyqtgraph as pg
-import qtawesome as qta
 from PyQt5 import QtWidgets, QtCore, Qt
 from pyqtgraph.dockarea import DockArea, Dock
 
 from hs_mosaic.composite_image import dtype, max_dtype_val
+from hs_mosaic.widgets import theme
 from hs_mosaic.widgets.data_managers import ImageLoader
 from hs_mosaic.widgets.hs_image_view import RamanImageView
 from hs_mosaic.widgets.roi_manager_pg import ROIManager
@@ -30,6 +30,12 @@ class DataWidget(QtWidgets.QWidget):
     Main class to manage raw data handling
     """
     request_binning_signal = QtCore.pyqtSignal(int)
+    # Pixel readout under the cursor, formatted for the main-window status bar
+    hover_info_signal = QtCore.pyqtSignal(str)
+
+    # Fill colors of the three draggable RGB band regions on the timeline
+    RGB_FILLS = ((235, 70, 70, 60), (70, 200, 90, 60), (80, 130, 255, 70))
+
     def __init__(self, img=None, init_roi_plot_widget=False, color_manager=None):
         super().__init__()
         # widgets initialized in other methods 
@@ -105,7 +111,9 @@ class DataWidget(QtWidgets.QWidget):
 
         self.dock_area.addDock(self.image_view_dock, 'top')
         self.dock_area.addDock(self.linescan_dock, 'left', self.image_view_dock)
-        # give image view dock more space
+        # give image view dock more space; the bottom row (seed spectra +
+        # ROI table) keeps a workable share of the height
+        self.image_view_dock.setStretch(900, 560)
 
         # linescan_dock.hideTitleBar()
         line_plot_widget = pg.PlotWidget(title="Linsecan")
@@ -114,8 +122,8 @@ class DataWidget(QtWidgets.QWidget):
         # Add Plot item to show axis labels
         plot = pg.PlotItem(title='ImView')
         plot.setTitle()
-        plot.setLabel(axis='left', text='Y-axis')
-        plot.setLabel(axis='bottom', text='X-axis')
+        plot.setLabel(axis='left', text='y [px]')
+        plot.setLabel(axis='bottom', text='x [px]')
         self.raman_raw_image_view = RamanImageView(view=plot, discreteTimeLine=True, roi_plot_widget=line_plot_widget)  # Create a pg.ImageView() object
         self.raman_raw_image_view.view.setDefaultPadding(0)
         self.raman_raw_image_view.setColorMap(pg.colormap.get('plasma'))
@@ -138,10 +146,57 @@ class DataWidget(QtWidgets.QWidget):
         # add the ROI manager widgets to the dock area
         self.dock_area.addDock(self.roi_manager.roi_table_dock, "bottom")
         self.dock_area.addDock(self.roi_manager.roi_plot_dock, "left", self.roi_manager.roi_table_dock)
+        self.roi_manager.roi_table_dock.setStretch(810, 440)
+        self.roi_manager.roi_plot_dock.setStretch(560, 440)
         self.roi_manager.processed_data_signal.connect(lambda data:
                                                        self.callback_processed_img(
                                                            self.show_processed_image_check.isChecked(), data))
         self.set_linescan_visible(False)
+        self._init_band_regions()
+        self._init_hover_readout()
+
+    def _init_band_regions(self):
+        """Draggable band-selection regions on the timeline below the image.
+
+        One neutral region for "Band average" mode and three tinted ones for
+        "RGB composite" mode, all in frame-index coordinates (the timeline
+        x-axis). Rendering is debounced so dragging stays fluid on big stacks.
+        """
+        timeline_plot = self.raman_raw_image_view.ui.roiPlot
+        self.band_region = pg.LinearRegionItem(
+            brush=(255, 255, 255, 26), hoverBrush=(255, 255, 255, 48),
+            pen=pg.mkPen(theme.INK_2),
+        )
+        self.band_region.setZValue(15)
+        self.band_region.hide()
+        timeline_plot.addItem(self.band_region)
+        self.rgb_regions = []
+        for fill, name in zip(self.RGB_FILLS, "RGB"):
+            region = pg.LinearRegionItem(
+                brush=fill, hoverBrush=fill[:3] + (fill[3] + 40,),
+                pen=pg.mkPen(fill[:3]),
+            )
+            region.setZValue(15)
+            region.hide()
+            label = pg.InfLineLabel(region.lines[0], text=name, position=0.85,
+                                    anchors=[(-0.2, 0.5), (-0.2, 0.5)], color=theme.INK_2)
+            region.hs_label = label
+            timeline_plot.addItem(region)
+            self.rgb_regions.append(region)
+        self._regions_initialized = False
+        self._band_mean_cache = {}
+        self._range_render_timer = QtCore.QTimer(self, singleShot=True, interval=40)
+        self._range_render_timer.timeout.connect(self._render_range_mode)
+        for region in (self.band_region, *self.rgb_regions):
+            region.sigRegionChanged.connect(self._schedule_range_render)
+
+    def _init_hover_readout(self):
+        """Live pixel readout + spectrum-under-cursor (throttled to ~30 Hz)."""
+        self._hover_proxy = pg.SignalProxy(
+            self.raman_raw_image_view.scene.sigMouseMoved,
+            rateLimit=30, slot=self._on_image_hover,
+        )
+        self._hover_inside_image = False
 
     def set_linescan_visible(self, visible: bool):
         self.linescan_dock.setVisible(visible)
@@ -193,34 +248,62 @@ class DataWidget(QtWidgets.QWidget):
             )
 
     def init_toolbar(self):
+        """One compact control row under the image view."""
+        # Display mode: how the spectral stack is collapsed into the shown image
+        self.projection_mode_combo = QtWidgets.QComboBox(self)
+        mode_items = [
+            ("Single band", "none",
+             "Browse single bands with the timeline slider below the image."),
+            ("Band average", "band_range",
+             "Mean image of a wavenumber window.\n"
+             "Drag the shaded region on the timeline to choose the bands."),
+            ("RGB composite", "rgb",
+             "False-color composite of three band windows.\n"
+             "Drag the R/G/B regions on the timeline to choose them."),
+            ("Average (all bands)", "average", "Mean over the whole stack."),
+            ("Max projection", "max", "Per-pixel maximum over the whole stack."),
+            ("Min projection", "min", "Per-pixel minimum over the whole stack."),
+            ("Composite (from analysis)", "composite",
+             "Mirror the false-color composite shown in the result viewer.\n"
+             "Updates live whenever colors or histograms change there."),
+        ]
+        for label, data, tip in mode_items:
+            self.projection_mode_combo.addItem(label, data)
+            self.projection_mode_combo.setItemData(
+                self.projection_mode_combo.count() - 1, tip, QtCore.Qt.ToolTipRole)
+        self.projection_mode_combo.setToolTip("Display mode of the image view")
+        self.projection_mode_combo.currentIndexChanged.connect(self.on_projection_mode_changed)
+
         self.lut_combo_box = QtWidgets.QComboBox(self)
         self.lut_combo_box.addItems(['grey', 'thermal', 'flame', 'yellowy', 'bipolar', 'spectrum', 'cyclic', 'greyclip',
                                      'viridis', 'inferno', 'plasma', 'magma', "red", "green", "blue", "yellow",
                                      "orange", "purple", "pink", "magenta", "custom"])
         self.lut_combo_box.setCurrentIndex(2)
+        self.lut_combo_box.setToolTip("Lookup table (colormap) of the image")
         self.lut_combo_box.currentIndexChanged.connect(self.update_lut)
 
-        """
-        toolbar = QtWidgets.QToolBar(self)
-        toolbar.addWidget(QtWidgets.QLabel("Image LUT"))
-        toolbar.addWidget(self.lut_combo_box)
-        toolbar.setMaximumHeight(30)  # Set a maximum height for the toolbar
-        """
-        autoscale_button = QtWidgets.QPushButton("Autoscale")
-        autoscale_button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        autoscale_button.setIcon(Qt.QIcon('icons/autoscale.png'))
-        autoscale_button.clicked.connect(self.autoscale_image)
-        #toolbar.addWidget(autoscale_button)
+        def _tool_button(icon_name, tooltip, slot=None, checkable=False, checked=False):
+            button = QtWidgets.QToolButton(self)
+            button.setIcon(theme.icon(icon_name))
+            button.setToolTip(tooltip)
+            button.setCheckable(checkable)
+            button.setChecked(checked)
+            if slot is not None:
+                button.clicked.connect(slot)
+            return button
 
+        autoscale_button = _tool_button(
+            'mdi.contrast-box', "Auto contrast: refit the display levels to the current image (A)",
+            slot=lambda: self.autoscale_image(),
+        )
 
-        self.auto_play_button = QtWidgets.QPushButton(self)
+        self.auto_play_button = QtWidgets.QToolButton(self)
         self.auto_play_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay))
-        self.auto_play_button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        self.auto_play_button.setCheckable(True)
+        self.auto_play_button.setChecked(False)
         self.auto_play_button.clicked.connect(
             lambda checked: self.raman_raw_image_view.set_playing(checked)
         )
-        self.auto_play_button.setCheckable(True)
-        self.auto_play_button.setChecked(False)
 
         self.auto_play_speed_spinbox = QtWidgets.QDoubleSpinBox(self)
         self.auto_play_speed_spinbox.setRange(0.5, 60.0)
@@ -228,87 +311,66 @@ class DataWidget(QtWidgets.QWidget):
         self.auto_play_speed_spinbox.setDecimals(1)
         self.auto_play_speed_spinbox.setValue(self.raman_raw_image_view.fps)
         self.auto_play_speed_spinbox.setSuffix(" fps")
+        self.auto_play_speed_spinbox.setToolTip("Playback speed of the band sweep")
         self.auto_play_speed_spinbox.valueChanged.connect(self.raman_raw_image_view.set_playback_fps)
         self.raman_raw_image_view.playback_state_changed.connect(self.sync_auto_play_button)
 
-        self.show_processed_image_check = QtWidgets.QCheckBox("Display Processed Image")
-        self.show_processed_image_check.clicked.connect(self.callback_processed_img)
-        # toolbar.addWidget(self.show_processed_image_check)
-
-        self.projection_mode_combo = QtWidgets.QComboBox(self)
-        self.projection_mode_combo.addItem("None", "none")
-        self.projection_mode_combo.addItem("Average", "average")
-        self.projection_mode_combo.addItem("Max", "max")
-        self.projection_mode_combo.addItem("Min", "min")
-        self.projection_mode_combo.addItem("Composite (from analysis)", "composite")
-        self.projection_mode_combo.setItemData(
-            self.projection_mode_combo.count() - 1,
-            "Mirror the false-colour composite shown in the result viewer.\n"
-            "Updates live whenever colours or histograms change there.",
-            QtCore.Qt.ToolTipRole,
+        self.hover_spectrum_button = _tool_button(
+            'mdi.chart-bell-curve-cumulative',
+            "Hover spectrum: show the spectrum under the cursor in the seed-spectra plot",
+            checkable=True, checked=True,
         )
-        self.projection_mode_combo.currentIndexChanged.connect(self.on_projection_mode_changed)
+        self.hover_spectrum_button.toggled.connect(self._on_hover_spectrum_toggled)
+
+        self.seed_pixels_button = _tool_button(
+            'mdi.scatter-plot',
+            "Seed pixels: mark the pixels whose mean spectrum seeds each\n"
+            "resonance-driven component (components without a ROI).\n"
+            "Updates live with the resonance table; drawn in component colors.",
+            checkable=True, checked=True,
+        )
+        self.seed_pixels_button.toggled.connect(
+            lambda checked: self.roi_manager.set_seed_overlay_visible(checked))
+
+        self.show_processed_image_check = QtWidgets.QCheckBox("Processed")
+        self.show_processed_image_check.setToolTip(
+            "Show the processed (background-subtracted) stack instead of the raw data"
+        )
+        self.show_processed_image_check.clicked.connect(self.callback_processed_img)
 
         self.binning_combo_box = QtWidgets.QComboBox(self)
         self.binning_combo_box.addItems(['1', '2', '4', '8', '16'])
         self.binning_combo_box.setCurrentText(str(self._binning_factor))
+        self.binning_combo_box.setToolTip("Spatial binning of the loaded data (applies to the analysis too)")
         self.binning_combo_box.currentTextChanged.connect(lambda bin_str: self.request_binning(int(bin_str)))
-        # toolbar.addWidget(self.binning_combo_box)
 
-        self.show_processed_image_check.clicked.connect(
-            lambda state: self._set_projection_mode("none") if state else None
-        )
+        row = QtWidgets.QHBoxLayout()
+        row.setContentsMargins(4, 0, 4, 2)
+        row.setSpacing(6)
+        row.addWidget(QtWidgets.QLabel("Display"))
+        row.addWidget(self.projection_mode_combo)
+        row.addSpacing(10)
+        lut_label = QtWidgets.QLabel()
+        lut_label.setPixmap(theme.icon('mdi.palette').pixmap(16, 16))
+        lut_label.setToolTip(self.lut_combo_box.toolTip())
+        row.addWidget(lut_label)
+        row.addWidget(self.lut_combo_box)
+        row.addWidget(autoscale_button)
+        row.addSpacing(10)
+        row.addWidget(self.auto_play_button)
+        row.addWidget(self.auto_play_speed_spinbox)
+        row.addWidget(self.hover_spectrum_button)
+        row.addWidget(self.seed_pixels_button)
+        row.addStretch(1)
+        row.addWidget(self.show_processed_image_check)
+        row.addSpacing(10)
+        row.addWidget(QtWidgets.QLabel("Binning"))
+        row.addWidget(self.binning_combo_box)
+        row_widget = QtWidgets.QWidget()
+        row_widget.setMaximumHeight(40)
+        row_widget.setLayout(row)
 
-        # toolbar.addWidget(self.auto_play_button)
-
-        first_row_layout = QtWidgets.QHBoxLayout()
-        lut_widget = QtWidgets.QWidget()
-        lut_widget.setContentsMargins(0, 0, 0, 0)
-        lut_layout = QtWidgets.QHBoxLayout()
-        lut_layout.setContentsMargins(0, 0, 0, 0)
-        lut_widget.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        lut_widget.setLayout(lut_layout)
-        lut_label = QtWidgets.QLabel("Image LUT")
-        lut_label.setPixmap(qta.icon('mdi.palette').pixmap(16, 16))
-        lut_layout.addWidget(lut_label)
-        lut_layout.addWidget(self.lut_combo_box)
-        first_row_layout.addWidget(lut_widget)
-        first_row_layout.addWidget(autoscale_button)
-        first_row_layout.addWidget(self.auto_play_button)
-        first_row_layout.addWidget(QtWidgets.QLabel("Autoplay"))
-        first_row_layout.addWidget(self.auto_play_speed_spinbox)
-        first_row_widget = QtWidgets.QWidget()
-        first_row_widget.setMaximumHeight(50)
-        first_row_widget.setLayout(first_row_layout)
-
-        second_row_layout = QtWidgets.QHBoxLayout()
-        second_row_widget = QtWidgets.QWidget()
-        second_row_widget.setMaximumHeight(50)
-        second_row_widget.setLayout(second_row_layout)
-        second_row_layout.addWidget(self.show_processed_image_check)
-        projection_widget = QtWidgets.QWidget()
-        projection_layout = QtWidgets.QHBoxLayout()
-        projection_layout.setContentsMargins(0, 0, 0, 0)
-        projection_widget.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        projection_widget.setLayout(projection_layout)
-        projection_layout.addWidget(QtWidgets.QLabel("Projection"))
-        projection_layout.addWidget(self.projection_mode_combo)
-        second_row_layout.addWidget(projection_widget)
-        binning_widget = QtWidgets.QWidget()
-        binning_layout = QtWidgets.QHBoxLayout()
-        binning_layout.setContentsMargins(0, 0, 0, 0)
-        binning_widget.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        binning_widget.setLayout(binning_layout)
-        binning_layout.addWidget(QtWidgets.QLabel("Binning"))
-        binning_layout.addWidget(self.binning_combo_box)
-        second_row_layout.addWidget(binning_widget)
-        # reduce vertical padding
-        margins = first_row_layout.getContentsMargins()
-        margins = (*margins[:-1], 0)
-        first_row_widget.layout().setContentsMargins(*margins)
-
-        self.image_view_dock.addWidget(first_row_widget, row=16, col=0, colspan=16)
-        self.image_view_dock.addWidget(second_row_widget, row=17, col=0, colspan=16)
+        self.image_view_dock.addWidget(row_widget, row=16, col=0, colspan=16)
         self.sync_auto_play_button(self.raman_raw_image_view.is_playing())
 
     def sync_auto_play_button(self, is_playing: bool):
@@ -335,30 +397,146 @@ class DataWidget(QtWidgets.QWidget):
 
     def _projection_title(self, mode: str) -> str:
         return {
-            "average": "Average Image",
-            "max": "Max Intensity Projection",
-            "min": "Min Intensity Projection",
+            "average": "Average of all bands",
+            "max": "Max intensity projection",
+            "min": "Min intensity projection",
             "composite": "Composite (mirror of result viewer)",
         }.get(mode, "Image")
 
-    def _compute_projection_stack(self, mode: str) -> np.ndarray | None:
-        if self.image is None:
-            return None
-        if mode == "average":
-            projection = np.mean(self.image, axis=0, dtype=np.float32)
-        elif mode == "max":
-            projection = np.max(self.image, axis=0)
-        elif mode == "min":
-            projection = np.min(self.image, axis=0)
+    # ------------------------------------------------------------------
+    # Display modes: band ranges + projections
+    # ------------------------------------------------------------------
+    def _active_stack(self) -> np.ndarray | None:
+        """Stack the display modes and the hover spectrum read from."""
+        if (self.show_processed_image_check is not None
+                and self.show_processed_image_check.isChecked()
+                and self.roi_manager.subtracted_data is not None):
+            return self.roi_manager.subtracted_data
+        return self.image
+
+    def _spectral_value_text(self, band: int) -> str:
+        labels = getattr(self.roi_manager, "axis_labels", None)
+        if labels is not None and 0 <= band < len(labels):
+            return str(labels[band])
+        wavenumbers = self.raman_raw_image_view.wavenumber
+        if wavenumbers is not None and 0 <= band < len(wavenumbers):
+            unit = getattr(self.raman_raw_image_view, "unit", "")
+            if is_index_unit(unit):
+                return f"{wavenumbers[band]:g}"
+            return f"{wavenumbers[band]:.1f}{spectral_unit_suffix(unit)}"
+        return str(band)
+
+    def _range_frames(self, region: pg.LinearRegionItem) -> tuple[int, int]:
+        """Inclusive (lo, hi) band indices selected by a timeline region."""
+        n_frames = self.nframes() if self.image is not None else 1
+        a, b = region.getRegion()
+        lo = int(np.clip(round(min(a, b)), 0, n_frames - 1))
+        hi = int(np.clip(round(max(a, b)), lo, n_frames - 1))
+        return lo, hi
+
+    def _band_mean(self, stack: np.ndarray, lo: int, hi: int) -> np.ndarray:
+        """Mean image over bands lo..hi (inclusive), cached per stack + range."""
+        key = (id(stack), lo, hi)
+        cached = self._band_mean_cache.get(key)
+        if cached is not None:
+            return cached
+        if hi <= lo:
+            mean = np.asarray(stack[lo], dtype=np.float32)
         else:
-            return self.image
-        projection = np.expand_dims(projection, axis=0)
-        return np.repeat(projection, self.image.shape[0], axis=0)
+            mean = np.mean(stack[lo:hi + 1], axis=0, dtype=np.float32)
+        self._band_mean_cache[key] = mean
+        while len(self._band_mean_cache) > 8:
+            self._band_mean_cache.pop(next(iter(self._band_mean_cache)))
+        return mean
+
+    def _region_desc(self, lo: int, hi: int) -> str:
+        if hi <= lo:
+            return f"band {lo} ({self._spectral_value_text(lo)})"
+        return (f"bands {lo}–{hi} ({self._spectral_value_text(lo)}–{self._spectral_value_text(hi)},"
+                f" {hi - lo + 1} bands)")
+
+    def _ensure_region_defaults(self):
+        """Place the regions over sensible spans the first time they are used."""
+        if self.image is None:
+            return
+        n = self.nframes()
+        bounds = (0, max(0, n - 1))
+        for region in (self.band_region, *self.rgb_regions):
+            region.setBounds(bounds)
+        if self._regions_initialized:
+            # clamp existing positions to the new stack
+            for region in (self.band_region, *self.rgb_regions):
+                lo, hi = region.getRegion()
+                with QtCore.QSignalBlocker(region):
+                    region.setRegion((np.clip(lo, *bounds), np.clip(hi, *bounds)))
+            return
+        third = max(1.0, (n - 1) / 3.0)
+        with QtCore.QSignalBlocker(self.band_region):
+            self.band_region.setRegion((third, 2 * third))
+        # R gets the highest bands, B the lowest (spectroscopic convention)
+        for k, region in zip((2, 1, 0), self.rgb_regions):
+            with QtCore.QSignalBlocker(region):
+                region.setRegion((k * third + 0.1 * third, k * third + 0.9 * third))
+        self._regions_initialized = True
+
+    def _schedule_range_render(self):
+        if not self._range_render_timer.isActive():
+            self._range_render_timer.start()
+
+    def _render_range_mode(self, keep_view: bool = True):
+        # keep_view=True for the drag-debounce re-renders; a data load passes
+        # False so the view range refits the (possibly differently sized) image.
+        mode = self._current_projection_mode()
+        stack = self._active_stack()
+        if stack is None or stack.ndim != 3:
+            return
+        view = self.raman_raw_image_view
+        if mode == "band_range":
+            lo, hi = self._range_frames(self.band_region)
+            mean = self._band_mean(stack, lo, hi)
+            view.title_override = f"Mean of {self._region_desc(lo, hi)}"
+            view.setImage(mean, keep_viewbox=keep_view, axes={'x': 1, 'y': 0})
+            view.getView().setTitle(view.title_override)
+        elif mode == "rgb":
+            channels, descs = [], []
+            for name, region in zip("RGB", self.rgb_regions):
+                lo, hi = self._range_frames(region)
+                mean = self._band_mean(stack, lo, hi)
+                # robust per-channel normalization so each color fills its range
+                sample = mean[::4, ::4]
+                high = float(np.percentile(sample, 99.5)) if sample.size else 1.0
+                low = float(np.percentile(sample, 1.0)) if sample.size else 0.0
+                span = high - low if high > low else 1.0
+                channels.append(np.clip((mean - low) / span, 0.0, 1.0))
+                descs.append(f"{name}: {self._region_desc(lo, hi)}")
+            rgb = np.dstack(channels).astype(np.float32)
+            view.title_override = "   ".join(descs)
+            view.setImage(rgb, keep_viewbox=keep_view, axes={'x': 1, 'y': 0, 'c': 2},
+                          levels=(0.0, 1.0))
+            view.getView().setTitle(view.title_override)
+        # keep the timeline visible: it hosts the draggable regions
+        view.ui.roiPlot.show()
 
     def display_projection_image(self, mode: str | None = None, keep_view: bool = True):
         mode = self._current_projection_mode() if mode is None else mode
+        view = self.raman_raw_image_view
         if mode == "none":
-            self.display_raw_image(keep_view=keep_view)
+            view.title_override = None
+            # "Display Processed Image" stays authoritative in Single band:
+            # the projections read the processed stack via _active_stack(),
+            # so returning to Single band must not silently show raw data
+            # under a still-checked Processed box.
+            if (self.show_processed_image_check is not None
+                    and self.show_processed_image_check.isChecked()
+                    and self.roi_manager.subtracted_data is not None):
+                self.display_modified_image(keep_view=keep_view)
+            else:
+                self.display_raw_image(keep_view=keep_view)
+            return
+        if mode in ("band_range", "rgb"):
+            self._ensure_region_defaults()
+            view.stopAutoPlay()
+            self._render_range_mode(keep_view)
             return
         if mode == "composite":
             # Mirror the false-colour composite from the result viewer.
@@ -366,22 +544,36 @@ class DataWidget(QtWidgets.QWidget):
             # back to the raw image so the viewer is not left blank.
             rgb = self._cached_composite_rgb
             if rgb is None or rgb.ndim < 3:
+                view.title_override = None
                 self.display_raw_image(keep_view=keep_view)
                 return
-            self.raman_raw_image_view.stopAutoPlay()
-            self.raman_raw_image_view.setImage(
+            view.stopAutoPlay()
+            view.title_override = self._projection_title(mode)
+            view.setImage(
                 np.asarray(rgb),
                 keep_viewbox=keep_view,
                 axes={'x': 1, 'y': 0, 'c': 2},  # force rgb mode
+                levels=(0, 65535),  # the result viewer's composite is full-scale uint16
             )
-            self.raman_raw_image_view.getView().setTitle(self._projection_title(mode))
+            view.getView().setTitle(view.title_override)
+            view.ui.roiPlot.show()
             return
-        projection_stack = self._compute_projection_stack(mode)
-        if projection_stack is None:
+        stack = self._active_stack()
+        if stack is None:
             return
-        self.raman_raw_image_view.stopAutoPlay()
-        self.raman_raw_image_view.setImage(projection_stack, keep_viewbox=keep_view)
-        self.raman_raw_image_view.getView().setTitle(self._projection_title(mode))
+        if mode == "average":
+            projection = np.mean(stack, axis=0, dtype=np.float32)
+        elif mode == "max":
+            projection = np.max(stack, axis=0)
+        elif mode == "min":
+            projection = np.min(stack, axis=0)
+        else:
+            return
+        view.stopAutoPlay()
+        view.title_override = self._projection_title(mode)
+        view.setImage(projection, keep_viewbox=keep_view, axes={'x': 1, 'y': 0})
+        view.getView().setTitle(view.title_override)
+        view.ui.roiPlot.show()
 
     def update_composite_mirror(self, rgb_image):
         """
@@ -403,16 +595,94 @@ class DataWidget(QtWidgets.QWidget):
 
     def on_projection_mode_changed(self, *_args):
         mode = self._current_projection_mode()
-        if mode != "none" and self.show_processed_image_check is not None and self.show_processed_image_check.isChecked():
-            with QtCore.QSignalBlocker(self.show_processed_image_check):
-                self.show_processed_image_check.setChecked(False)
+        previous_mode = getattr(self, "_previous_display_mode", "none")
+        self._previous_display_mode = mode
+        self._update_mode_ui(mode)
         if self.image is None:
             return
         self.display_projection_image(mode, keep_view=True)
+        # one auto-level on mode entry, and again when returning to Single
+        # band from ANY mode, so projection-fitted levels never stick to the
+        # band display. RGB and the composite mirror fix their own levels.
+        if mode == "none":
+            if previous_mode != "none":
+                self.raman_raw_image_view.autoLevels()
+        elif mode not in ("rgb", "composite"):
+            self.raman_raw_image_view.autoLevels()
+
+    def _update_mode_ui(self, mode: str):
+        """Show/hide the timeline widgets that belong to the current mode."""
+        single = mode == "none"
+        self.band_region.setVisible(mode == "band_range")
+        for region in self.rgb_regions:
+            region.setVisible(mode == "rgb")
+        timeline = self.raman_raw_image_view.timeLine
+        if timeline is not None:
+            timeline.setVisible(single)
+        for widget in (self.auto_play_button, self.auto_play_speed_spinbox):
+            widget.setEnabled(single)
+        if not single:
+            self.raman_raw_image_view.stopAutoPlay()
+
+    def _on_hover_spectrum_toggled(self, checked: bool):
+        if not checked:
+            self.roi_manager.roi_plotter.set_cursor_spectrum(None)
+
+    def _on_image_hover(self, args):
+        """Status-bar readout + spectrum under the cursor (rate-limited)."""
+        view = self.raman_raw_image_view
+        item = view.getImageItem()
+        item_img = item.image
+        if item_img is None:
+            return
+        pos = args[0]
+        p = item.mapFromScene(pos)
+        ix, iy = int(np.floor(p.x())), int(np.floor(p.y()))
+        # the histogram shares the scene: a cursor outside the image's view
+        # box can still map into array bounds and would read phantom pixels
+        view_box = item.getViewBox()
+        inside = (0 <= ix < item_img.shape[0] and 0 <= iy < item_img.shape[1]
+                  and (view_box is None or view_box.sceneBoundingRect().contains(pos)))
+        if not inside:
+            if self._hover_inside_image:
+                self._hover_inside_image = False
+                self.hover_info_signal.emit("")
+                self.roi_manager.roi_plotter.set_cursor_spectrum(None)
+            return
+        self._hover_inside_image = True
+
+        # value(s) of the displayed image (mono or RGB)
+        sample = item_img[ix, iy]
+        if np.ndim(sample) == 0:
+            value_text = f"{float(sample):.4g}"
+        else:
+            value_text = " / ".join(f"{float(v):.3g}" for v in np.ravel(sample)[:3])
+
+        mode = self._current_projection_mode()
+        if mode == "none":
+            band = view.currentIndex
+            shown = f"band {band} @ {self._spectral_value_text(band)}"
+        else:
+            shown = getattr(view, "title_override", None) or self._projection_title(mode)
+        self.hover_info_signal.emit(f"x {ix}   y {iy}   value {value_text}    [{shown}]")
+
+        # live spectrum under the cursor
+        if self.hover_spectrum_button.isChecked():
+            stack = self._active_stack()
+            if stack is not None and stack.ndim == 3 and iy < stack.shape[1] and ix < stack.shape[2]:
+                self.roi_manager.roi_plotter.set_cursor_spectrum(stack[:, iy, ix])
 
     # create new subtracted data
     def callback_processed_img(self, state: bool, data: np.ndarray=None, label_text: str = None):
         # Keep raw, processed, and averaged display paths synchronized in one place.
+        # Any change here invalidates cached band means (they read the active stack).
+        self._band_mean_cache.clear()
+        mode = self._current_projection_mode()
+        if mode != "none":
+            # computed display modes read the processed stack through
+            # _active_stack(), so a re-render covers both toggle directions
+            self.display_projection_image(mode, keep_view=True)
+            return
         if state:
             if data is not None:
                 if not data.size:
@@ -424,9 +694,6 @@ class DataWidget(QtWidgets.QWidget):
                 return
             self.display_modified_image(keep_view=True)
         else:
-            if self._current_projection_mode() != "none":
-                self.display_projection_image(keep_view=True)
-                return
             self.display_raw_image(keep_view=True)
 
     def update_overview_images(self):
@@ -516,18 +783,27 @@ class DataWidget(QtWidgets.QWidget):
 
     def update_img(self, img: np.ndarray, preserve_channel: bool = False):
         self.image = img
+        self._band_mean_cache.clear()
+        # the composite mirror belongs to the previous dataset/binning; clear it
+        self._cached_composite_rgb = None
+        self._ensure_region_defaults()
         logger.info("Updating ROI manager data")
         self.roi_manager.update_data(img)
-        if not preserve_channel:
+        mode = self._current_projection_mode()
+        if not preserve_channel and mode == "none":
             self.raman_raw_image_view.request_single_autoplay_cycle(reset_to_start=True)
         # pass data to ROI manager, calculate the subtracted data etc.
         if self.show_processed_image_check.isChecked():
             self.callback_processed_img(True)
-            return
-        if self._current_projection_mode() != "none":
+        elif mode != "none":
             self.display_projection_image(keep_view=preserve_channel)
-            return
-        self.display_raw_image(keep_view=preserve_channel)
+        else:
+            self.display_raw_image(keep_view=preserve_channel)
+        if not preserve_channel and mode != "rgb":
+            # a new dataset: refit the display levels with robust percentiles
+            # so a few hot pixels cannot flatten the histogram range
+            # (RGB mode keeps its fixed 0..1 levels from per-channel normalization)
+            self.raman_raw_image_view.autoLevels()
 
     def display_raw_image(self, keep_view=True):
         logger.info('Displaying image')
@@ -814,24 +1090,6 @@ class WavenumberWidget(QtWidgets.QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(5)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-
-        self.setStyleSheet("""
-        QGroupBox {
-            font-weight: 600;
-            border: 1px solid rgba(180,180,180,0.35);
-            border-radius: 8px;
-            margin-top: 10px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 6px;
-        }
-        QLabel.unit { opacity: 0.75; }
-        QAbstractSpinBox:disabled { color: #808080; }
-        QCheckBox { padding: 2px 4px; }
-        QToolButton { padding: 8px; border-radius: 10px; }
-        """)
 
         # --- Top Bar: Source Selector ---
         top_bar = QtWidgets.QHBoxLayout()
@@ -1170,7 +1428,6 @@ class WavenumberWidget(QtWidgets.QWidget):
                 with QtCore.QSignalBlocker(self.stepsize_entry):
                     self.stepsize_entry.setValue(stepsize)
             else:
-                self.fixed_entry.setEnabled(False)
                 stepsize = float(self.stepsize_entry.value())
                 maximum = minimum + stepsize * (channels - 1)
                 with QtCore.QSignalBlocker(self.max_wavelength_entry):
@@ -1531,8 +1788,19 @@ class DataHandler(QtWidgets.QWidget):
 
         self.loader_dock = Dock("Data", size=(360, 720))
         self.loader_dock.setStretch(360, 720)
-        self.loader_dock.addWidget(self.loader_widget, 1, 0, 1, 1)
-        self.loader_dock.addWidget(self.wavenumber_widget, 0, 0, 1, 1)
+        # Put the data widgets in a scrollable layout to shrink
+        # minimum window size, so the GUI also fits laptop screens (e.g. macOS).
+        loader_panel = QtWidgets.QWidget()
+        self.loader_panel_layout = QtWidgets.QVBoxLayout(loader_panel)
+        self.loader_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self.loader_panel_layout.setSpacing(0)
+        self.loader_panel_layout.addWidget(self.wavenumber_widget)
+        self.loader_panel_layout.addWidget(self.loader_widget, 1)
+        loader_scroll = QtWidgets.QScrollArea()
+        loader_scroll.setWidgetResizable(True)
+        loader_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        loader_scroll.setWidget(loader_panel)
+        self.loader_dock.addWidget(loader_scroll)
         self.slice_selector_widget = QtWidgets.QWidget()
         self.slice_selector_widget.hide()
         slice_layout = QtWidgets.QHBoxLayout(self.slice_selector_widget)
@@ -1551,7 +1819,7 @@ class DataHandler(QtWidgets.QWidget):
         slice_layout.addWidget(self.slice_axis_title_label)
         slice_layout.addWidget(self.slice_selector_spinbox)
         slice_layout.addWidget(self.slice_selector_slider, stretch=1)
-        self.loader_dock.addWidget(self.slice_selector_widget, 2, 0, 1, 1)
+        self.loader_panel_layout.addWidget(self.slice_selector_widget)
 
         self.slice_selector_spinbox.valueChanged.connect(
             lambda value: self._set_current_slice_index(int(value) - 1)
@@ -1770,7 +2038,8 @@ class DataHandler(QtWidgets.QWidget):
         # --- wavelength / wavenumber handling ---
         wavelength_meta = self.loader_widget.wavelength_meta
 
-        if not self._suspend_custom_axis_warning:
+        # only if no wavelength.json comes with the new dataset a warning has to be issued
+        if wavelength_meta is None and not self._suspend_custom_axis_warning:
             self.wavenumber_widget.warn_and_switch_from_custom_source(parent=self)
 
         if wavelength_meta is not None:

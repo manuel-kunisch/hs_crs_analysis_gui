@@ -1,29 +1,12 @@
-from PyQt5 import QtCore
-from PyQt5.QtGui import QColor
-from PyQt5.QtGui import QPalette
+"""Backwards-compatible entry point for the application theme.
+
+The actual design system lives in :mod:`hs_mosaic.widgets.theme`; this module
+keeps the historical ``set_darkmode(app)`` name working.
+"""
 from PyQt5.QtWidgets import QApplication
+
+from hs_mosaic.widgets.theme import apply_theme
 
 
 def set_darkmode(app: QApplication):
-    app.setStyle("Fusion")
-    # "Oxygen" is the default MacOS style, "Windows" on Windows OS
-    dark_palette = QPalette()
-    dark_palette.setColor(QPalette.Window, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.WindowText, QtCore.Qt.white)
-    dark_palette.setColor(QPalette.Base, QColor(35, 35, 35))
-    dark_palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ToolTipBase, QColor(25, 25, 25))
-    dark_palette.setColor(QPalette.ToolTipText, QtCore.Qt.white)
-    dark_palette.setColor(QPalette.Text, QtCore.Qt.white)
-    dark_palette.setColor(QPalette.Button, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ButtonText, QtCore.Qt.white)
-    dark_palette.setColor(QPalette.BrightText, QtCore.Qt.red)
-    dark_palette.setColor(QPalette.Link, QColor(42, 130, 218))
-    dark_palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
-    dark_palette.setColor(QPalette.HighlightedText, QColor(35, 35, 35))
-    dark_palette.setColor(QPalette.Active, QPalette.Button, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.Disabled, QPalette.ButtonText, QtCore.Qt.darkGray)
-    dark_palette.setColor(QPalette.Disabled, QPalette.WindowText, QtCore.Qt.darkGray)
-    dark_palette.setColor(QPalette.Disabled, QPalette.Text, QtCore.Qt.darkGray)
-    dark_palette.setColor(QPalette.Disabled, QPalette.Light, QColor(53, 53, 53))
-    app.setPalette(dark_palette)
+    apply_theme(app)

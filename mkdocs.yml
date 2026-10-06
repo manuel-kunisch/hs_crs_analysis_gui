@@ -28,6 +28,7 @@ nav:
   - Concepts: concepts.md
   - Methods:
       - NNMF and NNLS modes: methods/nnmf_nnls_modes.md
+      - Unmixing diagnostics (K_eff and separability): methods/unmixing_diagnostics.md
   - Tutorials:
       - 00 GUI basics:
           - GUI and pyqtgraph basics: tutorials/00_gui_and_pyqtgraph_basics.md

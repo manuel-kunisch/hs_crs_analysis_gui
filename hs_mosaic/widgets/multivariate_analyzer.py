@@ -13,6 +13,7 @@ from sklearn.decomposition import PCA, NMF
 
 from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX
 from hs_mosaic.widgets import nnls_pytorch
+from hs_mosaic.widgets import torch_devices
 from hs_mosaic.widgets import torch_nmf
 from hs_mosaic.widgets.spectral_axis import normalize_spectral_unit, spectral_axis_label
 
@@ -271,10 +272,9 @@ class MultivariateAnalyzer(object):
         if data.size:
             self.resonance_data_zyx = data
             if self.resonance_data_zyx.ndim == 3:
-                # move spectral axis to final axis
-                self.resonance_data_2d = np.moveaxis(self.resonance_data_zyx, 0, -1)
-                # reshape to 2d for analysis, concatenate the spatial info along the first axis
-                self.resonance_data_2d = self.resonance_data_2d.reshape(-1, self.raw_data_3d.shape[0])
+                # (bands, y, x) -> (pixels, bands), C-contiguous (see
+                # _cube_to_pixel_matrix for why the layout matters).
+                self.resonance_data_2d = self._cube_to_pixel_matrix(self.resonance_data_zyx)
             return
         logger.warning('No subtraction data available, restoring original data')
         self.resonance_data_2d = self.data_2d
@@ -387,8 +387,9 @@ class MultivariateAnalyzer(object):
         Behavior per preference:
           * 'cpu' -> None (caller falls back to scikit-learn CPU path).
           * 'gpu' (default) -> first available GPU in priority order
-            CUDA > MPS > XPU, with silent fallback to CPU torch when no
-            GPU is detected.
+            CUDA > MPS > XPU > DirectML (``torch_devices``), with silent
+            fallback to CPU torch when no GPU is detected. The environment
+            variable ``HS_MOSAIC_TORCH_DEVICE`` can force a device.
         """
         if not self.prefer_torch_nmf:
             return None
@@ -399,19 +400,16 @@ class MultivariateAnalyzer(object):
         if not torch_nmf.torch_available():
             return None
 
-        # GPU-preferred path: try the accelerator priority chain, then fall
-        # back to CPU torch silently if no GPU is detected. The first run
-        # after import logs which device was chosen, so users can verify
-        # in the log whether GPU was actually used.
-        if torch_nmf.cuda_available():
-            return 'cuda'
-        if torch_nmf.mps_available():
-            return 'mps'
-        if torch_nmf.xpu_available():
-            return 'xpu'
+        # GPU-preferred path: take the best accelerator in the priority chain
+        # CUDA > MPS > XPU > DirectML (see torch_devices), then fall back to
+        # CPU torch if none is detected. Every torch solve logs the device it
+        # runs on, so users can verify in the log whether the GPU was used.
+        accelerators = torch_devices.available_accelerators()
+        if accelerators:
+            return accelerators[0]
         logger.info(
             "NNMF backend is set to prefer GPU, but no GPU accelerator "
-            "(CUDA / MPS / XPU) is available. Falling back to CPU torch."
+            "(CUDA / MPS / XPU / DirectML) is available. Falling back to CPU torch."
         )
         return 'cpu'
 
@@ -539,6 +537,80 @@ class MultivariateAnalyzer(object):
             return False
         return bool(np.all(MultivariateAnalyzer._column_seeded_mask(matrix)))
 
+    def _seed_problem_report(self) -> tuple[list[str], list[str]]:
+        """Why the current seeds cannot (or only badly) start a seeded NNMF.
+
+        Returns ``(fatal, warnings)``. Fatal and aborting the run: a missing
+        matrix, any non-finite entry (NaN/Inf — comparisons cannot see them,
+        scikit-learn would return an all-NaN result and the torch backend
+        would silently zero the seed), or any negative entry — NMF requires
+        finite values >= 0 everywhere; zeros are always legal. Warnings do
+        not abort: a component whose entire W column / H row is zero
+        converges to an empty component under the multiplicative update
+        (the run works, the component comes out blank).
+        """
+        fatal: list[str] = []
+        seed_warnings: list[str] = []
+
+        if self.seed_W is None:
+            fatal.append('the W seed matrix is not set')
+        else:
+            W = np.asarray(self.seed_W)
+            w_nonfinite = ~np.isfinite(W)
+            for component in np.flatnonzero(np.any(w_nonfinite, axis=0)):
+                fatal.append(
+                    f'the W seed of component {component + 1} contains '
+                    f'{int(np.count_nonzero(w_nonfinite[:, component]))} non-finite values (NaN/Inf)'
+                )
+            for component in np.flatnonzero(np.any(W < 0, axis=0)):
+                fatal.append(
+                    f'the W seed of component {component + 1} contains negative values '
+                    f'(min {W[:, component].min():.4g})'
+                )
+            for component in np.flatnonzero(~np.any(W > 0, axis=0) & ~np.any(w_nonfinite, axis=0)):
+                seed_warnings.append(
+                    f'the W seed of component {component + 1} is all zeros; '
+                    'the MU update keeps it at zero, so this component will come out empty'
+                )
+
+        if self.seed_H is None:
+            fatal.append('the H seed matrix is not set')
+        else:
+            H = np.asarray(self.seed_H)
+            h_nonfinite = ~np.isfinite(H)
+            for component in np.flatnonzero(np.any(h_nonfinite, axis=1)):
+                fatal.append(
+                    f'the H seed of component {component + 1} contains '
+                    f'{int(np.count_nonzero(h_nonfinite[component]))} non-finite values (NaN/Inf) '
+                    '— re-extract that seed spectrum (does the seed ROI cover NaN pixels?)'
+                )
+            for component in np.flatnonzero(np.any(H < 0, axis=1)):
+                fatal.append(
+                    f'the H seed of component {component + 1} contains negative values '
+                    f'(min {H[component].min():.4g}) — clip or re-extract that seed spectrum'
+                )
+            for component in np.flatnonzero(~np.any(H > 0, axis=1) & ~np.any(h_nonfinite, axis=1)):
+                seed_warnings.append(
+                    f'the H seed of component {component + 1} is all zeros; '
+                    'the MU update keeps it at zero, so this component will come out empty'
+                )
+        return fatal, seed_warnings
+
+    def _check_seeds_or_raise(self) -> None:
+        """Validate the seed matrices before a seeded NNMF run.
+
+        Logs non-fatal seed warnings and raises ``ValueError`` with every
+        fatal problem, so the GUI's analysis-failed dialog names the exact
+        component and cause instead of silently keeping the old result.
+        """
+        fatal, seed_warnings = self._seed_problem_report()
+        for warning in seed_warnings:
+            logger.warning('NNMF seed check: %s', warning)
+        if fatal:
+            message = 'NNMF aborted by the seed check: ' + '; '.join(fatal)
+            logger.error(message)
+            raise ValueError(message)
+
     @staticmethod
     def _has_seed_signal(spectrum: np.ndarray | None, eps: float = 1e-8) -> bool:
         if spectrum is None:
@@ -655,15 +727,10 @@ class MultivariateAnalyzer(object):
         return source_key, n_pixels, basis.shape, basis_components, basis_hash, backend_name
 
     def _nnls_backend_name(self) -> str:
-        if self.prefer_torch_nnls and nnls_pytorch.gpu_available():
-            # Report which GPU class is being used so logs/cache keys are
-            # unambiguous across CUDA / MPS / XPU machines.
-            if nnls_pytorch.cuda_available():
-                return 'torch-cuda'
-            if nnls_pytorch.mps_available():
-                return 'torch-mps'
-            if nnls_pytorch.xpu_available():
-                return 'torch-xpu'
+        if self.prefer_torch_nnls and nnls_pytorch.torch_available():
+            # Report which device class is being used so logs/cache keys are
+            # unambiguous across CUDA / MPS / XPU / DirectML / CPU machines.
+            return f"torch-{nnls_pytorch.default_device()}"
         return 'scipy-cpu'
 
     def _build_scipy_nnls_abundance_matrix(
@@ -777,17 +844,21 @@ class MultivariateAnalyzer(object):
             }
             return abundance, self._finalize_fit_info(info, working_data)
 
-        if self.prefer_torch_nnls and nnls_pytorch.gpu_available():
-            # Pick the best available GPU device; nnls_pytorch.default_device()
-            # already implements the CUDA > MPS > XPU > CPU priority.
-            gpu_device = nnls_pytorch.default_device()
-            backend_label = f"torch-{gpu_device}"
+        if self.prefer_torch_nnls and nnls_pytorch.torch_available():
+            # Pick the best available device; nnls_pytorch.default_device()
+            # already implements the CUDA > MPS > XPU > DirectML > CPU
+            # priority. The torch path is used on GPU-less machines too:
+            # the batched FISTA solve on torch-CPU is ~40x faster than the
+            # per-pixel SciPy loop below with identical results, so SciPy is
+            # only the fallback when PyTorch is not installed (or failed).
+            torch_device = nnls_pytorch.default_device()
+            backend_label = f"torch-{torch_device}"
             try:
-                logger.info('Using PyTorch %s NNLS solver for %s data.', gpu_device.upper(), source_key)
+                logger.info('Using PyTorch %s NNLS solver for %s data.', torch_device.upper(), source_key)
                 abundance, info = nnls_pytorch.solve_batched_nnls_projected_gradient(
                     image_data,
                     basis,
-                    device=gpu_device,
+                    device=torch_device,
                     max_iter=self.nnls_max_iter,
                     tol=self.torch_nnls_tol,
                     eps=eps,
@@ -798,13 +869,10 @@ class MultivariateAnalyzer(object):
                 info["backend"] = backend_label
                 return np.maximum(abundance, 0.0).astype(np.float32, copy=False), info
             except Exception as exc:
-                logger.warning('PyTorch %s NNLS solver failed; falling back to SciPy NNLS. Error: %s', gpu_device.upper(), exc)
+                logger.warning('PyTorch %s NNLS solver failed; falling back to SciPy NNLS. Error: %s', torch_device.upper(), exc)
 
-        if self.prefer_torch_nnls and not nnls_pytorch.gpu_available():
-            if nnls_pytorch.torch_available():
-                logger.info('PyTorch is available but no GPU (CUDA / MPS / XPU) is detected. Using SciPy NNLS fallback.')
-            elif nnls_pytorch.import_error() is not None:
-                logger.debug('PyTorch import unavailable: %s', nnls_pytorch.import_error())
+        if self.prefer_torch_nnls and not nnls_pytorch.torch_available() and nnls_pytorch.import_error() is not None:
+            logger.debug('PyTorch import unavailable: %s', nnls_pytorch.import_error())
 
         return self._build_scipy_nnls_abundance_matrix(image_data, basis, eps)
 
@@ -1050,6 +1118,46 @@ class MultivariateAnalyzer(object):
         logger.info("Fixed-H NNLS outcome: backend=%s, source=%s", info["backend"], info["source"])
         return info
 
+    @staticmethod
+    def _cube_to_pixel_matrix(cube: np.ndarray, dtype=None) -> np.ndarray:
+        """
+        Reorder a (bands, y, x) cube into the (pixels, bands) matrix the solvers
+        work on, as a **C-contiguous** array.
+
+        Why the layout matters: ``np.moveaxis(cube, 0, -1).reshape(-1, bands)``
+        returns the same numbers without copying, but as a column-major
+        (Fortran-ordered) view, strides ``(4, 4 * n_pixels)``. NumPy/BLAS and
+        scikit-learn do not mind, and CUDA tolerates it, but the CPU build of
+        PyTorch hits massive performance penalty for ``X @ H.T`` on such a matrix:
+        measured 6.9 s instead of 11 ms per product for 1024x1024x32 (about
+        600x slower), which made every torch-CPU NNMF iteration take seconds.
+        The DirectML backend also has to reorder the array on every upload.
+
+        The transposing copy itself is done with PyTorch, whose blocked and
+        multi-threaded transpose kernel needs ~0.1 s for 1024x1024x32; NumPy's
+        strided copy needs ~3 s for the same array on this platform however it
+        is blocked. Without PyTorch the layout is irrelevant to every consumer
+        (BLAS, scikit-learn and SciPy accept either), so the zero-copy view is
+        returned as before and no time is spent at all.
+        """
+        cube = np.asarray(cube)
+        if cube.ndim != 3:
+            raise ValueError(f"Expected a (bands, y, x) cube, got shape {cube.shape}.")
+        n_bands = int(cube.shape[0])
+        flat = np.ascontiguousarray(cube).reshape(n_bands, -1)  # view for C-ordered cubes
+        if dtype is not None and flat.dtype != np.dtype(dtype):
+            flat = flat.astype(dtype)
+        transposed_view = flat.T  # (pixels, bands), Fortran-ordered, no copy
+        if not torch_devices.torch_available():
+            return transposed_view
+        try:
+            torch = torch_devices.torch
+            matrix = torch.from_numpy(flat).t().contiguous().numpy()
+        except Exception as exc:  # e.g. a dtype torch cannot wrap (uint16 on older builds)
+            logger.debug("torch transpose of the data cube failed (%s); using the strided view.", exc)
+            return transposed_view
+        return matrix
+
     def standardize_and_reshape_data(self):
         """
         Perform  standardization on the (3D) imaging data for mean and standard deviation.
@@ -1059,25 +1167,20 @@ class MultivariateAnalyzer(object):
         # is stored along the first axis and spectral info along the last...
 
         # Important: Spectral slices must always be in the last axis... This is contrary to what normal HS tiff files
-        # are ordered. For that reasons we must first move the axes and then reshape the array
-        raw_data_reordered = np.moveaxis(self.raw_data_3d, 0, -1)
-        # Now we can reshape, where we leave the last axis untouched and only concatenate the fist two dimensions
-        self.data_2d = raw_data_reordered.reshape(-1, self.raw_data_3d.shape[0]).astype(np.float32)
+        # are ordered. The helper moves the axes, flattens the spatial axes and returns a C-contiguous float32
+        # matrix (the memory layout is performance-critical for the PyTorch CPU backend, see the helper).
+        self.data_2d = self._cube_to_pixel_matrix(self.raw_data_3d, dtype=np.float32)
         self.resonance_data_2d = self.data_2d
         logger.info(f'{self.data_2d.shape = }')
-        n_frames = self.data_2d.shape[1]
-        standardized_data = np.zeros_like(self.data_2d)
-
-        # standardize each image slice (each frame taken at a specific wavenumber)
-        for i in range(n_frames):
-            frame_data = self.data_2d[:, i]
-            frame_mean = np.nanmean(frame_data, axis=None)
-            # Subtract mean from data for std calculation as this will also scale the
-            # matrix with subtracted mean
-            frame_std = np.std(frame_data - frame_mean)
-            frame_zero_mean_unity_std = (frame_data - frame_mean) / frame_std
-            standardized_data[:, i] = frame_zero_mean_unity_std
-        self.pca_data_std = standardized_data
+        # Standardize each image slice (each frame taken at a specific wavenumber)
+        # to zero mean and unit standard deviation, vectorized over the frames:
+        # with the row-major (pixels, bands) layout a per-frame loop would read
+        # every column with a stride of n_bands, several times slower than the
+        # axis-0 reductions below
+        frame_mean = np.nanmean(self.data_2d, axis=0, keepdims=True)
+        centered = self.data_2d - frame_mean
+        frame_std = np.std(centered, axis=0, keepdims=True)
+        self.pca_data_std = centered / frame_std
         self.prepared = True
 
     def start_analysis(self):
@@ -1813,14 +1916,10 @@ class MultivariateAnalyzer(object):
             if not self._W_prepared:
                 self.estimate_W_seed_matrix_from_H()
                 # here also the seed for H is checked in the same step and filled if necessary
-            if not self._all_columns_seeded(self.seed_W):
-                logger.error('NNMF aborted: No seed W matrix available or not completely filled')
-                return False
         else:
             logger.warning('Skipping seed estimation for NNMF; seeds are assumed to be set')
-            if not (self._all_columns_seeded(self.seed_W) and self._all_columns_seeded(self.seed_H)):
-                logger.error('NNMF aborted: seed W or H matrix is not completely filled')
-                return False
+        # abort with the exact component and cause when a seed cannot start NNMF
+        self._check_seeds_or_raise()
 
         logger.info(f'{datetime.now()}: Starting NNMF with custom seeds')
 

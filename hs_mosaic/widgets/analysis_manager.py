@@ -16,7 +16,7 @@ from skimage.filters.rank import minimum
 
 from hs_mosaic.composite_image import CompositeImageViewWidget
 from hs_mosaic.widgets.custom_pyqt_objects import ImageViewYX, ImageViewYXC
-from hs_mosaic.widgets import torch_nmf
+from hs_mosaic.widgets import torch_devices, torch_nmf
 from hs_mosaic.widgets.multivariate_analyzer import HSeedScaleState, MultivariateAnalyzer
 from hs_mosaic.widgets.roi_manager_pg import ROIManager
 from hs_mosaic.widgets.spectral_axis import (
@@ -26,8 +26,16 @@ from hs_mosaic.widgets.spectral_axis import (
     spectral_csv_header,
     spectral_unit_suffix,
 )
+from hs_mosaic.widgets import theme
 from hs_mosaic.widgets.color_manager import ComponentColorManager
 from hs_mosaic.widgets.hs_image_view import ColorButton
+from hs_mosaic.widgets.unmixing_diagnostics import noise_sigma_from_pixels, separability
+from hs_mosaic.widgets.unmixing_diagnostics_dialog import (
+    UnmixingDiagnosticsDialog,
+    apply_badge,
+    rank_badge,
+    separability_badge,
+)
 
 
 def _make_tolerance_combo(
@@ -113,12 +121,55 @@ class AnalysisManager(QtCore.QObject):
         super().__init__()
         self.roi_manager: ROIManager | None = roi_manager
         self.color_manager:ComponentColorManager|None = self.roi_manager.color_manager
+        if self.roi_manager is not None:
+            # Seeds live in the ROI table until an analysis run copies them into
+            # the analyzer, so the separability badge must follow table changes
+            # directly. Debounced: extracting the mean curves walks every ROI
+            # mask, which is too heavy to redo on every drag event.
+            self._diagnostics_update_timer = QtCore.QTimer(self)
+            self._diagnostics_update_timer.setSingleShot(True)
+            self._diagnostics_update_timer.setInterval(300)
+            self._diagnostics_update_timer.timeout.connect(self.update_diagnostics_badges)
+
+            def _schedule_diagnostics(*_args):
+                self._diagnostics_update_timer.start()
+
+            self.roi_manager.set_diagnostics_provider(
+                lambda: self.open_diagnostics(UnmixingDiagnosticsDialog.SEPARABILITY_TAB),
+                dirty_callback=_schedule_diagnostics,
+            )
+            self.roi_manager.new_roi_signal.connect(_schedule_diagnostics)
+            self.roi_manager.remove_roi_plot_signal.connect(_schedule_diagnostics)
+            self.roi_manager.label_change_signal.connect(_schedule_diagnostics)
+            self.roi_manager.preset_load_signal.connect(_schedule_diagnostics)
+            # fires on every curve replot, including live ROI drags
+            self.roi_manager.plot_roi_signal.connect(_schedule_diagnostics)
+            # keep the resonance-table component combos showing the ROI names,
+            # and link row selection between the two tables (component = link)
+            self.roi_manager.label_change_signal.connect(self._refresh_component_combo_texts)
+            self.roi_manager.component_selected_signal.connect(self._on_roi_component_selected)
+            # Live H-seed preview: components whose seed comes from the
+            # resonance table (no ROI / spectrum row) get their seed-pixel
+            # mean spectrum computed on the fly and shown as a dashed curve
+            # in the Seed spectra plot — no "Test seeds" run needed.
+            self._seed_preview_timer = QtCore.QTimer(self)
+            self._seed_preview_timer.setSingleShot(True)
+            self._seed_preview_timer.setInterval(400)
+            self._seed_preview_timer.timeout.connect(self._update_seed_previews)
+            self.roi_manager.new_roi_signal.connect(self._schedule_seed_preview)
+            self.roi_manager.remove_roi_plot_signal.connect(self._schedule_seed_preview)
+            self.roi_manager.label_change_signal.connect(self._schedule_seed_preview)
+        else:
+            self._seed_preview_timer = None
+        self._seed_preview_running = False
+        self._selection_sync_guard = False
         self.seed_window: QtWidgets.QMainWindow or None = None
         self.z3D_data = None
         # add an attribute to store fixed W components for NNMF
         self._fixed_seed_W: dict[int, np.ndarray] = {}  # component -> (n_pixels,) float32
         self._fixed_seed_W_counts: dict[int, int] = {}  # component -> number of fixed W maps averaged into the stored mean
         self.rolling_ball_preview_dialog: QtWidgets.QDialog | None = None
+        self._diagnostics_dialog: UnmixingDiagnosticsDialog | None = None
         self.wavenumbers = None
         self.spectral_units = "cm⁻¹"
         self.axis_labels = None
@@ -257,44 +308,6 @@ class AnalysisManager(QtCore.QObject):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
-        self.analysis_widget.setStyleSheet("""
-        QGroupBox {
-            font-weight: 600;
-            border: 1px solid rgba(180,180,180,0.35);
-            border-radius: 8px;
-            margin-top: 10px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 6px;
-        }
-        QPushButton, QToolButton {
-            padding: 6px 10px;
-        }
-        QToolButton#AnalyzeTool {
-            border-radius: 10px;
-            padding: 10px 14px;
-            font-weight: 700;
-            color: white;
-            background-color: #4f79aa;
-            border: 1px solid #7ea8d6;
-            border-bottom: 3px solid #2d4f75;
-        }
-        QToolButton#AnalyzeTool:hover {
-            background-color: #5c88bc;
-        }
-        QToolButton#AnalyzeTool:pressed {
-            background-color: #436a97;
-            border-bottom: 1px solid #2d4f75;
-            padding-top: 12px;
-            padding-bottom: 8px;
-        }
-        QHeaderView::section {
-            padding: 6px;
-        }
-        """)
-
         # -----------------------------
         # Top row: Analysis settings + big Analyze button
         # -----------------------------
@@ -310,7 +323,7 @@ class AnalysisManager(QtCore.QObject):
 
         def _make_section_title(text: str) -> QtWidgets.QLabel:
             label = QtWidgets.QLabel(text)
-            label.setStyleSheet("font-weight: 700; color: #d7dee8;")
+            label.setObjectName("SectionTitle")
             return label
 
         def _make_divider() -> QtWidgets.QFrame:
@@ -359,6 +372,30 @@ class AnalysisManager(QtCore.QObject):
         comp_row.addWidget(self.num_components_spinbox)
         comp_row.addStretch(1)
         method_layout.addLayout(comp_row)
+
+        # Unmixing diagnostics: how many components the data can support, and
+        # whether the current component spectra can actually be told apart.
+        diag_row = QtWidgets.QHBoxLayout()
+        diag_row.setContentsMargins(0, 0, 0, 0)
+        diag_row.setSpacing(8)
+        self.diagnostics_badge = QtWidgets.QLabel("")
+        self.diagnostics_badge.setWordWrap(True)
+        self.diagnostics_badge.setToolTip(
+            "Effective number of components the dataset supports, and the separability\n"
+            "(eta) of the current component spectra. Open the diagnostics for details."
+        )
+        self.diagnostics_button = QtWidgets.QPushButton("Diagnostics…")
+        self.diagnostics_button.setToolTip(
+            "Effective rank of the dataset (how many components the data can support)\n"
+            "and the separability of the current component spectra."
+        )
+        self.diagnostics_button.clicked.connect(
+            lambda: self.open_diagnostics(UnmixingDiagnosticsDialog.DATASET_TAB)
+        )
+        diag_row.addWidget(self.diagnostics_badge, stretch=1)
+        diag_row.addWidget(self.diagnostics_button)
+        method_layout.addLayout(diag_row)
+        self.update_diagnostics_badges()
 
         custom_init_check = QtWidgets.QCheckBox("Custom initialization")
         custom_init_check.setToolTip(
@@ -423,27 +460,38 @@ class AnalysisManager(QtCore.QObject):
         backend_label.setToolTip(
             "Controls GPU use for the multiplicative-update NNMF solver.\n\n"
             "• Prefer GPU (default): tries the first available accelerator\n"
-            "  (CUDA > MPS > XPU). Falls back to CPU torch if no GPU is detected,\n"
-            "  with a log message indicating the fallback.\n"
+            "  (CUDA > MPS > XPU > DirectML). Falls back to CPU torch if no GPU is\n"
+            "  detected, with a log message indicating the fallback. DirectML is the\n"
+            "  Windows route for AMD Radeon GPUs and APUs (package torch-directml).\n"
             "• CPU only: skips the PyTorch path entirely and runs the scikit-learn\n"
             "  MU NMF on CPU (not torch CPU). Useful for benchmarking, reproducibility\n"
             "  against the scikit-learn reference, or when the GPU is busy elsewhere.\n\n"
             "If PyTorch is not installed, this dropdown is locked to CPU only\n"
             "(there is no torch/GPU path to choose).\n\n"
             "The Coordinate Descent (cd) solver always runs on the scikit-learn CPU\n"
-            "backend regardless of this setting."
+            "backend regardless of this setting.\n\n"
+            f"Detected on this machine: {torch_devices.describe_accelerators()}"
         )
         self.nnmf_backend_dropdown = QtWidgets.QComboBox()
         # Two functional options. "Prefer GPU" tries the first available
-        # accelerator (CUDA > MPS > XPU) and gracefully falls back to CPU
-        # torch if none is present; "CPU only" skips the PyTorch path entirely
-        # and routes to the scikit-learn MU NMF (NOT torch CPU). The legacy
-        # "Automatic" item was removed in v0.9.4
-        # because it had identical behavior to "Prefer GPU"; the underlying
+        # accelerator (CUDA > MPS > XPU > DirectML) and gracefully falls back
+        # to CPU torch if none is present; "CPU only" skips the PyTorch path
+        # entirely and routes to the scikit-learn MU NMF (NOT torch CPU). The
+        # legacy "Automatic" item was removed in v0.9.4 because it had
+        # identical behavior to "Prefer GPU"; the underlying
         # `set_nnmf_backend_preference("auto")` setter still accepts "auto"
         # as a silent alias so v0.9.3 presets continue to load.
-        self.nnmf_backend_dropdown.addItem("Prefer GPU", "gpu")
+        #
+        # The "Prefer GPU" item names the accelerator that would actually be
+        # used (e.g. "DirectML: AMD Radeon(TM) Graphics") so users can see at
+        # a glance whether their GPU was picked up. Only the visible text
+        # changes; the item data stays "gpu", which is what presets store.
+        self.nnmf_backend_dropdown.addItem(self._prefer_gpu_item_text(), "gpu")
         self.nnmf_backend_dropdown.addItem("CPU only", "cpu")
+        # Do not let the (long) device name widen the whole options column;
+        # the closed combo elides it, the popup and tooltip show it in full.
+        self.nnmf_backend_dropdown.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.nnmf_backend_dropdown.setMinimumContentsLength(14)
         self.nnmf_backend_dropdown.setToolTip(backend_label.toolTip())
         self.nnmf_backend_dropdown.currentIndexChanged.connect(
             lambda index: self.mv_analyzer.set_nnmf_backend_preference(
@@ -477,6 +525,18 @@ class AnalysisManager(QtCore.QObject):
         options_form.addRow(nnls_iters_label, self.nnls_max_iter_spinbox)
 
         options_layout.addLayout(options_form)
+        self.advanced_toggle = QtWidgets.QToolButton()
+        self.advanced_toggle.setText("Performance tuning…")
+        self.advanced_toggle.setCheckable(True)
+        self.advanced_toggle.setChecked(False)
+        self.advanced_toggle.setArrowType(QtCore.Qt.RightArrow)
+        self.advanced_toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self.advanced_toggle.setToolTip(
+            "Show the solver performance panel (tolerances, early-stop patience,\n"
+            "W-seed downsampling, torch.compile). Defaults are safe; open this\n"
+            "only to trade accuracy against speed."
+        )
+        options_layout.addWidget(self.advanced_toggle)
         options_layout.addStretch(1)
         analysis_layout.addWidget(options_panel)
         analysis_layout.addWidget(_make_divider())
@@ -606,7 +666,9 @@ class AnalysisManager(QtCore.QObject):
             "  • NVIDIA CUDA: typically 1.3–2× on the inner loop.\n"
             "  • CPU:         modest, around 1.2–1.5×.\n"
             "  • Apple MPS / Intel XPU: inconsistent — torch.compile support on these backends\n"
-            "    is still evolving in PyTorch. If it errors, the solver falls back to eager mode.\n\n"
+            "    is still evolving in PyTorch. If it errors, the solver falls back to eager mode.\n"
+            "  • DirectML (AMD / any DX12 GPU on Windows): no compiler backend exists, so this\n"
+            "    option is disabled there and the solver always runs eager.\n\n"
             "First iteration pays a one-shot compile cost (~5–10 s) that amortises across all\n"
             "subsequent iterations — well worth it for 4D z/t stacks where the same shape is\n"
             "processed many times.\n\n"
@@ -619,7 +681,19 @@ class AnalysisManager(QtCore.QObject):
         perf_layout.addStretch(1)
         perf_layout.addWidget(self.nnmf_use_compile_check)
         analysis_layout.addWidget(perf_panel)
-        analysis_layout.addWidget(_make_divider())
+        perf_divider = _make_divider()
+        analysis_layout.addWidget(perf_divider)
+
+        # Performance tuning is expert territory: collapsed by default so the
+        # analysis panel leads with the choices every run actually needs.
+        def _toggle_perf(visible: bool):
+            perf_panel.setVisible(visible)
+            perf_divider.setVisible(visible)
+            self.advanced_toggle.setArrowType(
+                QtCore.Qt.DownArrow if visible else QtCore.Qt.RightArrow)
+
+        self.advanced_toggle.toggled.connect(_toggle_perf)
+        _toggle_perf(False)
 
         seed_panel = QtWidgets.QWidget()
         seed_panel.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
@@ -662,6 +736,8 @@ class AnalysisManager(QtCore.QObject):
         self.seed_pixel_mode_dropdown.currentTextChanged.connect(
             lambda text: setattr(self, "_seed_pixel_mode", text)
         )
+        # the metric changes which pixels are found → refresh the live preview
+        self.seed_pixel_mode_dropdown.currentTextChanged.connect(self._schedule_seed_preview)
         seed_pixel_metric_row.addWidget(seed_pixel_metric_label)
         seed_pixel_metric_row.addWidget(self.seed_pixel_mode_dropdown)
         seed_pixel_metric_row.addStretch(1)
@@ -770,7 +846,7 @@ class AnalysisManager(QtCore.QObject):
         progress_layout.setContentsMargins(0, 0, 0, 0)
         progress_layout.setSpacing(3)
         self.analysis_progress_label = QtWidgets.QLabel("Slice progress")
-        self.analysis_progress_label.setStyleSheet("color: #97a3af; font-size: 11px;")
+        self.analysis_progress_label.setObjectName("HintLabel")
         self.analysis_progress_bar = QtWidgets.QProgressBar()
         self.analysis_progress_bar.setRange(0, 100)
         self.analysis_progress_bar.setValue(0)
@@ -781,21 +857,100 @@ class AnalysisManager(QtCore.QObject):
         progress_layout.addWidget(self.analysis_progress_bar)
         run_layout.addWidget(self.analysis_progress_widget)
 
-        top_row.addWidget(run_group_box)
+        # Below (not beside) the analysis settings, so the Run button stays
+        # visible when the data panel is narrow (e.g. laptop screens).
+        root.addWidget(run_group_box)
         self._finish_analysis_progress()
 
         # -----------------------------
-        # Main area: table (left) + control panel (right)
+        # Main area: resonance table with its toolbar above
         # -----------------------------
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        root.addWidget(splitter, 1)
+        table_area = QtWidgets.QWidget()
+        table_layout = QtWidgets.QVBoxLayout(table_area)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(4)
+        root.addWidget(table_area, 1)
 
-        # --- Left: table container ---
-        left = QtWidgets.QWidget()
-        left_layout = QtWidgets.QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(6)
+        def _table_tool_button(text, icon_name, tooltip, slot=None):
+            button = QtWidgets.QToolButton()
+            button.setText(text)
+            button.setIcon(theme.icon(icon_name))
+            button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+            button.setToolTip(tooltip)
+            if slot is not None:
+                button.clicked.connect(slot)
+            return button
+
+        add_button = _table_tool_button(
+            "Add resonance", 'mdi.plus-box-outline',
+            "Add a resonance row: a spectral window that finds seed pixels\n"
+            "(or defines a Gaussian model) for one component.",
+            slot=self.add_resonance_settings,
+        )
+        # H seeds are shown live in the Seed spectra plot; only the W maps
+        # still need a full build, behind this one button.
+        test_seeds_button = _table_tool_button(
+            "Preview W seeds…", 'mdi.image-multiple-outline',
+            "Build the full seed set (H and the W maps, exactly as a run would)\n"
+            "and open the seed inspector window.\n\n"
+            "H seeds are already shown live in the Seed spectra plot: solid\n"
+            "curves for ROI/spectrum rows, dashed curves for components whose\n"
+            "seed is found from the resonance table's seed pixels.",
+            slot=lambda: self.make_all_seeds_from_inputs(show_seeds=True),
+        )
+
+        # Background seed (rolling ball): three parameters and one action,
+        # kept in a dropdown form instead of a permanent side panel
+        background_button = _table_tool_button(
+            "Rolling Ball Background seed", 'mdi.image-filter-hdr',
+            "Estimate a smooth background from a rolling-ball filtered projection\n"
+            "and preview it before adding it as a background component seed.",
+        )
+        background_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        bg_menu = QtWidgets.QMenu(background_button)
+        bg_form_widget = QtWidgets.QWidget()
+        bg_form = QtWidgets.QFormLayout(bg_form_widget)
+        bg_form.setContentsMargins(10, 8, 10, 8)
+        bg_form.setHorizontalSpacing(10)
+        bg_form.setVerticalSpacing(6)
+
+        self.rolling_ball_radius = QtWidgets.QSpinBox()
+        self.rolling_ball_radius.setRange(1, 5000)
+        self.rolling_ball_radius.setValue(11)
+        self.rolling_ball_radius.setSingleStep(2)
+        bg_form.addRow("Rolling ball radius (px):", self.rolling_ball_radius)
+        # rolling ball sigma for gaussian smoothing
+        self.rolling_ball_sigma = QtWidgets.QDoubleSpinBox()
+        self.rolling_ball_sigma.setRange(0.1, 100.0)
+        self.rolling_ball_sigma.setValue(11.0)
+        self.rolling_ball_sigma.setSingleStep(0.1)
+        bg_form.addRow("Gaussian smoothing (px):", self.rolling_ball_sigma)
+
+        self.rolling_ball_projection_combo = QtWidgets.QComboBox()
+        self.rolling_ball_projection_combo.addItem("Mean Projection", "mean")
+        self.rolling_ball_projection_combo.addItem("Max Projection", "max")
+        self.rolling_ball_projection_combo.addItem("Min Projection", "min")
+        bg_form.addRow("Reference image:", self.rolling_ball_projection_combo)
+
+        rb_button = QtWidgets.QPushButton("Compute preview…")
+        rb_button.setToolTip("Rolling-ball filter the chosen projection and open the preview window.")
+        rb_button.clicked.connect(bg_menu.close)
+        rb_button.clicked.connect(self.rolling_background_component_from_projection)
+        bg_form.addRow(rb_button)
+
+        bg_widget_action = QtWidgets.QWidgetAction(bg_menu)
+        bg_widget_action.setDefaultWidget(bg_form_widget)
+        bg_menu.addAction(bg_widget_action)
+        background_button.setMenu(bg_menu)
+
+        toolbar_row = QtWidgets.QHBoxLayout()
+        toolbar_row.setContentsMargins(0, 0, 0, 0)
+        toolbar_row.setSpacing(4)
+        toolbar_row.addWidget(add_button)
+        toolbar_row.addWidget(test_seeds_button)
+        toolbar_row.addWidget(background_button)
+        toolbar_row.addStretch(1)
+        table_layout.addLayout(toolbar_row)
 
         self.resonance_table = QtWidgets.QTableWidget()
         res_settings_options = [
@@ -810,121 +965,32 @@ class AnalysisManager(QtCore.QObject):
             res_settings_options.remove("Color")
 
         self.res_settings_widget_columns = {option: i for i, option in enumerate(res_settings_options)}
+        # column KEYS stay stable (presets and lookups address them by name);
+        # only the header display text is shortened. Remove is an icon-only
+        # column (trash button), also reachable via context menu / Ctrl+D.
+        display_names = {"# Seed Pixels": "Seed pixels", "Use subtracted data": "Subtracted",
+                         "Use Gaussian": "Gaussian", "Remove": ""}
         self.resonance_table.setColumnCount(len(res_settings_options))
-        self.resonance_table.setHorizontalHeaderLabels(res_settings_options)
+        self.resonance_table.setHorizontalHeaderLabels(
+            [display_names.get(name, name) for name in res_settings_options])
         self._refresh_spectral_column_labels()
         self.resonance_table.setAcceptDrops(True)
         self.resonance_table.setAlternatingRowColors(True)
         self.resonance_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         # restrict to single row selection
         self.resonance_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.resonance_table.verticalHeader().setVisible(False)
+        # selecting a resonance row selects the matching component's ROI
+        self.resonance_table.currentCellChanged.connect(self._on_resonance_selection_changed)
+        self.resonance_table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.resonance_table.customContextMenuRequested.connect(self._show_resonance_context_menu)
         self._refresh_resonance_table_layout()
         QtCore.QTimer.singleShot(0, self._refresh_resonance_table_layout)
 
-        left_layout.addWidget(self.resonance_table, 1)
+        table_layout.addWidget(self.resonance_table, 1)
 
-        # Shortcut + hint (cleaner + readable)
         del_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+D"), self.resonance_table)
         del_shortcut.activated.connect(lambda: self.remove_res_settings(self.resonance_table.currentRow()))
-
-        hint = QtWidgets.QLabel('Tip: Press <b>Ctrl+D</b> to delete the selected resonance row.')
-        hint.setStyleSheet("opacity: 0.75;")
-        hint.setAlignment(QtCore.Qt.AlignRight)
-        left_layout.addWidget(hint)
-
-        splitter.addWidget(left)
-
-        # --- Right: control panel ---
-        right = QtWidgets.QWidget()
-        right.setMinimumWidth(360)
-        right_layout = QtWidgets.QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
-
-        # (1) Resonance / actions
-        actions_gb = QtWidgets.QGroupBox("Actions")
-        actions_layout = QtWidgets.QHBoxLayout(actions_gb)
-        actions_layout.setSpacing(8)
-
-        add_button = _make_btn(
-            "Add resonance settings",
-            "list-add", QtWidgets.QStyle.SP_FileDialogNewFolder,
-            slot=self.add_resonance_settings
-        )
-        check_W_seeds_button = _make_btn(
-            "Preview W seeds",
-            "dialog-ok-apply", QtWidgets.QStyle.SP_DialogApplyButton,
-            slot=self.show_W_seeds,
-            tooltip="Preview the current W maps with the selected W seed method."
-        )
-        test_seeds_button = _make_btn(
-            "Test seeds",
-            "system-run", QtWidgets.QStyle.SP_BrowserReload,
-            slot=lambda: self.make_all_seeds_from_inputs(show_seeds=True),
-            tooltip="Runs your seed generation and opens the seed preview window."
-        )
-
-        actions_layout.addWidget(add_button)
-        actions_layout.addWidget(test_seeds_button)
-        """
-        # old layout
-        check_layout = QtWidgets.QHBoxLayout()
-        check_layout.setSpacing(8)
-        check_layout.addWidget(check_W_seeds_button)
-        check_layout.addWidget(test_seeds_button)
-        actions_layout.addLayout(check_layout)
-        """
-
-        right_layout.addWidget(actions_gb)
-
-        # (2) Background (rolling ball)
-        bg_gb = QtWidgets.QGroupBox("Background")
-        bg_gb_layout = QtWidgets.QVBoxLayout(bg_gb)
-        bg_form = QtWidgets.QFormLayout()
-        bg_gb_layout.addLayout(bg_form)
-        bg_form.setLabelAlignment(QtCore.Qt.AlignRight)
-        bg_form.setFormAlignment(QtCore.Qt.AlignTop)
-        bg_form.setHorizontalSpacing(10)
-        bg_form.setVerticalSpacing(8)
-
-        self.rolling_ball_radius = QtWidgets.QSpinBox()
-        self.rolling_ball_radius.setRange(1, 5000)
-        self.rolling_ball_radius.setValue(11)
-        self.rolling_ball_radius.setSingleStep(2)
-        self.rolling_ball_radius.setFixedWidth(90)
-        bg_form.addRow("Rolling ball radius (px):", self.rolling_ball_radius)
-        # add rolling ball sigma for gaussian smoothing
-        self.rolling_ball_sigma = QtWidgets.QDoubleSpinBox()
-        self.rolling_ball_sigma.setRange(0.1, 100.0)
-        self.rolling_ball_sigma.setValue(11.0)
-        self.rolling_ball_sigma.setSingleStep(0.1)
-        self.rolling_ball_sigma.setFixedWidth(90)
-        bg_form.addRow("Gaussian smoothing (px):", self.rolling_ball_sigma)
-
-        self.rolling_ball_projection_combo = QtWidgets.QComboBox()
-        self.rolling_ball_projection_combo.addItem("Mean Projection", "mean")
-        self.rolling_ball_projection_combo.addItem("Max Projection", "max")
-        self.rolling_ball_projection_combo.addItem("Min Projection", "min")
-        self.rolling_ball_projection_combo.setFixedWidth(120)
-        bg_form.addRow("Reference image:", self.rolling_ball_projection_combo)
-
-        bg_btn_row = QtWidgets.QHBoxLayout()
-        bg_btn_row.setSpacing(8)
-        rb_button = _make_btn(
-            "Preview Background",
-            "image-filter", QtWidgets.QStyle.SP_FileDialogContentsView,
-            slot=self.rolling_background_component_from_projection
-        )
-        bg_btn_row.addWidget(rb_button)
-        bg_btn_row.addStretch(1)
-        bg_gb_layout.addLayout(bg_btn_row)
-        right_layout.addWidget(bg_gb)
-
-        right_layout.addStretch(1)
-        splitter.addWidget(right)
-
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 1)
 
         # Done
         self.analysis_widget.setLayout(root)
@@ -936,6 +1002,22 @@ class AnalysisManager(QtCore.QObject):
         self.mv_analyzer.start_analysis()
         self.analysis_data_changed.emit(*self.get_analysis_data())
     """
+
+    @staticmethod
+    def _prefer_gpu_item_text() -> str:
+        """Dropdown text for the "Prefer GPU" item, naming the detected accelerator."""
+        if not torch_nmf.torch_available():
+            return "Prefer GPU (PyTorch not installed)"
+        accelerators = torch_devices.available_accelerators()
+        if not accelerators:
+            if torch_devices.device_override() == "cpu":
+                return "Prefer GPU (forced to torch CPU by HS_MOSAIC_TORCH_DEVICE)"
+            return "Prefer GPU (none detected: torch CPU)"
+        kind = accelerators[0]
+        kind_names = {"cuda": "CUDA", "mps": "Apple MPS", "xpu": "Intel XPU", "dml": "DirectML"}
+        adapter = torch_devices.device_name(kind)
+        label = kind_names.get(kind, kind)
+        return f"Prefer GPU ({label}: {adapter})" if adapter else f"Prefer GPU ({label})"
 
     def _set_analyze_button_idle_state(self):
         if getattr(self, "analyze_button", None) is None:
@@ -984,6 +1066,10 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_running = False
         self._analysis_cancel_requested = False
         self._set_analyze_button_idle_state()
+        # The fitted H is now the more relevant thing to judge than the seeds.
+        self.update_diagnostics_badges()
+        if self._diagnostics_dialog is not None and self._diagnostics_dialog.isVisible():
+            self._diagnostics_dialog.refresh()
 
     def _on_analysis_failed(self, error_text: str):
         self._last_analysis_error = error_text
@@ -992,10 +1078,13 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_fit_info = None
         logger.error("Analysis failed:\n%s", error_text)
         if self.analysis_widget is not None:
+            # the last traceback line is the exception message itself
+            lines = [line for line in str(error_text).strip().splitlines() if line.strip()]
+            reason = lines[-1] if lines else "unknown error"
             QtWidgets.QMessageBox.critical(
                 self.analysis_widget,
                 "Analysis failed",
-                "The analysis stopped because of an error.\n\n"
+                f"The analysis stopped because of an error:\n\n{reason}\n\n"
                 "The full traceback was written to the log.",
             )
 
@@ -1187,7 +1276,7 @@ class AnalysisManager(QtCore.QObject):
                     )
                     self._set_up_missing_W_seeds_for_current_scale_mode(skip_spectral_info=True)
                     if self.mv_analyzer.seed_W is None:
-                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
+                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float32)
                     for comp, fixed_W in fixed_seed_W.items():
                         if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                             self.mv_analyzer.seed_W[:, comp] = fixed_W
@@ -1315,7 +1404,7 @@ class AnalysisManager(QtCore.QObject):
                     )
                     self._set_up_missing_W_seeds_for_current_scale_mode(skip_spectral_info=True)
                     if self.mv_analyzer.seed_W is None:
-                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float64)
+                        self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], n_components), dtype=np.float32)
                     for comp, fixed_W in fixed_seed_W.items():
                         if 0 <= comp < n_components and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                             self.mv_analyzer.seed_W[:, comp] = fixed_W
@@ -1583,7 +1672,7 @@ class AnalysisManager(QtCore.QObject):
             normalize_w_seed=False,
         )
         if self.mv_analyzer.seed_W is None:
-            self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()), dtype=np.float64)
+            self.mv_analyzer.seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()), dtype=np.float32)
         for comp, fixed_W in (fixed_seed_W or {}).items():
             if 0 <= comp < self.mv_analyzer.seed_W.shape[1] and fixed_W.shape[0] == self.mv_analyzer.seed_W.shape[0]:
                 self.mv_analyzer.seed_W[:, comp] = fixed_W
@@ -1680,6 +1769,177 @@ class AnalysisManager(QtCore.QObject):
 
     def _handle_component_count_changed(self, n_components: int):
         self.mv_analyzer.update_components(n_components)
+        self.update_diagnostics_badges()
+
+    # ------------------------------------------------------------------
+    # Unmixing diagnostics
+    # ------------------------------------------------------------------
+
+    def _diagnostics_cube(self) -> np.ndarray | None:
+        """Spectral cube ``(channels, height, width)`` the diagnostics run on."""
+        cube = getattr(self.mv_analyzer, "raw_data_3d", None)
+        if cube is None:
+            return None
+        cube = np.asarray(cube)
+        return cube if cube.ndim == 3 else None
+
+    def _diagnostics_spectra(self) -> tuple[np.ndarray | None, str]:
+        """Spectra to judge: the fitted H when there is one, else the ROI seeds.
+
+        Pre-analysis the ROI table is the live source of truth; the
+        analyzer's ``seed_H`` is only filled once an analysis run calls
+        ``reload_H_seeds_from_rois``. The analyzer seeds remain as a last
+        resort for scripted use where they are set directly.
+        """
+        fixed_H = getattr(self.mv_analyzer, "fixed_H", None)
+        if fixed_H is not None and np.asarray(fixed_H).size:
+            return np.asarray(fixed_H), "NNMF result (H)"
+        table_H = self._seed_H_from_roi_table()
+        if table_H is not None:
+            return table_H, "ROI table seeds"
+        seed_H = getattr(self.mv_analyzer, "seed_H", None)
+        if seed_H is not None and np.asarray(seed_H).size and np.any(np.abs(seed_H) > 0):
+            return np.asarray(seed_H), "analyzer seeds (H)"
+        return None, "no spectra"
+
+    def _seed_H_from_roi_table(self) -> np.ndarray | None:
+        """Assemble the seed spectra directly from the ROI table.
+
+        Mirrors the component parsing of ``reload_H_seeds_from_rois`` but
+        never touches analyzer state and never pops warning boxes: the badge
+        has to stay silent and safe. Unseeded components stay zero rows, which
+        the separability report flags as ``empty``.
+        """
+        mv = getattr(self, "mv_analyzer", None)
+        if self.roi_manager is None or mv is None:
+            return None
+        try:
+            curves = self.roi_manager.get_roi_mean_curves()
+        except Exception:
+            logger.debug("Diagnostics: reading ROI mean curves failed", exc_info=True)
+            return None
+        if not curves:
+            return None
+        n = mv.get_n_components()
+        H = None
+        for seed in curves:
+            component_index = seed.get("component")
+            if component_index is None:
+                try:
+                    component_index = int(str(seed["resonance"]).strip("Component ")) - 1
+                except (KeyError, ValueError):
+                    continue
+            spectrum = np.asarray(seed.get("H"), dtype=np.float64).ravel()
+            if not (0 <= component_index < n) or spectrum.size == 0:
+                continue
+            if H is None:
+                H = np.zeros((n, spectrum.size))
+            if spectrum.size == H.shape[1]:
+                H[component_index] = spectrum
+        if H is None or not np.any(np.abs(H) > 0):
+            return None
+        return H
+
+    def compute_current_separability(self):
+        """Separability of the current component spectra, or ``None``.
+
+        Cheap enough to call on every change: ``H`` is (components x channels).
+        """
+        H, _ = self._diagnostics_spectra()
+        if H is None:
+            return None
+        H = np.asarray(H)
+        if H.ndim != 2 or H.shape[0] == 0:
+            return None
+        labels = [self.roi_manager.get_component_label(i) for i in range(H.shape[0])]
+        return separability(H, labels=labels)
+
+    def _diagnostics_noise(self) -> dict | None:
+        """Per-channel noise sigma from the Background-flagged spatial ROIs.
+
+        Background regions are what a user marks anyway, and a signal-free
+        region is exactly what a direct noise estimate needs, so the Background
+        checkbox doubles as the noise flag. Dummy rows (loaded spectra,
+        Gaussian models) carry no spatial region and are skipped. Pixels come
+        from the raw data: subtraction would add its own noise to the estimate.
+        """
+        rm = self.roi_manager
+        if rm is None or rm.raw_data is None:
+            return None
+        blocks: list[np.ndarray] = []
+        names: list[str] = []
+        for row, roi in enumerate(rm.rois):
+            try:
+                box = rm.roi_table.cellWidget(row, rm.widget_columns["Background"])
+                if box is None or not box.isChecked():
+                    continue
+                if hasattr(roi, "spectrum_data"):
+                    continue
+                region = roi.getArrayRegion(rm.raw_data, rm.image_view.imageItem, axes=(2, 1))
+                if region is None or region.size == 0:
+                    continue
+                region = np.asarray(region, dtype=np.float64)
+                blocks.append(region.reshape(region.shape[0], -1).T)
+                name_widget = rm.roi_table.cellWidget(row, rm.widget_columns["Name"])
+                names.append(name_widget.text() if name_widget is not None else f"row {row + 1}")
+            except Exception:
+                logger.debug("Diagnostics: skipping background ROI in row %d", row, exc_info=True)
+        if not blocks:
+            return None
+        pixels = np.concatenate(blocks, axis=0)
+        sigma = noise_sigma_from_pixels(pixels)
+        if not np.isfinite(sigma).any():
+            return None
+        return {"sigma": sigma, "label": ", ".join(names), "n_pixels": int(pixels.shape[0])}
+
+    def open_diagnostics(self, tab_index: int = UnmixingDiagnosticsDialog.DATASET_TAB) -> None:
+        """Open (or raise) the shared unmixing diagnostics dialog."""
+        if self._diagnostics_dialog is None:
+            self._diagnostics_dialog = UnmixingDiagnosticsDialog(
+                parent=self.analysis_widget,
+                cube_getter=self._diagnostics_cube,
+                spectra_getter=self._diagnostics_spectra,
+                label_getter=self.roi_manager.get_component_label,
+                color_getter=self.roi_manager.get_color_rgba,
+                noise_getter=self._diagnostics_noise,
+            )
+        self._diagnostics_dialog.open_on(tab_index)
+        self.update_diagnostics_badges()
+
+    def update_diagnostics_badges(self) -> None:
+        """Refresh the inline diagnostics badges.
+
+        Separability is recomputed every time because ``H`` is small. The
+        dataset SVD is not: it only appears once the user has opened the dialog,
+        so loading data never pays for an SVD nobody asked for.
+        """
+        sep = self.compute_current_separability()
+        parts: list[str] = []
+        colors: list[str] = []
+
+        rank = self._diagnostics_dialog.cached_rank() if self._diagnostics_dialog else None
+        if rank is not None:
+            text, color = rank_badge(rank, self.mv_analyzer.get_n_components())
+            parts.append(text)
+            colors.append(color)
+
+        if sep is not None:
+            text, color = separability_badge(sep)
+            parts.append(text)
+            colors.append(color)
+
+        if not parts:
+            parts.append("Diagnostics: not computed")
+
+        # Red beats amber beats green, so the badge always shows the worst news.
+        severity = {"#d05050": 3, "#d0a030": 2, "#3faa60": 1}
+        color = max(colors, key=lambda c: severity.get(c, 0)) if colors else "#909090"
+
+        badge = getattr(self, "diagnostics_badge", None)
+        if badge is not None:
+            apply_badge(badge, (" · ".join(parts), color))
+        if self.roi_manager is not None:
+            self.roi_manager.update_diagnostics_badge(sep)
 
     def import_current_result_component(self, target: str, component_index: int, slice_index: int = 0) -> bool:
         """
@@ -1855,7 +2115,10 @@ class AnalysisManager(QtCore.QObject):
         image_data : (n_pixels, n_bands)   basis : (n_bands, k)
         Returns abundance of shape (n_pixels, k).
         """
-        abundance, _ = self.mv_analyzer.build_nnls_abundance_matrix(np.asarray(image_data, dtype=np.float64),
+        # No float64 pre-cast of the image: the dispatcher casts per backend
+        # anyway (torch: float32, SciPy: float64), so a full-size float64 copy
+        # here would only double the peak memory of the solve.
+        abundance, _ = self.mv_analyzer.build_nnls_abundance_matrix(np.asarray(image_data),
                                                                     np.asarray(basis, dtype=np.float64), 1e-8,
                                                                     "vca-roi-placement")
         return np.asarray(abundance)
@@ -1878,6 +2141,9 @@ class AnalysisManager(QtCore.QObject):
                 seed_pixels,
                 color_getter=self.roi_manager.get_color_rgba,
                 label_getter=self.roi_manager.get_component_label,
+                diagnostics_callback=lambda: self.open_diagnostics(
+                    UnmixingDiagnosticsDialog.SEPARABILITY_TAB
+                ),
             )
             self.seed_window.set_spectral_units(self.spectral_units)
             logger.info("Created new seed window")
@@ -1923,6 +2189,13 @@ class AnalysisManager(QtCore.QObject):
         defined: set[int] = set()
         # component_number_from_table_index returns 0-based; convert to 1-based
         for row in range(self.roi_manager.roi_table.rowCount()):
+            roi = self.roi_manager.rois[row] if row < len(self.roi_manager.rois) else None
+            # A row with a disabled H seed does not seed its component, unless
+            # it carries a fixed W map, which is collected regardless of the
+            # H-seed flag (result-import W rows are created exactly like that).
+            if (roi is not None and not getattr(roi, "seed_H_enabled", True)
+                    and not hasattr(roi, "fixed_W")):
+                continue
             comp_0 = self.roi_manager.component_number_from_table_index(row)
             if comp_0 is not None and comp_0 >= 0:
                 defined.add(comp_0 + 1)
@@ -2004,8 +2277,9 @@ class AnalysisManager(QtCore.QObject):
             self.set_fixed_W_seed(component_index, roi.fixed_W)
             logger.info(f'Setting fixed W seed for component {component_index} from ROI')
         for i, seed_dict in enumerate(seeds_list):
-            component_number = int(seed_dict['resonance'].strip('Component '))
-            component_index =  component_number - 1
+            component_index = seed_dict.get('component')
+            if component_index is None:
+                component_index = int(seed_dict['resonance'].strip('Component ')) - 1
 
             flag_bgd = bool(seed_dict.get('is_background', False))
             if component_index >= self.mv_analyzer.get_n_components():
@@ -2017,6 +2291,7 @@ class AnalysisManager(QtCore.QObject):
                                               f' {self.mv_analyzer.get_n_components()} components and is ignored.')
                 continue
             self.mv_analyzer.set_H_seed(component_index, seed_dict['H'], flag_background=flag_bgd)
+        self.update_diagnostics_badges()
 
     def set_fixed_W_seed(self, component: int, fixed_W: np.ndarray):
         """
@@ -2150,13 +2425,15 @@ class AnalysisManager(QtCore.QObject):
           * Backend dropdown: enabled only when NNMF mode is active AND the
             solver is set to `mu` (the only solver that goes through the
             PyTorch backend; `cd` always uses scikit-learn on CPU).
-          * "Prefer GPU" item inside the backend dropdown: disabled when no
-            GPU accelerator (CUDA / MPS / XPU) is detected, with a tooltip
-            explaining why.
+          * "Prefer GPU" item inside the backend dropdown: its text names the
+            GPU accelerator (CUDA / MPS / XPU / DirectML) that was detected,
+            or says that torch CPU will be used.
           * Patience spinbox and torch.compile checkbox: enabled only when
             the backend dropdown itself is enabled (same conditions as
             above) AND PyTorch is installed. Both controls have no effect
-            if the torch MU path is not being used.
+            if the torch MU path is not being used. The torch.compile box is
+            additionally disabled when the accelerator is DirectML, which
+            has no compiler backend.
           * W-seed downsample spinbox: enabled whenever NNMF mode is active
             (independent of solver — the W seed init runs the same way
             regardless of mu/cd choice).
@@ -2192,7 +2469,10 @@ class AnalysisManager(QtCore.QObject):
         if getattr(self, "nnmf_patience_spinbox", None) is not None:
             self.nnmf_patience_spinbox.setEnabled(mu_uses_torch)
         if getattr(self, "nnmf_use_compile_check", None) is not None:
-            self.nnmf_use_compile_check.setEnabled(mu_uses_torch)
+            compile_possible = torch_installed and torch_devices.supports_torch_compile(
+                torch_devices.default_device()
+            )
+            self.nnmf_use_compile_check.setEnabled(mu_uses_torch and compile_possible)
         # NNMF tolerance: PyTorch MU only, same gate as patience.
         if getattr(self, "nnmf_tol_combo", None) is not None:
             self.nnmf_tol_combo.setEnabled(mu_uses_torch)
@@ -2217,6 +2497,16 @@ class AnalysisManager(QtCore.QObject):
             return self.mv_analyzer.PCs[:n_components], self.mv_analyzer.pca_2DX[:n_components]
         return self.mv_analyzer.fixed_H, self.mv_analyzer.fixed_W_2D
 
+    def get_analysis_source_stack(self) -> np.ndarray | None:
+        """The data cube the displayed result was fitted on, by reference.
+
+        3D ``(bands, y, x)`` for single-stack runs, 4D ``(slice, bands, y, x)``
+        for series results. Used by the result viewer's hover spectrum.
+        """
+        if self._analysis_series_4d is not None:
+            return self._analysis_series_4d
+        return self.mv_analyzer.raw_data_3d
+
     def get_analysis_fit_info(self) -> dict | list[dict | None] | None:
         if self._analysis_fit_info is not None:
             return self._analysis_fit_info
@@ -2237,15 +2527,15 @@ class AnalysisManager(QtCore.QObject):
         indicator_width = self.resonance_table.style().pixelMetric(QtWidgets.QStyle.PM_IndicatorWidth) + 16
 
         default_widths = {
-            "Component": 130,
+            "Component": 140,
             "Wavenumber": 120,
             "# Seed Pixels": 120,
             "Amplitude": 110,
-            "Color": 64,
-            "Width": 72,
-            "Use subtracted data": 136,
-            "Use Gaussian": 110,
-            "Remove": 88,
+            "Color": 70,
+            "Width": 80,
+            "Use subtracted data": 140,
+            "Use Gaussian": 112,
+            "Remove": 40,
         }
         for name, width in default_widths.items():
             if name in self.res_settings_widget_columns:
@@ -2262,18 +2552,26 @@ class AnalysisManager(QtCore.QObject):
                     self.resonance_table.setColumnWidth(column, desired_width)
                     auto_widths[column] = desired_width
 
+        # Distribute spare width to the value-bearing columns — capped, so the
+        # full-width table does not blow single columns up to half the panel.
         flexible_columns = [
-            self.res_settings_widget_columns[name]
-            for name in ("Component", "Wavenumber", "# Seed Pixels", "Amplitude")
+            (self.res_settings_widget_columns[name], cap)
+            for name, cap in (("Component", 240), ("Wavenumber", 190),
+                              ("# Seed Pixels", 150), ("Amplitude", 150))
             if name in self.res_settings_widget_columns
         ]
         available_width = self.resonance_table.viewport().width()
-        current_width = sum(self.resonance_table.columnWidth(col) for col in range(self.resonance_table.columnCount()))
+        current_width = sum(
+            self.resonance_table.columnWidth(col)
+            for col in range(self.resonance_table.columnCount())
+            if not self.resonance_table.isColumnHidden(col)
+        )
         extra_width = available_width - current_width
         if extra_width > 0 and flexible_columns:
             extra_per_column, remainder = divmod(extra_width, len(flexible_columns))
-            for index, column in enumerate(flexible_columns):
+            for index, (column, cap) in enumerate(flexible_columns):
                 new_width = self.resonance_table.columnWidth(column) + extra_per_column + (1 if index < remainder else 0)
+                new_width = min(new_width, cap)
                 self.resonance_table.setColumnWidth(column, new_width)
                 auto_widths[column] = new_width
 
@@ -2342,9 +2640,12 @@ class AnalysisManager(QtCore.QObject):
         row_position = self.resonance_table.rowCount()
         self.resonance_table.insertRow(row_position)
 
-        # 1. Component Selection
+        # 1. Component Selection (item texts mirror the ROI-table component names)
         item_comp = QtWidgets.QComboBox()
-        item_comp.addItems([f"Component {i + 1}" for i in range(9)])
+        if self.roi_manager is not None:
+            item_comp.addItems([self.roi_manager.component_display_text(i) for i in range(9)])
+        else:
+            item_comp.addItems([f"Component {i + 1}" for i in range(9)])
         item_comp.setCurrentIndex(row_position % 9)
         # Determine the initial component index
         comp_idx = row_position % 9
@@ -2355,10 +2656,19 @@ class AnalysisManager(QtCore.QObject):
             initial_color = self.color_manager.get_qcolor(comp_idx)
             btn_color = ColorButton(initial_color)
 
-            # Define a closure to capture the row and component correctly
-            # We need to know which component is currently selected in this row
+            # The handlers below must resolve their row at call time: rows
+            # shift when an earlier row is removed, so the creation-time
+            # row_position would address the wrong (or a vanished) row.
+            def current_row_of_combo() -> int | None:
+                column = self.res_settings_widget_columns["Component"]
+                for row in range(self.resonance_table.rowCount()):
+                    if self.resonance_table.cellWidget(row, column) is item_comp:
+                        return row
+                return None
+
             def on_color_picked(new_color):
-                current_comp_idx = self.get_component_index(row_position)
+                row = current_row_of_combo()
+                current_comp_idx = None if row is None else self.get_component_index(row)
                 if current_comp_idx is not None:
                     self.color_manager.set_color(current_comp_idx, new_color)
 
@@ -2366,11 +2676,13 @@ class AnalysisManager(QtCore.QObject):
 
             # Also, if the user changes the "Component" Combobox, we must update the button color
             def on_component_changed(index):
+                row = current_row_of_combo()
+                if row is None:
+                    return  # the row is already removed; nothing to update
                 # The combo box changed, so fetch the color for the NEW component ID
-                new_c_idx = self.get_component_index(row_position)
-                c = self.color_manager.get_qcolor(new_c_idx)
+                c = self.color_manager.get_qcolor(self.get_component_index(row))
                 btn_color.setColor(c)
-                self.callback_res_settings(row_position)
+                self.callback_res_settings(row)
 
             item_comp.currentIndexChanged.connect(on_component_changed)
             # Set widgets in table
@@ -2378,8 +2690,10 @@ class AnalysisManager(QtCore.QObject):
 
         self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Component"], item_comp)
 
-        # 3. Remove button
-        widget_remove = QtWidgets.QPushButton("Remove")
+        # 3. Remove button (icon only)
+        widget_remove = QtWidgets.QToolButton()
+        widget_remove.setIcon(theme.icon('mdi.trash-can-outline'))
+        widget_remove.setToolTip("Remove this resonance row (Ctrl+D)")
         widget_remove.clicked.connect(self._on_remove_res_btn_clicked)
         self.resonance_table.setCellWidget(row_position, self.res_settings_widget_columns["Remove"], widget_remove)
 
@@ -2456,8 +2770,26 @@ class AnalysisManager(QtCore.QObject):
                 self.remove_res_settings(row)
                 return
 
+    def _show_resonance_context_menu(self, pos):
+        row = self.resonance_table.rowAt(pos.y())
+        if row < 0:
+            return
+        menu = QtWidgets.QMenu(self.resonance_table)
+        remove_action = menu.addAction(theme.icon('mdi.trash-can-outline'), "Remove resonance row")
+        remove_action.setShortcut(QtGui.QKeySequence("Ctrl+D"))
+        remove_action.triggered.connect(lambda: self.remove_res_settings(row))
+        menu.exec_(self.resonance_table.viewport().mapToGlobal(pos))
+
     def remove_res_settings(self, row):
-        self.resonance_table.removeRow(row)
+        if row is None or row < 0:
+            return
+        # removeRow moves the current cell, which would fire the ROI-table
+        # selection sync and change the active ROI as a side effect of a delete
+        self._selection_sync_guard = True
+        try:
+            self.resonance_table.removeRow(row)
+        finally:
+            self._selection_sync_guard = False
         self._refresh_resonance_table_layout()
         self.callback_res_settings(row)
 
@@ -2494,6 +2826,77 @@ class AnalysisManager(QtCore.QObject):
         logger.info(f'new spectral info in the mv_analyzer:{self.mv_analyzer.spectral_info}')
         # TODO: lazy variant, rehighlight all resonances when something changes, hard to keep track of all changes
         self.highlight_all_resonances()
+        self._schedule_seed_preview()
+
+    # ------------------------------------------------------------------
+    # Live H-seed preview (resonance-table components without a ROI)
+    # ------------------------------------------------------------------
+    def _schedule_seed_preview(self, *_args):
+        if getattr(self, "_seed_preview_timer", None) is not None:
+            self._seed_preview_timer.start()
+
+    def _resonance_preview_components(self) -> list[int]:
+        """Components whose H seed would come from resonance-table seed pixels."""
+        wanted: list[int] = []
+        for row in range(self.resonance_table.rowCount()):
+            component = self.get_component_index(row)
+            if component is None or component in wanted:
+                continue
+            info = self.get_spectral_info_row(row)
+            if not info or info.get('Use Gaussian'):
+                continue
+            if self.roi_manager.is_component_defined(component):
+                continue  # a ROI / spectrum row already provides (and plots) the seed
+            wanted.append(component)
+        return wanted
+
+    def _update_seed_previews(self):
+        """Show resonance-driven H seeds live in the Seed spectra plot.
+
+        Runs the same seed-pixel search and pixel-mean the analysis uses
+        (`set_H_seeds_from_spectral_info`), so the dashed preview curve equals
+        the H seed a run would start from. Debounced by `_seed_preview_timer`;
+        deferred while a real seed build or an analysis is running.
+        """
+        if self.roi_manager is None or self.resonance_table is None:
+            return
+        if self._seed_preview_running or self._analysis_running or self._seed_building:
+            self._schedule_seed_preview()
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is not None and app.activeModalWidget() is not None:
+            # don't run a (possibly heavy) pixel search inside a dialog's
+            # nested event loop; try again once the dialog is gone
+            self._schedule_seed_preview()
+            return
+        plotter = self.roi_manager.roi_plotter
+        wanted = [] if self.z3D_data is None else self._resonance_preview_components()
+        self._seed_preview_running = True
+        try:
+            found: dict[int, np.ndarray] = {}
+            if wanted:
+                try:
+                    pixels_by_component = self.find_seed_pixels(components=wanted)
+                except Exception:
+                    logger.debug("Seed-preview pixel search failed", exc_info=True)
+                    pixels_by_component = {}
+                for component, pixels in pixels_by_component.items():
+                    spectra = self.z3D_data[:, pixels[0], pixels[1]]
+                    found[component] = np.mean(spectra, axis=1)
+            for component, spectrum in found.items():
+                label = f"{self.roi_manager.component_display_text(component)} (seed px)"
+                plotter.set_component_seed_spectrum(component, spectrum, label)
+                # mark the found pixels in the image view (same pixels the
+                # analysis would average into this component's H seed)
+                self.roi_manager.set_seed_pixel_overlay(component, pixels_by_component.get(component))
+            # previews of components that no longer qualify are cleared
+            # (entries that also carry a Gaussian model keep the model)
+            for component in list(plotter.component_gaussians.keys()):
+                if component not in found:
+                    plotter.set_component_seed_spectrum(component, None)
+            self.roi_manager.prune_seed_pixel_overlays(set(found))
+        finally:
+            self._seed_preview_running = False
 
     def highlight_all_resonances(self):
         self.roi_manager.roi_plotter.remove_all_highlights(delete_spectral_info=True)
@@ -2736,8 +3139,54 @@ class AnalysisManager(QtCore.QObject):
         component_combobox: QtWidgets.QComboBox = self.resonance_table.cellWidget(row, self.res_settings_widget_columns['Component'])
         if component_combobox is None:
             return None
-        idx = int(component_combobox.currentText().split(' ')[-1]) - 1
-        return idx
+        # Items are in component order, so the index is the component number.
+        # Item texts may carry user-defined names and must not be parsed.
+        idx = component_combobox.currentIndex()
+        return idx if idx >= 0 else None
+
+    def _refresh_component_combo_texts(self, component_number: int, _label: str = ""):
+        """Mirror the ROI table's component names into the resonance-table combos."""
+        if self.roi_manager is None or self.resonance_table is None:
+            return
+        if not 0 <= component_number < 9:
+            return
+        text = self.roi_manager.component_display_text(component_number)
+        col = self.res_settings_widget_columns['Component']
+        for row in range(self.resonance_table.rowCount()):
+            combo = self.resonance_table.cellWidget(row, col)
+            if isinstance(combo, QtWidgets.QComboBox) and component_number < combo.count():
+                combo.setItemText(component_number, text)
+
+    def _on_roi_component_selected(self, component: int):
+        """A ROI row was selected: highlight the matching resonance row."""
+        if self._selection_sync_guard or component < 0 or self.resonance_table is None:
+            return
+        row = self.get_row_index(component)
+        if row is None or row == self.resonance_table.currentRow():
+            return
+        self._selection_sync_guard = True
+        try:
+            self.resonance_table.selectRow(row)
+        finally:
+            self._selection_sync_guard = False
+
+    def _on_resonance_selection_changed(self, current_row: int, *_args):
+        """A resonance row was selected: select the matching component's ROI."""
+        if self._selection_sync_guard or self.roi_manager is None or current_row < 0:
+            return
+        component = self.get_component_index(current_row)
+        if component is None:
+            return
+        for row in range(self.roi_manager.roi_table.rowCount()):
+            if self.roi_manager.component_number_from_table_index(row) == component:
+                if row == self.roi_manager.roi_table.currentRow():
+                    return
+                self._selection_sync_guard = True
+                try:
+                    self.roi_manager._select_roi_by_row(row, ensure_table_visible=True)
+                finally:
+                    self._selection_sync_guard = False
+                return
 
     def get_row_index(self, component_idx: int) -> int | None:
         """
@@ -2776,7 +3225,7 @@ class AnalysisManager(QtCore.QObject):
         Important! This function cannot be moved to the MV analyzer, as it depends on the GUI elements for spectral info and ROIs.
 
         """
-        logger.info(f"Processing spectral info to create W {"and H" if make_H_seeds else ""} seeds")
+        logger.info(f"Processing spectral info to create W {'and H' if make_H_seeds else ''} seeds")
         # get the spectral information from the table
         # convert the wavenumber to indices
         seed_W = np.zeros((self.mv_analyzer.data_2d.shape[0], self.mv_analyzer.get_n_components()))
@@ -2811,10 +3260,8 @@ class AnalysisManager(QtCore.QObject):
             for info_dict in info_dict_list:
                 res_indices = np.append(res_indices, self.mv_analyzer.return_resonance_indices(info_dict))
 
-            # ... (Logic for weights and subtracted data same as before) ...
-
+            # uniform weights over the collected resonance slices
             weights = np.ones(res_indices.size)
-            # Shortened for brevity: insert your existing W seed averaging code here
             data = self.mv_analyzer.data_2d
             if self.resonance_table.cellWidget(self.get_row_index(i),
                                                self.res_settings_widget_columns['Use subtracted data']).isChecked():
@@ -3193,7 +3640,9 @@ class AnalysisManager(QtCore.QObject):
 
             # --- Log & Data Preparation ---
             logger.info(f'Finding seed pixels for component {i} in frames {frames.tolist()}')
-            frames_of_interest = self.z3D_data[frames, ...].astype(float)
+            # float32, not float(=float64): this is a full-frames copy of the
+            # cube, and the metric below only ranks pixels of (u)int16 data.
+            frames_of_interest = self.z3D_data[frames, ...].astype(np.float32)
 
             # Exclude the background pixels by setting them to a very low score later
             # (we'll explicitly overwrite metric_frame for these).
@@ -3210,8 +3659,10 @@ class AnalysisManager(QtCore.QObject):
                 outside_frames = np.setdiff1d(all_frames, frames)
 
                 if outside_frames.size > 0:
+                    # dtype-accumulated mean: no full float copy of the
+                    # (nearly whole) stack just to average it.
                     baseline_frame = np.mean(
-                        self.z3D_data[outside_frames, ...].astype(float), axis=0
+                        self.z3D_data[outside_frames, ...], axis=0, dtype=np.float32
                     )
                 else:
                     baseline_frame = np.zeros_like(signal_frame)
@@ -3297,6 +3748,14 @@ class AnalysisManager(QtCore.QObject):
         logger.info(f"Analysis Manager: Image of shape {img.shape} and wavenumbers of length {len(wavenumbers)} updated in mv_analyzer.")
         logger.info(f"Analysis Manager: Image dtype {img.dtype}")
         logger.info(f"Analysis Manager: Image contains zeros: {np.any(img == 0)}")
+        # New data invalidates the dataset diagnostics (the cache is keyed by
+        # cube content). The SVD stays on demand: recompute right away only
+        # when the dialog is open, otherwise the badge just drops its K_eff
+        # part until the dialog is opened again.
+        if self._diagnostics_dialog is not None and self._diagnostics_dialog.isVisible():
+            self._diagnostics_dialog.refresh()
+        self.update_diagnostics_badges()
+        self._schedule_seed_preview()
 
     def update_modified_data(self, data: np.ndarray):
         self.mv_analyzer.update_resonance_image_data(data)
@@ -3482,7 +3941,7 @@ class AnalysisManager(QtCore.QObject):
             del blocker
 
     def _refresh_spectral_column_labels(self):
-        # Header text (keep your internal column keys "Wavenumber"/"Width"!)
+        # Header display text only; the internal column keys "Wavenumber"/"Width" stay stable.
         wn_col = self.res_settings_widget_columns.get("Wavenumber")
         wd_col = self.res_settings_widget_columns.get("Width")
         axis_labels = getattr(self, "axis_labels", None)
@@ -3526,8 +3985,11 @@ class AnalysisManager(QtCore.QObject):
 class SeedWidget(QtWidgets.QWidget):
     default_colors = CompositeImageViewWidget.colormap_colors
     def __init__(self, seed_W_3d: np.ndarray, seed_H: np.ndarray, wavenumbers,
-                 seed_pixels: dict or None = None, color_getter=None, label_getter=None,):
+                 seed_pixels: dict or None = None, color_getter=None, label_getter=None,
+                 diagnostics_callback=None,):
         super(SeedWidget, self).__init__()
+        self.diagnostics_callback = diagnostics_callback
+        self.diagnostics_badge = None
         self.seed_W_3d = seed_W_3d
         self.seed_H = seed_H
         self.wavenumbers = wavenumbers
@@ -3587,6 +4049,27 @@ class SeedWidget(QtWidgets.QWidget):
         views_row.addWidget(left_container)
         views_row.addWidget(right_container)
         layout.addLayout(views_row)
+
+        # Can these spectra actually be unmixed? Sits directly above the H
+        # curves, which is what the user is looking at when they ask.
+        diag_row = QtWidgets.QHBoxLayout()
+        diag_row.setContentsMargins(0, 0, 0, 0)
+        self.diagnostics_badge = QtWidgets.QLabel("")
+        self.diagnostics_badge.setWordWrap(True)
+        self.diagnostics_badge.setToolTip(
+            "Smallest eta among the displayed spectra: the fraction of the hardest\n"
+            "component's fingerprint that no combination of the others can imitate.\n"
+            "Small values mean noise and spectral errors are strongly amplified."
+        )
+        diag_row.addWidget(self.diagnostics_badge, stretch=1)
+        if self.diagnostics_callback is not None:
+            diag_button = QtWidgets.QPushButton("Diagnostics…")
+            diag_button.setFixedWidth(120)
+            diag_button.setToolTip("Open the unmixing diagnostics on the separability tab")
+            diag_button.clicked.connect(lambda: self.diagnostics_callback())
+            diag_row.addWidget(diag_button)
+        layout.addLayout(diag_row)
+        self._update_diagnostics_badge()
 
         layout.addWidget(self.seed_H_plot)
         self.setLayout(layout)
@@ -3805,6 +4288,22 @@ class SeedWidget(QtWidgets.QWidget):
         self.seed_H = seed_H
         self._plot_h_curves()
         self._highlight_h_curve(self._current_index())
+        self._update_diagnostics_badge()
+
+    def _update_diagnostics_badge(self):
+        """Judge whether the displayed spectra can actually be unmixed.
+
+        Cheap enough to redo on every H update: the spectral matrix is only
+        (components x channels).
+        """
+        if self.diagnostics_badge is None:
+            return
+        sep = None
+        H = np.asarray(self.seed_H) if self.seed_H is not None else None
+        if H is not None and H.ndim == 2 and H.shape[0]:
+            labels = [self.get_label(i) for i in range(H.shape[0])]
+            sep = separability(H, labels=labels)
+        apply_badge(self.diagnostics_badge, separability_badge(sep))
 
     def _current_index(self) -> int:
         try:
@@ -3850,10 +4349,13 @@ class SeedWidget(QtWidgets.QWidget):
         if self.seed_W_3d is None or np.ndim(self.seed_W_3d) != 3:
             return
         height, width, n_components = self.seed_W_3d.shape
-        rgb = np.zeros((height, width, 3), dtype=np.float64)
+        # float32 throughout (incl. the color vectors, so no broadcast
+        # promotes back to float64): this is a display composite, and the
+        # buffers scale with the full image size.
+        rgb = np.zeros((height, width, 3), dtype=np.float32)
         for i in range(n_components):
             wmap = np.nan_to_num(
-                np.asarray(self.seed_W_3d[..., i], dtype=np.float64),
+                np.asarray(self.seed_W_3d[..., i], dtype=np.float32),
                 nan=0.0, posinf=0.0, neginf=0.0,
             )
             wmap = np.maximum(wmap, 0.0)
@@ -3861,9 +4363,9 @@ class SeedWidget(QtWidgets.QWidget):
             if peak > 0.0:
                 wmap = wmap / peak
             try:
-                color = np.asarray(self.get_color(i)[:3], dtype=np.float64) / 255.0
+                color = np.asarray(self.get_color(i)[:3], dtype=np.float32) / 255.0
             except Exception:
-                color = np.asarray(self.default_colors[i % len(self.default_colors)][:3], dtype=np.float64) / 255.0
+                color = np.asarray(self.default_colors[i % len(self.default_colors)][:3], dtype=np.float32) / 255.0
             rgb += wmap[..., None] * color
         rgb = np.clip(rgb, 0.0, 1.0)
         rgb_u16 = (rgb * 65535.0).astype(np.uint16)

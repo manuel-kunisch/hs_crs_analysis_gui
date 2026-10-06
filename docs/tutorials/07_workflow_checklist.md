@@ -1,6 +1,6 @@
 # 07 Workflow Checklist
 
-This checklist is an extra page for avoiding common mistakes before running or publishing an analysis.
+This checklist is an extra page for avoiding common mistakes before running or publishing an analysis. It uses the seed and matrix terminology (H spectra, W maps, seed rows) introduced on the [Concepts page](../concepts.md) and in [Seeds, spectra, and W maps](03_seeds_spectral_and_spatial.md); residual filling is explained in [Essentials §2](../essentials.md).
 
 ![End-to-end workflow decision tree — three forks (4D, seeds, lock H), with the no-seeds branch looping back through PCA/Random NNMF and a feedback arc from Inspect to Seed setup](../assets/images/07_workflow_decision_tree.png)
 

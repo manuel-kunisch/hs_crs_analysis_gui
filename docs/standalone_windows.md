@@ -61,9 +61,11 @@ Users do not need to install the CUDA Toolkit. The CUDA runtime libraries used b
 
 Users do need a compatible NVIDIA driver. For the `CU124` package, use an NVIDIA driver that supports CUDA 12.4. On Windows, driver version `551.61` or newer is a practical minimum. Newer NVIDIA drivers are normally compatible.
 
-The CUDA package is intended for NVIDIA GPUs. AMD, Intel, and Apple GPUs are not CUDA devices and will not use the CUDA backend on Windows.
+The CUDA package is intended for NVIDIA GPUs. AMD, Intel, and Apple GPUs are not CUDA devices and will not use the CUDA backend on Windows. AMD Radeon users on Windows (including Ryzen APUs with integrated Radeon graphics) can use the DirectML backend instead: either run from source with `pip install "hs-mosaic[directml]"` (see [Installation → AMD Radeon on Windows](installation.md#amd-radeon-on-windows-directml)), or build the `HS_MOSAIC_GPU_DirectML` package with `build_windows_pytorch.ps1 -DirectML` as described below.
 
-If CUDA is not available on a user's computer, the application can still open. PyTorch NNMF falls back to CPU PyTorch, and fixed-H NNLS falls back to the CPU SciPy path.
+**Which GPU package to pick:** the DirectML package is the *universal* GPU build — it runs on any DirectX-12 GPU (AMD Radeon and Ryzen APUs, Intel, and also NVIDIA) but it cannot use CUDA, so on an NVIDIA card the dedicated CUDA package is substantially faster. Rule of thumb: NVIDIA GPU → CUDA package; any other GPU → DirectML package; no supported GPU → CPU package.
+
+If CUDA is not available, the application can still open. Both PyTorch NNMF and fixed-H NNLS fall back to CPU PyTorch (the batched CPU FISTA solver is ~40× faster than the per-pixel SciPy path that runs when PyTorch is missing entirely).
 
 ## How To Use The GPU Backend
 
@@ -145,6 +147,12 @@ Build the PyTorch CPU package:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1
+```
+
+Build a DirectML package (AMD Radeon / any DirectX-12 GPU on Windows). The switch installs the `torch-directml` plugin with its pinned torch build into a separate `.venv-build-directml` environment, verifies that a DirectX-12 adapter is visible, bundles `DirectML.dll`, and labels the zip `HS_MOSAIC_GPU_DirectML_vX.Y.Z`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_pytorch.ps1 -DirectML -Version 0.9.10
 ```
 
 Build a CUDA PyTorch package by installing a CUDA-enabled PyTorch wheel into the build environment:

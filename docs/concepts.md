@@ -40,7 +40,7 @@ X \approx W H
 $$
 
 !!! important "The one equation behind every analysis mode"
-    All four modes (PCA, random NNMF, seeded NNMF, fixed-H NNLS) solve a variant of `X ≈ WH`. The differences are only **what is held fixed** and **what constraint is applied**. PCA allows signed values; the three NMF/NNLS modes enforce non-negativity. Random NNMF discovers both `W` and `H`; seeded NNMF starts from user-provided seeds and refines both; fixed-H NNLS locks `H` and solves only `W`. Internalizing this matrix picture is the single most important step for getting good results.
+    All four modes (PCA, i.e. principal component analysis, the seed-free first look that sorts variation patterns by strength; random NNMF; seeded NNMF; fixed-H NNLS) solve a variant of `X ≈ WH`. The differences are only **what is held fixed** and **what constraint is applied**. PCA allows signed values; the three NMF/NNLS modes enforce non-negativity. Random NNMF discovers both `W` and `H`; seeded NNMF starts from user-provided seeds and refines both; fixed-H NNLS locks `H` and solves only `W`. Internalizing this matrix picture is the single most important step for getting good results.
 
 where:
 

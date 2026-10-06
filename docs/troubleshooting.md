@@ -171,7 +171,7 @@ Fix: open the spectral-axis widget and either:
 ## Analysis problems
 
 !!! important "Most "wrong-looking" analyses are seed problems, not solver problems"
-    Before reaching for solver settings (max iterations, tolerance, backend), check the seeds: are the ROIs in genuinely spectrally distinct regions, are the ROI-averaged spectra what you expect, and is the component count consistent with the data's actual rank? The default solver settings are correct for almost every dataset; the seed setup is where most analyses succeed or fail.
+    Before reaching for solver settings (max iterations, tolerance, backend), check the seeds: are the ROIs in genuinely spectrally distinct regions, are the ROI-averaged spectra what you expect, and is the component count consistent with what the data can actually support? (The **Diagnostics…** button next to the Components spinbox measures exactly that, see [Unmixing diagnostics](methods/unmixing_diagnostics.md).) The default solver settings are correct for almost every dataset; the seed setup is where most analyses succeed or fail.
 
 ### Analysis produces all-zero or all-identical component maps
 
@@ -185,7 +185,7 @@ Fix:
 
 - Reduce the component count.
 - Draw ROIs in visually distinct image regions.
-- Run PCA first to estimate how many meaningful variance directions exist.
+- Run PCA first to estimate how many independent patterns the data actually contains, or read the effective rank from the [unmixing diagnostics](methods/unmixing_diagnostics.md).
 
 ### NNMF is slow
 
@@ -199,7 +199,7 @@ Fix:
 
 - Apply spatial binning (2× or 4×) before analysis to reduce pixel count.
 - Reduce NNMF max iterations in the analysis settings.
-- Install `environment-pytorch.yml` for faster PyTorch-based NNMF/NNLS. See [GPU notes](installation.md#gpu-notes).
+- Install a GPU-enabled PyTorch for your hardware (CUDA, MPS, XPU, or the DirectML extra for AMD Radeon on Windows). See [GPU notes](installation.md#gpu-notes).
 
 ### PyTorch / CUDA backend not being used
 
@@ -209,6 +209,7 @@ Fix:
 
 - Check that the `environment-pytorch.yml` environment is active.
 - Run `python -c "import torch; print(torch.cuda.is_available())"`. If `False`, the CUDA-enabled PyTorch build is missing.
+- AMD Radeon on Windows: the **Backend** dropdown must read *Prefer GPU (DirectML: …)*. If it says *none detected: torch CPU*, the `torch-directml` plugin is not installed in the environment the GUI runs in — install `pip install "hs-mosaic[directml]"` into a fresh venv or run `setup_windows_directml.ps1`, and make sure `hs-mosaic.bat` reports `Using .venv-directml\Scripts\python.exe`. `python -m hs_mosaic --backend-self-test` prints `"directml_available"` and the backend actually used.
 - In the analysis panel, check the backend dropdown is set to **Prefer GPU** (the default since v0.9.4). If a v0.9.3 preset stored "Automatic", it loads correctly as "Prefer GPU" since both have always had identical behavior.
 - See the [GPU notes](installation.md#gpu-notes) for installation details.
 
@@ -222,9 +223,9 @@ Common reasons:
 
 Steps to improve:
 
-1. Run PCA first to see dominant variance directions and refine the expected component count.
+1. Run PCA first to see the dominant patterns and refine the expected component count.
 2. Move ROIs to more spectrally distinct regions.
-3. Try `nnls` as the W-seed mode if not already selected.
+3. Try `nnls` as the W-seed mode (the **W map from H** dropdown, see [Essentials §4](essentials.md)) if not already selected.
 4. After a first NNMF run, import good result components back as seeds for a second run.
 
 ### Fixed-H NNLS maps look very grainy

@@ -15,6 +15,29 @@ datas += collect_data_files("hs_mosaic", subdir="assets")
 binaries = []
 binaries += collect_dynamic_libs("torch")
 
+hiddenimports = [
+    "hs_mosaic",
+    "hs_mosaic.app",
+    "hs_mosaic.composite_image",
+    "hs_mosaic.widgets",
+    "hs_mosaic.widgets.torch_devices",
+    "hs_mosaic.widgets.torch_nmf",
+    "hs_mosaic.widgets.nnls_pytorch",
+]
+
+# Optional DirectML plugin (GPU acceleration on AMD Radeon / any DirectX-12
+# GPU on Windows). Bundled only when it is installed in the build environment,
+# i.e. when build_windows_pytorch.ps1 was run with -DirectML. DirectML.dll
+# lives inside the package, the native extension next to it in site-packages.
+try:
+    import torch_directml  # noqa: F401
+except Exception:
+    pass
+else:
+    binaries += collect_dynamic_libs("torch_directml")
+    datas += collect_data_files("torch_directml")
+    hiddenimports += ["torch_directml", "torch_directml_native"]
+
 excludes = [
     "torchvision",
     "torchaudio",
@@ -28,14 +51,7 @@ a = Analysis(
     pathex=[str(project_root)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=[
-        "hs_mosaic",
-        "hs_mosaic.app",
-        "hs_mosaic.composite_image",
-        "hs_mosaic.widgets",
-        "hs_mosaic.widgets.torch_nmf",
-        "hs_mosaic.widgets.nnls_pytorch",
-    ],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

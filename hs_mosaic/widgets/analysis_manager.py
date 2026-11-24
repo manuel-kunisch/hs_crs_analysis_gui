@@ -37,6 +37,60 @@ from hs_mosaic.widgets.unmixing_diagnostics_dialog import (
     separability_badge,
 )
 
+# Seed-free NNMF starts: key (scikit-learn init name) -> (dropdown text, tooltip).
+# Order is the dropdown order; keys must match multivariate_analyzer.SEED_FREE_INIT_METHODS.
+SEED_FREE_INIT_DESCRIPTIONS: dict[str, tuple[str, str]] = {
+    "random": (
+        "Random",
+        "Random: W and H start from non-negative random numbers (fixed random seed,\n"
+        "so repeated runs give the same result). Makes no assumption about the data;\n"
+        "a different seed can end in a different local optimum. A good default:\n"
+        "on the synthetic test data it recovered the true spectra most closely.",
+    ),
+    "nndsvd": (
+        "NNDSVD",
+        "NNDSVD (Nonnegative Double SVD): deterministic start from the leading singular\n"
+        "vectors of the data, keeping only their positive parts, so about half of the\n"
+        "entries start at exactly zero. The mu solver releases those zeros only slowly,\n"
+        "so the result stays close to its start: crisp, sparse maps on dark backgrounds.\n"
+        "Crisp is not the same as correct: on test data its spectra matched the true\n"
+        "ones less well than Random. Check spectra against references, or raise the\n"
+        "iteration limit. The cd solver releases the zeros within a few iterations.",
+    ),
+    "nndsvda": (
+        "NNDSVDa",
+        "NNDSVDa: NNDSVD with its zeros replaced by the mean of the data (scikit-learn's\n"
+        "definition). On raw intensities that mean is far larger than the SVD values,\n"
+        "so the fill swamps the start (see Preview start…): with the cd solver, or mu\n"
+        "on the CPU-only backend, the fit can stop after a few iterations at a poor\n"
+        "result; the PyTorch mu solver needs thousands of iterations to recover.\n"
+        "Meant for data scaled to about 1; not recommended on raw counts.",
+    ),
+    "nndsvdar": (
+        "NNDSVDar",
+        "NNDSVDar: NNDSVD with its zeros replaced by small random values (on the order\n"
+        "of 1/100 of the data mean, fixed random seed). On raw intensities even this\n"
+        "fill is large next to the SVD values, so the start is a strongly randomised\n"
+        "NNDSVD. How well it does depends on the intensity scale of the data.",
+    ),
+}
+
+
+PREVIEW_SEEDS_TOOLTIP = (
+    "Build the full seed set (H and the W maps, exactly as a run would)\n"
+    "and open the seed inspector window.\n\n"
+    "H seeds are already shown live in the Seed spectra plot: solid\n"
+    "curves for ROI/spectrum rows, dashed curves for components whose\n"
+    "seed is found from the resonance table's seed pixels."
+)
+PREVIEW_START_TOOLTIP = (
+    "Custom initialization is off, so NNMF starts from the selected\n"
+    "Seed-free init instead of your seeds. This opens the seed inspector\n"
+    "with that start: the W maps and H spectra the run begins from,\n"
+    "computed from the data (the same matrices the run will use).\n"
+    "A seed-free run also opens this window automatically."
+)
+
 
 def _make_tolerance_combo(
     current: float,
@@ -114,6 +168,9 @@ class AnalysisManager(QtCore.QObject):
     # signals are always declared at class levels!
     # to properly function, inheriting from QObject is required with signals and slots in PyQt.
     analysis_data_changed = QtCore.pyqtSignal(np.ndarray, np.ndarray)
+    # A seed-free run built its start (emitted from the analysis thread; queued
+    # to the GUI thread, which shows it in the seed window).
+    seed_free_start_ready = QtCore.pyqtSignal(object)
     resonance_settings_changed = QtCore.pyqtSignal(np.ndarray)
     # default raman resonances
     default_resonances = [[2850, 20], [2930, 15], [3000, 15], [3060, 15], [3120, 15], [3180, 15]]
@@ -179,6 +236,11 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_result_spectra: np.ndarray | None = None
         self._analysis_result_images: np.ndarray | None = None
         self._analysis_fit_info: dict | list[dict | None] | None = None
+        # Start H of a seed-free NNMF run: (k, bands), or (slices, k, bands)
+        # for a 4D series; shown by the result viewer's 'Show Seeds'.
+        self._analysis_start_spectra: np.ndarray | None = None
+        self._analysis_start_init: str | None = None
+        self.preview_seeds_button: QtWidgets.QToolButton | None = None
         self._last_analysis_error: str | None = None
 
         self.roi_manager.new_roi_signal.connect(self.highlight_resonance_component)
@@ -196,6 +258,14 @@ class AnalysisManager(QtCore.QObject):
         # Main widget instantiated in the init_ui method
         self.analysis_widget = None
         self.mv_analyzer = MultivariateAnalyzer(data, 3, self.wavenumbers)
+        # Seed-free runs show their start in the seed window: the analysis
+        # thread builds it once and hands it over through a queued signal.
+        # _seed_window_pending: show the next start built; _seed_window_live:
+        # the window shows this run's start (refresh it if the run corrects it).
+        self._seed_window_pending = False
+        self._seed_window_live = False
+        self.mv_analyzer.seed_free_start_callback = self._on_seed_free_start_built
+        self.seed_free_start_ready.connect(self._show_seed_free_start_window)
         self._overwrite_existing_W_from_H = True
         self._normalize_H_to_unity = False
         self.w_seed_mode_dropdown: QtWidgets.QComboBox | None = None
@@ -218,6 +288,8 @@ class AnalysisManager(QtCore.QObject):
         self._analyze_stop_icon: QtGui.QIcon | None = None
         self._nnmf_option_widgets: list[QtWidgets.QWidget] = []
         self.custom_init_check: QtWidgets.QCheckBox | None = None
+        self.seed_free_init_label: QtWidgets.QLabel | None = None
+        self.seed_free_init_dropdown: QtWidgets.QComboBox | None = None
         self.fixed_h_nnls_only_check: QtWidgets.QCheckBox | None = None
         self.fast_multislice_nnmf_check: QtWidgets.QCheckBox | None = None
         self.scale_w_to_16bit_check: QtWidgets.QCheckBox | None = None
@@ -402,9 +474,33 @@ class AnalysisManager(QtCore.QObject):
             "Use custom initialization for NNMF based on spectral and spatial seed information")
         custom_init_check.setChecked(True)
         custom_init_check.stateChanged.connect(self.mv_analyzer.set_custom_nnmf_init)
+        custom_init_check.stateChanged.connect(lambda _state: self._sync_seed_free_init_controls())
         self.mv_analyzer.set_custom_nnmf_init(custom_init_check.isChecked())
         self.custom_init_check = custom_init_check
         method_layout.addWidget(custom_init_check)
+
+        # Seed-free start (scikit-learn's NMF init names), used only when
+        # Custom initialization is off. Each entry has its own tooltip; the
+        # combo's tooltip repeats the explanation of the current choice.
+        seed_free_row = QtWidgets.QHBoxLayout()
+        seed_free_row.setContentsMargins(0, 0, 0, 0)
+        seed_free_row.setSpacing(8)
+        self.seed_free_init_label = QtWidgets.QLabel("Seed-free init:")
+        self.seed_free_init_dropdown = QtWidgets.QComboBox()
+        for init_key, (init_text, init_tip) in SEED_FREE_INIT_DESCRIPTIONS.items():
+            self.seed_free_init_dropdown.addItem(init_text, init_key)
+            self.seed_free_init_dropdown.setItemData(
+                self.seed_free_init_dropdown.count() - 1, init_tip, QtCore.Qt.ToolTipRole
+            )
+        self.seed_free_init_dropdown.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
+        self.seed_free_init_dropdown.currentIndexChanged.connect(self._on_seed_free_init_changed)
+        initial_init_index = max(0, self.seed_free_init_dropdown.findData(self.mv_analyzer.seed_free_init))
+        self.seed_free_init_dropdown.setCurrentIndex(initial_init_index)
+        self._on_seed_free_init_changed(initial_init_index)
+        seed_free_row.addWidget(self.seed_free_init_label)
+        seed_free_row.addWidget(self.seed_free_init_dropdown)
+        seed_free_row.addStretch(1)
+        method_layout.addLayout(seed_free_row)
 
         self.fixed_h_nnls_only_check = QtWidgets.QCheckBox("Fixed-H NNLS mode")
         self.fixed_h_nnls_only_check.setToolTip(
@@ -793,6 +889,8 @@ class AnalysisManager(QtCore.QObject):
             nnls_iters_label,
             self.nnls_max_iter_spinbox,
             custom_init_check,
+             self.seed_free_init_label,
+            self.seed_free_init_dropdown,
             self.fixed_h_nnls_only_check,
             self.fast_multislice_nnmf_check,
             seed_panel,
@@ -891,13 +989,11 @@ class AnalysisManager(QtCore.QObject):
         # still need a full build, behind this one button.
         test_seeds_button = _table_tool_button(
             "Preview W seeds…", 'mdi.image-multiple-outline',
-            "Build the full seed set (H and the W maps, exactly as a run would)\n"
-            "and open the seed inspector window.\n\n"
-            "H seeds are already shown live in the Seed spectra plot: solid\n"
-            "curves for ROI/spectrum rows, dashed curves for components whose\n"
-            "seed is found from the resonance table's seed pixels.",
-            slot=lambda: self.make_all_seeds_from_inputs(show_seeds=True),
+            PREVIEW_SEEDS_TOOLTIP,
+            slot=self._on_preview_seeds_clicked,
         )
+        self.preview_seeds_button = test_seeds_button
+        self._sync_seed_free_init_controls()  # button text follows Custom initialization
 
         # Background seed (rolling ball): three parameters and one action,
         # kept in a dropdown form instead of a permanent side panel
@@ -1060,11 +1156,14 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_result_spectra = None
         self._analysis_result_images = None
         self._analysis_fit_info = None
+        self._analysis_start_spectra = None
         return True
 
     def _on_analysis_thread_finished(self):
         self._analysis_running = False
         self._analysis_cancel_requested = False
+        self._seed_window_pending = False
+        self._seed_window_live = False
         self._set_analyze_button_idle_state()
         # The fitted H is now the more relevant thing to judge than the seeds.
         self.update_diagnostics_badges()
@@ -1076,6 +1175,7 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_result_spectra = None
         self._analysis_result_images = None
         self._analysis_fit_info = None
+        self._analysis_start_spectra = None
         logger.error("Analysis failed:\n%s", error_text)
         if self.analysis_widget is not None:
             # the last traceback line is the exception message itself
@@ -1105,6 +1205,9 @@ class AnalysisManager(QtCore.QObject):
         self._analysis_result_spectra = None
         self._analysis_result_images = None
         self._analysis_fit_info = None
+        self._analysis_start_spectra = None
+        self._seed_window_pending = False
+        self._seed_window_live = False
         self._last_analysis_error = None
         if self._analysis_series_4d is not None:
             self._begin_analysis_progress(int(self._analysis_series_4d.shape[0]))
@@ -1152,6 +1255,12 @@ class AnalysisManager(QtCore.QObject):
                     self.make_all_seeds_from_inputs(show_seeds=True)
                 else:
                     self.make_all_seeds_from_inputs(show_seeds=True)
+            else:
+                # Seed-free NNMF: the analysis thread builds the start and shows it
+                # in the seed window as soon as it exists (_on_seed_free_start_built),
+                # as a seeded run shows its seeds. Nothing heavy runs here.
+                self._seed_window_pending = True
+                self._seed_window_live = False
         if self._analysis_series_4d is not None:
             self._begin_analysis_progress(int(self._analysis_series_4d.shape[0]))
         self._analysis_running = True
@@ -1206,10 +1315,12 @@ class AnalysisManager(QtCore.QObject):
             self._analysis_result_spectra = self.mv_analyzer.PCs[:n_components]
             self._analysis_result_images = self.mv_analyzer.pca_2DX[:n_components]
             self._analysis_fit_info = None
+            self._analysis_start_spectra = None
         else:
             self._analysis_result_spectra = self.mv_analyzer.fixed_H
             self._analysis_result_images = self.mv_analyzer.fixed_W_2D
             self._analysis_fit_info = None if self.mv_analyzer.last_nnmf_info is None else dict(self.mv_analyzer.last_nnmf_info)
+            self._analysis_start_spectra, self._analysis_start_init = self._last_seed_free_start_H()
 
     def _run_multislice_analysis(self, *, store_reference_result: bool = False):
         series = self._analysis_series_4d
@@ -1224,6 +1335,10 @@ class AnalysisManager(QtCore.QObject):
         wavenumbers = None if self.wavenumbers is None else np.array(self.wavenumbers, copy=True)
         spectral_info = self.mv_analyzer.spectral_info
         custom_init = bool(self.mv_analyzer.custom_nnmf_init)
+        # passed to every seedFreeNNMF call: the whole series uses the init chosen
+        # when the run started, without writing it back into the analyzer (so the
+        # analyzer keeps following the dropdown during the run)
+        seed_free_init = self.mv_analyzer.seed_free_init
         solver = self.mv_analyzer.nnmf_solver
         backend_preference = self.mv_analyzer.nnmf_backend_preference
         w_seed_mode = self.mv_analyzer.w_seed_mode
@@ -1243,6 +1358,9 @@ class AnalysisManager(QtCore.QObject):
         reference_result = None
         fit_info_per_slice: list[dict | None] | None = [] if analysis_method != "PCA" else None
         reference_fit_info = None
+        # seed-free runs: the start H of every NNMF slice (or of the reference slice in fast mode)
+        start_spectra_per_slice: list[np.ndarray | None] = []
+        reference_start_H = None
 
         try:
             if fast_mode:
@@ -1283,7 +1401,10 @@ class AnalysisManager(QtCore.QObject):
                     self.mv_analyzer._W_prepared = self.mv_analyzer._all_columns_seeded(self.mv_analyzer.seed_W)
                     self.mv_analyzer.NNMF(skip_seed_fining=True)
                 else:
-                    self.mv_analyzer.randomNNMF()
+                    # the reference slice is the displayed one: show its start
+                    self._seed_window_pending, self._seed_window_live = True, False
+                    self.mv_analyzer.seedFreeNNMF(init=seed_free_init)
+                    reference_start_H, _ = self._last_seed_free_start_H()
 
                 if self._cancel_analysis_if_requested(f"reference {self._analysis_series_label.lower()}"):
                     return
@@ -1411,7 +1532,11 @@ class AnalysisManager(QtCore.QObject):
                     self.mv_analyzer._W_prepared = self.mv_analyzer._all_columns_seeded(self.mv_analyzer.seed_W)
                     self.mv_analyzer.NNMF(skip_seed_fining=True)
                 else:
-                    self.mv_analyzer.randomNNMF()
+                    # show the start of the displayed slice only
+                    self._seed_window_pending = slice_index == reference_slice_index
+                    self._seed_window_live = False
+                    self.mv_analyzer.seedFreeNNMF(init=seed_free_init)
+                    start_spectra_per_slice.append(self._last_seed_free_start_H()[0])
 
                 if self._cancel_analysis_if_requested(
                         f"{self._analysis_series_label.lower()} {slice_index + 1}/{series.shape[0]} NNMF"
@@ -1428,6 +1553,14 @@ class AnalysisManager(QtCore.QObject):
             self._analysis_result_spectra = np.stack(spectra_per_slice, axis=0)
             self._analysis_result_images = np.stack(images_per_slice, axis=0)
             self._analysis_fit_info = fit_info_per_slice
+            if analysis_method != "PCA" and not custom_init and not fixed_h_multislice_mode:
+                self._analysis_start_init = seed_free_init
+                if fast_mode:
+                    # every slice is reconstructed from the reference slice's fit
+                    self._analysis_start_spectra = reference_start_H
+                elif (len(start_spectra_per_slice) == len(spectra_per_slice)
+                      and all(h is not None for h in start_spectra_per_slice)):
+                    self._analysis_start_spectra = np.stack(start_spectra_per_slice, axis=0)
             self.worker.progress.emit(100)
         finally:
             if display_data is not None:
@@ -2132,7 +2265,15 @@ class AnalysisManager(QtCore.QObject):
             except Exception:
                 logger.debug("Failed to refresh seed window colors.", exc_info=True)
 
-    def show_seed_window(self, seed_W_3d, seed_H, seed_pixels):
+    def show_seed_window(self, seed_W_3d, seed_H, seed_pixels,
+                         title: str = "Seed Visualization", label_getter=None):
+        """Open (or refresh) the seed inspector with W maps (y, x, k) and H spectra (k, bands).
+
+        ``label_getter`` names the components (default: the ROI manager's
+        component labels); a seed-free start passes neutral names because its
+        components are not tied to the user's ROIs yet.
+        """
+        label_getter = label_getter or self.roi_manager.get_component_label
         if self.seed_window is None:
             self.seed_window = SeedWidget(
                 seed_W_3d,
@@ -2140,15 +2281,18 @@ class AnalysisManager(QtCore.QObject):
                 self.wavenumbers,
                 seed_pixels,
                 color_getter=self.roi_manager.get_color_rgba,
-                label_getter=self.roi_manager.get_component_label,
+                label_getter=label_getter,
                 diagnostics_callback=lambda: self.open_diagnostics(
                     UnmixingDiagnosticsDialog.SEPARABILITY_TAB
                 ),
             )
             self.seed_window.set_spectral_units(self.spectral_units)
+            self.seed_window.setWindowTitle(title)
             logger.info("Created new seed window")
         else:
             # reuse existing window
+            self.seed_window.get_label = label_getter
+            self.seed_window.setWindowTitle(title)
             self.seed_window.set_data(
                 seed_W_3d=seed_W_3d,
                 seed_H=seed_H,
@@ -2160,6 +2304,127 @@ class AnalysisManager(QtCore.QObject):
             self.seed_window.activateWindow()
             self.seed_window.set_spectral_units(self.spectral_units)
         logger.info("Updated existing seed window")
+
+    def _on_preview_seeds_clicked(self):
+        """Seed inspector: the seed-free start for NNMF without Custom initialization, else the user's seeds."""
+        custom = self.custom_init_check is None or self.custom_init_check.isChecked()
+        if self.nnmf_radio.isChecked() and not custom:
+            self.preview_seed_free_start()
+        else:
+            self.make_all_seeds_from_inputs(show_seeds=True)
+
+    @staticmethod
+    def _seed_free_start_title(init: str, random_backend: str | None) -> str:
+        init_text = SEED_FREE_INIT_DESCRIPTIONS.get(init, (init, ""))[0]
+        origin_text = {
+            "torch": " (PyTorch MU random numbers, fixed seed)",
+            "sklearn": " (scikit-learn random numbers scaled to the data, fixed seed)",
+        }.get(random_backend, ", computed from the data by SVD")
+        return f"Seed-free start: {init_text}{origin_text}. Not your ROI seeds"
+
+    def _show_start_in_seed_window(self, w_3d: np.ndarray, h: np.ndarray, init: str,
+                                   random_backend: str | None):
+        self.show_seed_window(
+            w_3d, h, None,
+            title=self._seed_free_start_title(init, random_backend),
+            label_getter=lambda i: f"Start {i}",
+        )
+
+    def _on_seed_free_start_built(self, record: dict):
+        """Analyzer hook, called from the analysis thread when a seed-free run built its start.
+
+        Forwards copies to the GUI thread (queued signal) when the seed window
+        should show this start: the first start of a run (the displayed slice
+        for 4D), or a correction of the start already shown (torch fallback).
+        """
+        if not (self._seed_window_pending or self._seed_window_live):
+            return
+        raw = self.mv_analyzer.raw_data_3d
+        if raw is None or raw.ndim != 3:
+            return
+        self._seed_window_pending = False
+        self._seed_window_live = True
+        payload = {
+            "W": np.array(record["W"], dtype=np.float32).reshape(raw.shape[1], raw.shape[2], -1),
+            "H": np.array(record["H"], dtype=np.float32),
+            "init": record["init"],
+            "random_backend": record.get("random_backend"),
+        }
+        self.seed_free_start_ready.emit(payload)
+
+    def _show_seed_free_start_window(self, payload: dict):
+        self._show_start_in_seed_window(payload["W"], payload["H"], payload["init"], payload["random_backend"])
+
+    def preview_seed_free_start(self) -> bool:
+        """Show the seed-free NNMF start (W maps + H spectra) in the seed window.
+
+        Builds the start for the current data and settings. It is cached in the
+        analyzer, so a following 3D NNDSVD run reuses it (a 4D run reloads each
+        slice and builds its own); a random run draws the identical start. Returns False, after telling the user, when an
+        analysis is running, no data is loaded, or the start cannot be built
+        (e.g. an NNDSVD init with more components than spectral channels).
+        """
+        if self._analysis_running or self.thread_analysis.isRunning():
+            QtWidgets.QMessageBox.information(
+                self.analysis_widget, "Analysis running",
+                "Wait for the running analysis to finish before previewing a start.\n"
+                "A seed-free run shows its own start in the seed window.",
+            )
+            return False
+        analyzer = self.mv_analyzer
+        if analyzer.data_2d is None or analyzer.raw_data_3d is None:
+            QtWidgets.QMessageBox.information(
+                self.analysis_widget, "No data", "Load an image before previewing the NNMF start."
+            )
+            return False
+        init = analyzer.seed_free_init
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            w0, h0 = analyzer.build_seed_free_start(init)
+            start_info = analyzer.get_seed_free_start() or {}
+        except Exception as exc:  # ValueError for too many components, MemoryError on huge data
+            logger.warning("Could not build the seed-free start: %s", exc, exc_info=not isinstance(exc, ValueError))
+            QtWidgets.QApplication.restoreOverrideCursor()
+            QtWidgets.QMessageBox.warning(self.analysis_widget, "Seed-free start not possible", str(exc) or type(exc).__name__)
+            return False
+        QtWidgets.QApplication.restoreOverrideCursor()
+        n_rows, n_cols = analyzer.raw_data_3d.shape[1], analyzer.raw_data_3d.shape[2]
+        # copies: the window keeps its arrays, the cached start must stay untouched
+        self._show_start_in_seed_window(
+            np.array(w0, dtype=np.float32).reshape(n_rows, n_cols, -1),
+            np.array(h0, dtype=np.float32),
+            init,
+            start_info.get("random_backend"),
+        )
+        return True
+
+    def _last_seed_free_start_H(self) -> tuple[np.ndarray | None, str | None]:
+        """(copy of H, init) of the start the analyzer's last seed-free run used, or (None, None).
+
+        Read from the run's own record, not from the live dropdown or the
+        preview cache, so changes made while the run was in progress cannot
+        mislabel or replace it.
+        """
+        record = self.mv_analyzer.last_seed_free_start
+        if record is None:
+            return None, None
+        return np.array(record["H"], copy=True), record["init"]
+
+    def get_analysis_seed_spectra(self) -> tuple[np.ndarray | None, str]:
+        """Spectra the result viewer overlays with 'Show Seeds', and their legend name.
+
+        Seed-free NNMF: the start H of the run ("Start (NNDSVDa) i").
+        Seeded NNMF: the user's H seeds. PCA: nothing.
+        """
+        if self.pca_radio.isChecked():
+            return None, "Seed"
+        if self._analysis_start_spectra is not None:
+            init = self._analysis_start_init or self.mv_analyzer.seed_free_init
+            init_text = SEED_FREE_INIT_DESCRIPTIONS.get(init, (init, ""))[0]
+            return self._analysis_start_spectra, f"Start ({init_text})"
+        if self.mv_analyzer.custom_nnmf_init:
+            return self.mv_analyzer.seed_H, "Seed"
+        return None, "Seed"
 
     def _reload_seeds_from_rois(self):
         """
@@ -2415,6 +2680,59 @@ class AnalysisManager(QtCore.QObject):
                 widget.setEnabled(use_nnmf)
         self._sync_fixed_h_mode_seed_requirements()
         self._sync_nnmf_backend_controls()
+        self._sync_seed_free_init_controls()
+
+    def _on_seed_free_init_changed(self, index: int):
+        if self.seed_free_init_dropdown is None or index < 0:
+            return
+        init = self.seed_free_init_dropdown.itemData(index)
+        self.mv_analyzer.set_seed_free_init(init)
+        self._sync_seed_free_init_controls()
+
+    def set_seed_free_init(self, init: str):
+        """Select a seed-free init in the dropdown (and the analyzer); unknown values fall back to random."""
+        init = str(init or "random").strip().lower()
+        if init not in SEED_FREE_INIT_DESCRIPTIONS:
+            logger.warning("Unknown seed-free NNMF init '%s'; using random.", init)
+            init = "random"
+        if self.seed_free_init_dropdown is None:
+            self.mv_analyzer.set_seed_free_init(init)
+            return
+        index = self.seed_free_init_dropdown.findData(init)
+        if index == self.seed_free_init_dropdown.currentIndex():
+            self._on_seed_free_init_changed(index)
+        else:
+            self.seed_free_init_dropdown.setCurrentIndex(index)
+
+    def _sync_seed_free_init_controls(self):
+        """The seed-free init only applies to NNMF with Custom initialization off."""
+        if self.seed_free_init_dropdown is None:
+            return
+        custom = bool(self.custom_init_check is not None and self.custom_init_check.isChecked())
+        active = bool(self.nnmf_radio.isChecked()) and not custom
+        self.seed_free_init_dropdown.setEnabled(active)
+        if self.seed_free_init_label is not None:
+            self.seed_free_init_label.setEnabled(active)
+        current = self.seed_free_init_dropdown.currentData()
+        current_text, current_tip = SEED_FREE_INIT_DESCRIPTIONS.get(current, SEED_FREE_INIT_DESCRIPTIONS["random"])
+        status = (
+            "Inactive: Custom initialization is on, so your seeds define the start."
+            if custom else
+            "Active: used because Custom initialization is off."
+        )
+        tooltip = (
+            "Starting point for NNMF when Custom initialization is off (no seeds are used).\n"
+            "Hover the entries in the list for details on each option.\n"
+            f"{status}\n\n"
+            f"Current: {current_text}\n{current_tip}"
+        )
+        self.seed_free_init_dropdown.setToolTip(tooltip)
+        if self.seed_free_init_label is not None:
+            self.seed_free_init_label.setToolTip(tooltip)
+        if self.preview_seeds_button is not None:
+            seed_free_nnmf = bool(self.nnmf_radio.isChecked()) and not custom
+            self.preview_seeds_button.setText("Preview start…" if seed_free_nnmf else "Preview W seeds…")
+            self.preview_seeds_button.setToolTip(PREVIEW_START_TOOLTIP if seed_free_nnmf else PREVIEW_SEEDS_TOOLTIP)
 
     def _sync_nnmf_backend_controls(self):
         """Enable or disable the NNMF backend selector and Performance-column
@@ -4160,7 +4478,15 @@ class SeedWidget(QtWidgets.QWidget):
             return
         if not file_path.endswith('.tif'):
             file_path += '.tif'
-        tifffile.imwrite(file_path, np.moveaxis(self.seed_W_3d, -1, 0).astype(np.uint16))
+        w_stack = np.moveaxis(np.asarray(self.seed_W_3d), -1, 0)
+        # uint16 only when that is lossless; float maps (unity-scaled seeds, a
+        # random [0, 1) or SVD start) would otherwise truncate to zeros.
+        fits_uint16 = (
+            w_stack.size == 0
+            or (np.all(np.isfinite(w_stack)) and float(np.min(w_stack)) >= 0.0
+                and float(np.max(w_stack)) <= 65535.0 and np.array_equal(w_stack, np.round(w_stack)))
+        )
+        tifffile.imwrite(file_path, w_stack.astype(np.uint16 if fits_uint16 else np.float32))
         csv_path = file_path.replace('.tif', '.csv')
         csv_path.replace('W_seeds', 'H_seeds')
         H = np.vstack((self.wavenumbers, self.seed_H)).T
@@ -4430,7 +4756,7 @@ if __name__ == '__main__':
     # analyzer.PCA()
     # analyzer.plot_PCA_mpl()
 
-    # analyzer.randomNNMF()
+    # analyzer.seedFreeNNMF()
     # analyzer.plot_nnmf_mpl()
 
     analyzer.set_H_seed(0, np.zeros(50))

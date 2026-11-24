@@ -29,7 +29,7 @@ The GUI exposes `PCA` and `NNMF` as the main method buttons. The practical NNMF 
 | Practical mode | GUI settings | Required input |
 |---|---|---|
 | PCA | Select **PCA**, then **Run Analysis**. | Loaded image only. |
-| Random NNMF | Select **NNMF**, disable **Custom initialization**, leave **Fixed-H NNLS mode** disabled, then **Run Analysis**. | Loaded image and component count. |
+| Random NNMF | Select **NNMF**, disable **Custom initialization**, pick a **Seed-free init** (Random, NNDSVD, NNDSVDa, NNDSVDar), leave **Fixed-H NNLS mode** disabled, then **Run Analysis**. | Loaded image and component count. |
 | Seeded NNMF | Select **NNMF**, enable **Custom initialization**, leave **Fixed-H NNLS mode** disabled, then **Run Analysis**. | At least useful H and/or W seeds from ROIs, spectra, Gaussian models, or imported results. |
 | Fixed-H NNLS | Select **NNMF**, enable **Custom initialization** and **Fixed-H NNLS mode**, then **Run Analysis**. | A valid final H basis. Missing components can be residual-filled, but should be previewed carefully. |
 | 4D hybrid NNMF/NNLS | For 4D data, select **NNMF**, enable **Custom initialization**, enable **4D: NNMF ref slice, NNLS others**, then **Run Analysis**. | Seeds for the reference slice; the fitted H is reused across other slices. |
@@ -56,6 +56,10 @@ The maximum reliable component count can be estimated as well: the **Diagnostics
 Random NNMF applies the same additive non-negative model as seeded NNMF, but starts from random initialization instead of user seeds. Both spectra and maps are discovered entirely from the data.
 
 The non-negativity constraint makes the result physically easier to interpret than PCA — components are additive contributions rather than signed variance directions. The downside is that results can depend on initialization, especially in low-SNR data.
+
+The **Seed-free init** dropdown (active only while **Custom initialization** is off) chooses how this unguided start is built. **Random** is the default and a good first choice. The three SVD-based starts (**NNDSVD**, **NNDSVDa**, **NNDSVDar**) are built from the leading singular vectors of the data. **NNDSVD** gives crisp, sparse maps, but check its spectra against references: crisp is not the same as correct. Avoid **NNDSVDa** on raw intensity data, where its fill value swamps the start. Hover each entry for a short explanation, or see [NNMF and NNLS modes](../methods/nnmf_nnls_modes.md#seed-free-starts).
+
+To see what a start looks like before running, click **Preview start…** (the **Preview W seeds…** button while **Custom initialization** is off): the seed inspector opens with the start's W maps and H spectra, labelled *Start 0, Start 1, …*. A seed-free run opens the same window automatically when it starts, and in the result viewer **Show Seeds** overlays the start spectra as dashed curves next to the fitted ones. Comparing starts this way explains why NNDSVD results often look the cleanest: on well-separated data the NNDSVD start already resembles beads and peaks, and with the `mu` solver the result stays close to it, while the random start is noise.
 
 **When to use:** when no seed spectra are available yet, to get a first non-negative decomposition, or to generate candidate components that can later be imported back as seeds for a more guided run.
 

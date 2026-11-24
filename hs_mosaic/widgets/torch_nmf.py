@@ -75,6 +75,23 @@ def _validate_nmf_inputs(
     return x, n_components, w_init, h_init
 
 
+def random_nmf_init(
+        n_samples: int,
+        n_features: int,
+        n_components: int,
+        seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The random (W, H) start the MU solver uses when no init is given.
+
+    Uniform [0, 1) entries from ``default_rng(seed)`` for W and
+    ``default_rng(seed + 1)`` for H. Exposed so callers can show or reuse the
+    exact start a seed-free run begins from.
+    """
+    w = np.random.default_rng(seed).random((int(n_samples), int(n_components)), dtype=np.float32)
+    h = np.random.default_rng(seed + 1).random((int(n_components), int(n_features)), dtype=np.float32)
+    return w, h
+
+
 def reconstruction_error(data: np.ndarray, w: np.ndarray, h: np.ndarray) -> float:
     residual = np.asarray(data, dtype=np.float32) - np.asarray(w, dtype=np.float32) @ np.asarray(h, dtype=np.float32)
     return float(np.linalg.norm(residual, ord="fro"))
@@ -166,15 +183,10 @@ def solve_nmf_multiplicative_updates(
     x = torch.as_tensor(x_np, device=dev)
     n_samples, n_features = x.shape
 
-    if w_init is None:
-        w_np = np.random.default_rng(seed).random((n_samples, n_components), dtype=np.float32)
-    else:
-        w_np = _as_nonnegative_float32(w_init)
-
-    if h_init is None:
-        h_np = np.random.default_rng(seed + 1).random((n_components, n_features), dtype=np.float32)
-    else:
-        h_np = _as_nonnegative_float32(h_init)
+    if w_init is None or h_init is None:
+        w_random, h_random = random_nmf_init(n_samples, n_features, n_components, seed=seed)
+    w_np = w_random if w_init is None else _as_nonnegative_float32(w_init)
+    h_np = h_random if h_init is None else _as_nonnegative_float32(h_init)
 
     w = torch.as_tensor(w_np, device=dev)
     h = torch.as_tensor(h_np, device=dev)

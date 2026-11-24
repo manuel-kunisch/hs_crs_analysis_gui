@@ -21,6 +21,82 @@ d_type = '16bit'
 
 logger = logging.getLogger(__name__)
 
+# Seed-free NNMF initializations, named as scikit-learn's ``NMF(init=...)``.
+# 'custom' (the user's seeds) is controlled separately by ``custom_nnmf_init``.
+SEED_FREE_INIT_METHODS: tuple[str, ...] = ('random', 'nndsvd', 'nndsvda', 'nndsvdar')
+SVD_INIT_METHODS: frozenset[str] = frozenset({'nndsvd', 'nndsvda', 'nndsvdar'})
+
+
+def _sanitize_nmf_input(data: np.ndarray) -> np.ndarray:
+    """float32, finite, >= 0: the same sanitizing the torch solver applies.
+
+    Clean data (the usual case) is returned without the two full-size copies
+    the repair needs.
+    """
+    x = np.asarray(data, dtype=np.float32)
+    if x.size == 0 or (np.isfinite(x).all() and float(x.min()) >= 0.0):
+        return x
+    return np.maximum(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), 0.0)
+
+
+def compute_random_nmf_init(
+        data: np.ndarray,
+        n_components: int,
+        backend: str,
+        random_state: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The random (W, H) start each NNMF backend uses on its own.
+
+    ``backend='torch'``: uniform [0, 1) from ``torch_nmf.random_nmf_init``.
+    ``backend='sklearn'``: ``abs(normal) * sqrt(mean(X) / k)`` from
+    scikit-learn's ``_initialize_nmf(init='random')``. Passing either start
+    back to its backend as a custom init reproduces the backend's own random
+    run, so seed-free random results are unchanged by making the start explicit.
+    """
+    x = np.asarray(data)
+    n_components = int(n_components)
+    if backend == 'torch':
+        return torch_nmf.random_nmf_init(x.shape[0], x.shape[1], n_components, seed=random_state)
+    if backend != 'sklearn':
+        raise ValueError(f"Unknown NNMF backend '{backend}' for a random start. Expected 'torch' or 'sklearn'.")
+    from sklearn.decomposition._nmf import _initialize_nmf
+
+    w, h = _initialize_nmf(_sanitize_nmf_input(x), n_components, init='random', random_state=random_state)
+    return np.asarray(w, dtype=np.float32), np.asarray(h, dtype=np.float32)
+
+
+def compute_svd_nmf_init(
+        data: np.ndarray,
+        n_components: int,
+        init: str,
+        random_state: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build an NNDSVD-family start (W, H) for ``data ≈ W @ H``.
+
+    Wraps scikit-learn's ``_initialize_nmf`` so the start is exactly what
+    ``NMF(init='nndsvd' | 'nndsvda' | 'nndsvdar')`` would use. The init is
+    computed once here and handed to the solver as a custom init, so the
+    PyTorch MU path and the scikit-learn path start from the same matrices.
+    ``_initialize_nmf`` is private but its signature has been stable across
+    every supported scikit-learn release (1.2 through 1.9).
+    """
+    from sklearn.decomposition._nmf import _initialize_nmf
+
+    init = str(init).strip().lower()
+    if init not in SVD_INIT_METHODS:
+        raise ValueError(f"Unsupported SVD init '{init}'. Expected one of {sorted(SVD_INIT_METHODS)}.")
+    x = _sanitize_nmf_input(data)
+    n_components = int(n_components)
+    max_rank = min(x.shape)
+    if n_components > max_rank:
+        raise ValueError(
+            f"{init.upper()} initialization needs at most {max_rank} components for this data "
+            f"(limited by {x.shape[1]} spectral channels), but {n_components} were requested. "
+            "Reduce the component count or use Random initialization."
+        )
+    w, h = _initialize_nmf(x, n_components, init=init, random_state=random_state)
+    return np.asarray(w, dtype=np.float32), np.asarray(h, dtype=np.float32)
+
 
 @dataclass(frozen=True)
 class HSeedScaleState:
@@ -36,6 +112,19 @@ class MultivariateAnalyzer(object):
         self.avg_W_seed = False
         self.w_seed_mode = 'nnls'
         self.custom_nnmf_init:bool = False
+        # Start used when custom_nnmf_init is False: one of SEED_FREE_INIT_METHODS.
+        self.seed_free_init: str = 'random'
+        # Last seed-free start (W0, H0), cached so the seed window and the run
+        # share one computation; see build_seed_free_start().
+        self._seed_free_start: dict | None = None
+        # The start the last seedFreeNNMF run actually used ({'init',
+        # 'random_backend', 'W', 'H'}); set by the run itself, so GUI changes
+        # made while a run is in progress cannot alter it.
+        self.last_seed_free_start: dict | None = None
+        # Optional hook, called with that record as soon as a seed-free run has
+        # built its start (from the analysis thread); the GUI uses it to show
+        # the start in the seed window without computing it a second time.
+        self.seed_free_start_callback: Callable[[dict], None] | None = None
         self.spectral_info = None
         self.spectral_units = "cm⁻¹"
         self.wavenumbers = None
@@ -249,6 +338,8 @@ class MultivariateAnalyzer(object):
         self.H_weighted_W_seed = False
         self.w_seed_mode = 'nnls'
         self._clear_nnls_abundance_cache()
+        self._seed_free_start = None
+        self.last_seed_free_start = None
         self.last_nnmf_info = None
         self.wavenumbers = wavenumbers
         if self.raw_data_3d is not None:
@@ -287,6 +378,7 @@ class MultivariateAnalyzer(object):
     def update_components(self, n_components):
         self._n_components = n_components
         self._clear_nnls_abundance_cache()
+        self._seed_free_start = None
         if self.seed_H is not None:
             if self.seed_H.shape[0] < n_components:
                 # Add rows of ones to the seed matrix
@@ -300,6 +392,16 @@ class MultivariateAnalyzer(object):
 
     def set_custom_nnmf_init(self, state):
         self.custom_nnmf_init = state
+
+    def set_seed_free_init(self, init: str):
+        """Choose the NNMF start used when custom (seeded) init is off."""
+        init = (init or 'random').strip().lower()
+        if init not in SEED_FREE_INIT_METHODS:
+            raise ValueError(
+                f"Unsupported seed-free NNMF init '{init}'. Expected one of {SEED_FREE_INIT_METHODS}."
+            )
+        self.seed_free_init = init
+        logger.info("Seed-free NNMF init updated to %s", self.seed_free_init)
 
     def set_nnmf_solver(self, solver: str):
         solver = (solver or 'mu').strip().lower()
@@ -1193,7 +1295,7 @@ class MultivariateAnalyzer(object):
             if self.custom_nnmf_init:
                 self.NNMF(skip_seed_fining=True)
             else:
-                self.randomNNMF()
+                self.seedFreeNNMF()
 
     def PCA(self):
         pca = PCA()
@@ -1228,15 +1330,113 @@ class MultivariateAnalyzer(object):
         logger.info(f"PCA: reshaped data has shape {self.pca_2DX.shape}")
         self.pca_ready = True
 
-    def randomNNMF(self) -> None:
-        logger.info(f'{self.data_2d.shape =}')
+    def _seed_free_random_backend(self) -> str:
+        """Which backend's random start a seed-free random run uses: the one that will fit it."""
+        if self.nnmf_solver == 'mu' and self._resolve_torch_nmf_device() is not None:
+            return 'torch'
+        return 'sklearn'
+
+    def build_seed_free_start(self, init: str | None = None,
+                              random_backend: str | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """The (W0, H0) start a seed-free NNMF run begins from, for the current data and settings.
+
+        W0 is (pixels, k), H0 is (k, bands). The result is cached (keyed on the
+        init, the random backend, k and the data), so the seed window shown
+        before a run and the run itself use the very same matrices without
+        computing the SVD twice. Treat the returned arrays as read-only.
+        Raises ValueError for an NNDSVD init with more components than channels.
+        """
+        if self.data_2d is None:
+            raise RuntimeError("No data loaded; cannot build a seed-free NNMF start.")
+        init = (init or self.seed_free_init or 'random').strip().lower()
+        if init not in SEED_FREE_INIT_METHODS:
+            raise ValueError(f"Unsupported seed-free NNMF init '{init}'. Expected one of {SEED_FREE_INIT_METHODS}.")
+        if init in SVD_INIT_METHODS:
+            random_backend = None
+        elif random_backend is None:
+            random_backend = self._seed_free_random_backend()
+        key = (init, random_backend, int(self._n_components), tuple(self.data_2d.shape), id(self.data_2d))
+        cached = self._seed_free_start
+        if cached is not None and cached["key"] == key:
+            return cached["W"], cached["H"]
+        if init in SVD_INIT_METHODS:
+            w0, h0 = compute_svd_nmf_init(self.data_2d, self._n_components, init, random_state=0)
+        else:
+            w0, h0 = compute_random_nmf_init(self.data_2d, self._n_components, random_backend, random_state=0)
+        self._seed_free_start = {"key": key, "init": init, "random_backend": random_backend, "W": w0, "H": h0}
+        logger.info("Built seed-free NNMF start: init=%s%s, W0=%s, H0=%s", init,
+                    f" ({random_backend} random)" if random_backend else "", w0.shape, h0.shape)
+        return w0, h0
+
+    def get_seed_free_start(self) -> dict | None:
+        """The last built seed-free start: {'init', 'random_backend', 'W', 'H'}, or None."""
+        cached = self._seed_free_start
+        if cached is None:
+            return None
+        return {name: cached[name] for name in ("init", "random_backend", "W", "H")}
+
+    def _publish_seed_free_start(self, init: str, random_backend: str | None,
+                                 w0: np.ndarray, h0: np.ndarray) -> None:
+        self.last_seed_free_start = {"init": init, "random_backend": random_backend, "W": w0, "H": h0}
+        callback = self.seed_free_start_callback
+        if callback is None:
+            return
+        try:
+            callback(self.last_seed_free_start)
+        except Exception:
+            logger.debug("Seed-free start callback failed.", exc_info=True)
+
+    def seedFreeNNMF(self, init: str | None = None) -> None:
+        """NNMF without user seeds, started from ``init`` (default: ``self.seed_free_init``).
+
+        Callers on the analysis thread pass the init they captured at the start
+        of the run, so a GUI change of ``seed_free_init`` during the run cannot
+        reach a fit halfway through a series.
+
+        'random' runs exactly as before: the backend draws its own random start
+        (``init='random'``), including the scikit-learn fallback when the torch
+        solver fails. The start is rebuilt only to show it (same generator,
+        same seed). The NNDSVD variants are computed once (cached, see
+        build_seed_free_start) and passed to the solver as a custom init, so
+        both backends start from the same matrices.
+        """
+        init = (init or self.seed_free_init or 'random').strip().lower()
+        if init not in SEED_FREE_INIT_METHODS:
+            init = 'random'
+        logger.info(f'{self.data_2d.shape =}, seed-free init={init}')
         self.clear_H_seed_scale_reference()
-        self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(self.data_2d, init='random')
+        self.last_seed_free_start = None
+        if init == 'nndsvd' and self.nnmf_solver == 'mu':
+            logger.warning(
+                "NNDSVD init with the multiplicative-update solver: the exact zeros of the "
+                "NNDSVD start are only lifted to eps and are released slowly by MU, so the "
+                "result stays sparse and close to its start; raise the iteration limit or "
+                "use the cd solver for a less start-bound fit."
+            )
+        if init == 'random':
+            predicted_backend = self._seed_free_random_backend()
+            w0, h0 = self.build_seed_free_start(init, random_backend=predicted_backend)
+            self._publish_seed_free_start(init, predicted_backend, w0, h0)
+            self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(self.data_2d, init='random')
+            used_backend = 'sklearn' if fit_info.get("backend") == "sklearn" else 'torch'
+            if used_backend != predicted_backend:
+                # the torch solver failed and scikit-learn drew its own start
+                w0, h0 = self.build_seed_free_start(init, random_backend=used_backend)
+                self._publish_seed_free_start(init, used_backend, w0, h0)
+        else:
+            w_init, h_init = self.build_seed_free_start(init)
+            self._publish_seed_free_start(init, None, w_init, h_init)
+            # Copies: scikit-learn's CD solver updates a custom W in place, and the
+            # cached start must stay the start (the seed window shows it).
+            self.fixed_W, self.fixed_H, fit_info = self._fit_nmf_backend(
+                self.data_2d, init='custom', w_init=w_init.copy(), h_init=h_init.copy(),
+            )
         self.last_nnmf_info = dict(fit_info)
-        self.last_nnmf_info["mode"] = "random_nnmf"
+        self.last_nnmf_info["mode"] = f"{init}_nnmf"
+        self.last_nnmf_info["init"] = init
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
-        logger.info("Random NNMF outcome:")
+        logger.info("Seed-free NNMF (%s init) outcome:", init)
         logger.info("Backend: %s", fit_info.get("backend"))
         logger.info("#Iter: %s", fit_info.get("n_iter"))
         if fit_info.get("backend") == "sklearn":
@@ -1934,8 +2134,10 @@ class MultivariateAnalyzer(object):
             w_init=self.seed_W.astype(np.float32),
             h_init=self.seed_H.astype(np.float32),
         )
+        self.last_seed_free_start = None
         self.last_nnmf_info = self._annotate_H_seed_scale_info(fit_info)
         self.last_nnmf_info["mode"] = "seeded_nnmf"
+        self.last_nnmf_info["init"] = "custom"
         self.fixed_W_2D = self.reshape_2d_3d_mv_data(self.fixed_W)
 
         logger.info("Custom NNMF outcome: backend=%s, #Iter=%s", fit_info.get("backend"), fit_info.get("n_iter"))

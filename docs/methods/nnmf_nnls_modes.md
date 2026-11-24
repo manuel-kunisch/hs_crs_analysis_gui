@@ -146,6 +146,21 @@ The result is exploratory:
 
 The quantity NNMF minimizes is the Frobenius cost, which is simply the summed squared mismatch between the data and the reconstruction `W H` over all pixels and channels. This optimization is non-convex jointly in `W` and `H` [5, 6]: the cost surface has many valleys rather than one, so the solver is only guaranteed to land in *some* valley (a local minimum), not the best one. This is why initialization (seeded NNMF below) matters in practice.
 
+### Seed-free starts
+
+With **Custom initialization** off, the **Seed-free init** dropdown picks the starting matrices. The names follow `sklearn.decomposition.NMF(init=...)`:
+
+| Option | Start | Notes |
+|---|---|---|
+| Random | non-negative random `W`, `H` (fixed random seed) | No assumption about the data; different seeds can reach different local minima. Default, and the only option before v0.9.11. |
+| NNDSVD | positive parts of the leading singular vectors of `X` (Nonnegative Double SVD) [17] | Deterministic; about half of the entries start at exactly zero. Multiplicative updates (`mu`) release those zeros only slowly, so the result stays close to the start: crisp, sparse maps, but not necessarily correct spectra (see below). `cd` releases the zeros within a few iterations. |
+| NNDSVDa | NNDSVD with zeros replaced by the mean of `X` | Meant for data scaled to about 1. On raw intensities the mean is far larger than the SVD values, so the fill swamps the start. With `cd`, or scikit-learn `mu` (CPU only), the fit can stop after a few iterations at a poor result; PyTorch `mu` needs thousands of iterations. Not recommended on raw counts. |
+| NNDSVDar | NNDSVD with zeros replaced by small random values (about 1/100 of the mean of `X`) | On raw intensities this fill is still large next to the SVD values, so the start is a strongly randomised NNDSVD; results depend on the intensity scale. |
+
+The NNDSVD-family start is computed once on the CPU and passed to the solver as a custom init, so the PyTorch and scikit-learn backends start from the same matrices; it needs at most as many components as there are spectral channels. Random keeps the backend's own random start (PyTorch: uniform numbers; scikit-learn: scaled absolute normal numbers) and is rebuilt with the same generator only to display it. The GUI shows every start: the seed inspector (**Preview start…**, or automatically when a seed-free run starts) displays its W maps and H spectra, and the result viewer's **Show Seeds** overlays its H spectra.
+
+**Crisp is not the same as correct.** On the synthetic quickstart stack (k = 5, checked against the ground-truth spectra and maps, GUI defaults `mu` / 500 iterations), NNDSVD produced the crispest maps (near-black backgrounds, best recovery of the small mutant beads) but its spectra were further from the true ones than Random's (mean cosine 0.85 vs 0.93; Random beat NNDSVD on spectra for all 10 seeds tried), the background map had holes under the beads, and its fit error was the highest of the four starts. The look comes from the start: its zero pattern acts as a support constraint while `mu` slowly releases it. Runs continued to full convergence (`cd`) all reached the same reconstruction error, the rank-5 SVD bound, yet unmixed very differently (mean spectral cosine 0.94 for Random, 0.83 for NNDSVD), so a lower error does not identify the better decomposition. A seed-free start, SVD-based or not, follows variance in the data, not chemistry; it does not replace seeded NNMF on difficult data.
+
 ### Interpretation in this project
 
 Random NNMF is useful when no reliable prior spectra exist yet. It is usually easier to interpret than PCA (additive non-negative components rather than signed orthogonal directions), but it is still not guaranteed to find the chemically preferred decomposition.
@@ -435,3 +450,4 @@ For difficult CARS data, the practical conclusion from the thesis [3] still hold
 14. Chih-Jen Lin, "Projected gradient methods for non-negative matrix factorization," *Neural Computation* 19(10), 2756–2779, 2007. DOI: [10.1162/neco.2007.19.10.2756](https://doi.org/10.1162/neco.2007.19.10.2756). Projected-gradient analysis of NMF subproblems, including the NNLS step solved by the PyTorch backend.
 15. Amir Beck and Marc Teboulle, "A fast iterative shrinkage-thresholding algorithm for linear inverse problems," *SIAM Journal on Imaging Sciences* 2(1), 183–202, 2009. DOI: [10.1137/080716542](https://doi.org/10.1137/080716542). FISTA acceleration used by the PyTorch NNLS backend.
 16. Brendan O'Donoghue and Emmanuel Candès, "Adaptive Restart for Accelerated Gradient Schemes," *Foundations of Computational Mathematics* 15(3), 715–732, 2015. DOI: [10.1007/s10208-013-9150-3](https://doi.org/10.1007/s10208-013-9150-3). Adaptive-restart variant of FISTA that restores monotonic convergence on ill-conditioned problems; cited as a natural extension of the current backend.
+17. Christos Boutsidis and Efstratios Gallopoulos, "SVD based initialization: A head start for nonnegative matrix factorization," *Pattern Recognition* 41(4), 1350–1362, 2008. DOI: [10.1016/j.patcog.2007.09.010](https://doi.org/10.1016/j.patcog.2007.09.010). The NNDSVD initialization and its NNDSVDa / NNDSVDar variants offered as seed-free starts.

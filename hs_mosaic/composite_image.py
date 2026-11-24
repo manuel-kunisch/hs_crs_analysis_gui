@@ -65,6 +65,8 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectral_cmps = spectral_cmps
         self.spectral_cmps_series = None
         self.spectral_cmps_seed = None
+        # legend name of the overlaid seed curves: "Seed", or "Start (NNDSVDa)" for a seed-free run
+        self.seed_curve_label = "Seed"
         self.wavenumbers = None
         self.axis_labels = None
         self.spectral_units = "cm⁻¹"
@@ -279,7 +281,12 @@ class CompositeImageViewWidget(QMainWindow):
 
         self.show_seeds_check = QCheckBox("Show Seeds")
         self.show_seeds_check.setCheckable(True)
-        self.show_seeds_check.clicked.connect(lambda state: self.plot_seeds(self.spectral_cmps_seed) if state else self.plot_seeds(np.array([])))
+        self.show_seeds_check.setToolTip(
+            "Overlay the spectra the fit started from as dashed curves: your H seeds\n"
+            "for a seeded (Custom initialization) run, or the seed-free start\n"
+            "(Random / NNDSVD / NNDSVDa / NNDSVDar) for a run without seeds."
+        )
+        self.show_seeds_check.clicked.connect(lambda state: self.plot_seeds(self.spectral_cmps_seed if state else None))
         self.show_seeds_check.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self.show_h_scales_check = QCheckBox("Show H Scales")
@@ -726,8 +733,14 @@ class CompositeImageViewWidget(QMainWindow):
         mode = info.get("mode")
         if mode == "seeded_nnmf":
             return "Seeded NNMF"
-        if mode == "random_nnmf":
-            return "Random NNMF"
+        seed_free_labels = {
+            "random_nnmf": "Random NNMF",
+            "nndsvd_nnmf": "NNDSVD NNMF",
+            "nndsvda_nnmf": "NNDSVDa NNMF",
+            "nndsvdar_nnmf": "NNDSVDar NNMF",
+        }
+        if mode in seed_free_labels:
+            return seed_free_labels[mode]
         algorithm = str(info.get("algorithm", "")).lower()
         if algorithm == "fixed_h_nnls":
             return "Fixed-H NNLS"
@@ -862,9 +875,8 @@ class CompositeImageViewWidget(QMainWindow):
             name = self.custom_labels.get(i, f'Component {i}') if self.custom_model else f'Component {i}'
             line = self.spectrum_view.plot(x_values, component, pen=pg.mkPen(self.get_color(i)), name=name)
             self.spectrum_lines.append(line)
-        if self.custom_model:
-            if self.show_seeds_check.isChecked():
-                self.plot_seeds(self.spectral_cmps_seed, dashed=True)
+        if self.show_seeds_check.isChecked():
+            self.plot_seeds(self.spectral_cmps_seed, dashed=True)
 
 
     # ------------------------------------------------------------------
@@ -990,6 +1002,19 @@ class CompositeImageViewWidget(QMainWindow):
             self.channel_view.view.setTitle(f"Channel {component_index + 1} {new_label}{slice_suffix}")
 
 
+    def _seeds_for_current_slice(self, seeds: np.ndarray | None) -> np.ndarray | None:
+        """2D (k, bands) seed spectra to draw: a 3D per-slice stack (4D seed-free
+        runs) is indexed by the displayed result slice; empty input means none."""
+        if seeds is None:
+            return None
+        seeds = np.asarray(seeds)
+        if seeds.size == 0:
+            return None
+        if seeds.ndim == 3:
+            index = int(np.clip(self.current_result_slice_index, 0, seeds.shape[0] - 1))
+            seeds = seeds[index]
+        return seeds if seeds.ndim == 2 else None
+
     def plot_seeds(self, seeds: np.ndarray, dashed: bool = True):
         # TODO: plot seeds in the spectrum view
         # add button to switch between seeds and components
@@ -999,13 +1024,15 @@ class CompositeImageViewWidget(QMainWindow):
                 self.spectrum_view.removeItem(line)
             self.seed_lines = []
 
+        seeds = self._seeds_for_current_slice(seeds)
         if seeds is None:
             return
         x_values = self._spectral_x_values(seeds.shape[1])
+        label = self.seed_curve_label or "Seed"
         for i in range(seeds.shape[0]):
             seed = seeds[i, :]
             line = self.spectrum_view.plot(x_values, seed, pen=pg.mkPen(self.get_color(i), style=Qt.DashLine if dashed else Qt.SolidLine),
-                                           name=f'Seed {i}')
+                                           name=f'{label} {i}')
             self.seed_lines.append(line)
         # raise NotImplementedError("Plotting seeds is not yet implemented,\nPlease do not pass seeds to the result viewer")
 
@@ -1055,6 +1082,7 @@ class CompositeImageViewWidget(QMainWindow):
                      spectral_cmps:np.ndarray|None = None,
                      spectral_cmps_seed: np.ndarray|None = None,
                      custom_model: bool = False,
+                     seed_label: str = "Seed",
                      update_gamma_curve=False,
                      fit_info: dict | list[dict | None] | None = None,
                      outer_axis_label: str = "Slice"):
@@ -1116,6 +1144,7 @@ class CompositeImageViewWidget(QMainWindow):
         self.spectral_cmps_series = spectral_cmps if spectral_cmps is not None and spectral_cmps.ndim == 3 else None
         self.spectral_cmps = None if self.spectral_cmps_series is not None else spectral_cmps
         self.spectral_cmps_seed = spectral_cmps_seed
+        self.seed_curve_label = seed_label or "Seed"
         self.custom_model = custom_model
         self.fit_info_series = fit_info if isinstance(fit_info, list) else None
         self.fit_info = None if self.fit_info_series is not None else fit_info
@@ -1956,7 +1985,7 @@ class CompositeImageViewWidget(QMainWindow):
 
         # Save the H seeds
         if mode.lower() == 'seeds':
-            seeds_H = self.spectral_cmps_seed
+            seeds_H = self._seeds_for_current_slice(self.spectral_cmps_seed)
         elif mode.lower() == 'results':
             seeds_H = self.spectral_cmps
         else:

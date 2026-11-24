@@ -4,6 +4,39 @@ All notable user-facing changes to HS-MOSAIC are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **SVD-based seed-free NNMF starts.** With **Custom initialization** off, a
+  new **Seed-free init** dropdown below it chooses between **Random** (the
+  previous behavior and still the default), **NNDSVD**, **NNDSVDa** and
+  **NNDSVDar**, the starts scikit-learn's `NMF(init=...)` offers. Each entry
+  has a tooltip explaining it. The SVD start is computed once and passed to
+  the solver as a custom init, so the PyTorch (GPU) and scikit-learn backends
+  start from the same matrices and the result is reproducible. It is stored
+  in presets as `nnmf_seed_free_init`; older presets load as Random. The fit
+  summary names the start (e.g. "NNDSVDa NNMF").
+- **The seed-free start is shown like seeds.** A seed-free NNMF run now opens
+  the seed inspector with the W maps and H spectra it starts from as soon as
+  the run has built them, just as a seeded run shows its seeds, and
+  **Preview W seeds…** becomes **Preview start…** while Custom initialization
+  is off. In the result viewer, **Show Seeds** overlays the start spectra
+  ("Start (NNDSVD) 0", …; per slice for 4D series) for seed-free results. The
+  start is built in the analysis thread, once per run, and what is shown is
+  what the solver started from. Random runs are unchanged (the backend still
+  draws its own start; it is rebuilt with the same generator only for
+  display). The methods page explains why NNDSVD results look the crispest
+  without being the most accurate, and why NNDSVDa is unsuitable for raw
+  intensity data.
+
+### Fixed
+- **Show Seeds no longer shows unused seeds.** For a seed-free (random) result
+  it used to overlay the ROI/table seeds even though the run never used them;
+  it now shows the actual start. Unchecking it no longer logs an IndexError.
+- **Save seeds keeps fractional W maps.** The seed inspector's *Save seeds*
+  wrote W as uint16, truncating maps scaled to [0, 1] (and seed-free starts)
+  to zeros; such maps are now written as float32 TIFFs.
+
 ## [0.9.10] — 2026-10-05
 
 ### Fixed

@@ -604,9 +604,12 @@ class MainApplication(QtWidgets.QMainWindow):
         self.result_viewer_widget.set_result_mode("NNMF" if is_nnmf else "PCA")
         self.result_viewer_widget.set_scale_w_to_uint16(self.analysis_manager.scale_w_to_16bit_enabled())
         result_spectral_axis = 1 if analyzed_img.ndim == 4 else 0
+        # user seeds for a seeded run, the seed-free start (Random/NNDSVD...) otherwise
+        seed_spectra, seed_label = self.analysis_manager.get_analysis_seed_spectra()
         self.result_viewer_widget.update_image(analyzed_img,
                                                spectral_cmps=spectral_cmps,
-                                               spectral_cmps_seed=self.analysis_manager.mv_analyzer.seed_H if is_nnmf else None,
+                                               spectral_cmps_seed=seed_spectra if is_nnmf else None,
+                                               seed_label=seed_label,
                                                custom_model=self.analysis_manager.mv_analyzer.custom_nnmf_init if is_nnmf else False,
                                                fit_info=self.analysis_manager.get_analysis_fit_info(),
                                                spectral_axis=result_spectral_axis,
@@ -684,6 +687,8 @@ class MainApplication(QtWidgets.QMainWindow):
             "num_components": self.analysis_manager.num_components_spinbox.value(),
             "analysis_method": self.analysis_manager.mv_analyzer.analysis_method,
             "custom_model": self.analysis_manager.mv_analyzer.custom_nnmf_init,
+            # v0.9.11+: start used when custom_model is False (random / nndsvd / nndsvda / nndsvdar).
+            "nnmf_seed_free_init": self.analysis_manager.mv_analyzer.seed_free_init,
             "nnmf_solver": self.analysis_manager.mv_analyzer.nnmf_solver,
             "nnmf_backend": self.analysis_manager.mv_analyzer.nnmf_backend_preference,
             "nnmf_max_iter": int(self.analysis_manager.mv_analyzer.nnmf_max_iter),
@@ -908,6 +913,8 @@ class MainApplication(QtWidgets.QMainWindow):
             self.analysis_manager.custom_init_check.setChecked(custom_model)
             del blocker
         self.analysis_manager.mv_analyzer.set_custom_nnmf_init(custom_model)
+        # Presets from before v0.9.11 have no key; they always ran random seed-free NNMF.
+        self.analysis_manager.set_seed_free_init(preset.get("nnmf_seed_free_init", "random"))
         nnmf_solver = str(preset.get("nnmf_solver", "mu")).lower()
         if nnmf_solver not in {"cd", "mu"}:
             nnmf_solver = "mu"
